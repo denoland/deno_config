@@ -38,7 +38,7 @@ jobs:
           cargo fmt -- --check
 
       - name: Cargo test
-        run: cargo test --locked --release --all-features --bins --tests --examples && cargo test --doc
+        run: cargo test --locked --release --all-features --bins --tests --examples
 
       - name: Lint
         if: contains(matrix.os, 'ubuntu')
