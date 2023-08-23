@@ -1,5 +1,6 @@
 [package]
 name = "deno_config"
+description = "Config file implementation for the Deno CLI"
 version = "0.1.0"
 edition = "2021"
 authors = ["the Deno authors"]
