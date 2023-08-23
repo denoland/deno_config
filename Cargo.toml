@@ -1,0 +1,19 @@
+[package]
+name = "deno_config"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.57"
+deno_ast = { version = "0.28", features = ["cjs", "codegen", "dep_graph", "module_specifier", "proposal", "react", "sourcemap", "transpiling", "typescript", "view", "visit"] }
+deno_semver = "0.4.0"
+indexmap = { version = "1.9.2", features = ["serde"] }
+jsonc-parser = { version = "=0.21.1", features = ["serde"] }
+log = "0.4.20"
+percent-encoding = "2.3.0"
+pretty_assertions = "1.4.0"
+serde = { version = "1.0.149", features = ["derive"] }
+serde_json = "1.0.85"
+url = { version = "2.3.1"}
