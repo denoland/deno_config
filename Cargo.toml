@@ -2,12 +2,15 @@
 name = "deno_config"
 version = "0.1.0"
 edition = "2021"
+authors = ["the Deno authors"]
+license = "MIT"
+repository = "https://github.com/denoland/deno_config"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0.57"
-deno_ast = { version = "0.28", features = ["cjs", "codegen", "dep_graph", "module_specifier", "proposal", "react", "sourcemap", "transpiling", "typescript", "view", "visit"] }
+deno_ast = { version = "0.28", features = ["transpiling"] }
 deno_semver = "0.4.0"
 indexmap = { version = "1.9.2", features = ["serde"] }
 jsonc-parser = { version = "=0.21.1", features = ["serde"] }
