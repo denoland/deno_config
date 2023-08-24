@@ -19,8 +19,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum ConfigFlag {
+  #[default]
   Discover,
   Path(String),
   Disabled,
