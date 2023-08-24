@@ -1457,39 +1457,6 @@ pub fn get_ts_config_for_emit(
   })
 }
 
-impl From<TsConfig> for deno_ast::EmitOptions {
-  fn from(config: TsConfig) -> Self {
-    let options: EmitConfigOptions = serde_json::from_value(config.0).unwrap();
-    let imports_not_used_as_values =
-      match options.imports_not_used_as_values.as_str() {
-        "preserve" => deno_ast::ImportsNotUsedAsValues::Preserve,
-        "error" => deno_ast::ImportsNotUsedAsValues::Error,
-        _ => deno_ast::ImportsNotUsedAsValues::Remove,
-      };
-    let (transform_jsx, jsx_automatic, jsx_development) =
-      match options.jsx.as_str() {
-        "react" => (true, false, false),
-        "react-jsx" => (true, true, false),
-        "react-jsxdev" => (true, true, true),
-        _ => (false, false, false),
-      };
-    deno_ast::EmitOptions {
-      emit_metadata: options.emit_decorator_metadata,
-      imports_not_used_as_values,
-      inline_source_map: options.inline_source_map,
-      inline_sources: options.inline_sources,
-      source_map: options.source_map,
-      jsx_automatic,
-      jsx_development,
-      jsx_factory: options.jsx_factory,
-      jsx_fragment_factory: options.jsx_fragment_factory,
-      jsx_import_source: options.jsx_import_source,
-      transform_jsx,
-      var_decl_imports: false,
-    }
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
