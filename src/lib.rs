@@ -389,8 +389,8 @@ impl SerializedBenchConfig {
 
 #[derive(Debug, Default)]
 pub struct WorkspaceConfig {
-  members: Vec<WorkspaceMemberConfig>,
-  base_import_map_value: Value,
+  pub members: Vec<WorkspaceMemberConfig>,
+  pub base_import_map_value: Value,
 }
 
 #[derive(Debug)]
@@ -401,74 +401,6 @@ pub struct WorkspaceMemberConfig {
   pub package_name: String,
   pub package_version: String,
   pub config_file: ConfigFile,
-}
-
-impl WorkspaceConfig {
-  pub fn to_import_map_value(&self) -> Result<Option<Value>, AnyError> {
-    let mut import_map_imports = json!({});
-    let mut import_map_scopes = json!({});
-    let synthetic_import_map_imports =
-      import_map_imports.as_object_mut().unwrap();
-    let synthetic_import_map_scopes =
-      import_map_scopes.as_object_mut().unwrap();
-
-    for member_config in self.members.iter() {
-      let import_map_value = member_config.config_file.to_import_map_value();
-
-      let mut member_scope = json!({});
-
-      if let Some(imports) = import_map_value.get("imports") {
-        let member_scope_obj = member_scope.as_object_mut().unwrap();
-        for (key, value) in imports.as_object().unwrap() {
-          member_scope_obj.insert(key.to_string(), value.to_owned());
-        }
-        // TODO(bartlomieju): this need to resolve values in member_scope based
-        // on the "base URL" of the member import map filepath
-        synthetic_import_map_scopes
-          .insert(format!("./{}/", member_config.member_name), member_scope);
-      }
-
-      if let Some(scopes) = import_map_value.get("scopes") {
-        for (key, value) in scopes.as_object().unwrap() {
-          // Keys for scopes need to be processed - they might look like
-          // "/foo/" and coming from "bar" workspace member. So we need to
-          // prepend the member name to the scope.
-          let new_key = format!("./{}{}", member_config.member_name, key);
-          // TODO(bartlomieju): this need to resolve value based on the "base URL"
-          // of the member import map filepath
-          synthetic_import_map_scopes.insert(new_key, value.to_owned());
-        }
-      }
-    }
-
-    if let Some(base_imports) = self.base_import_map_value.get("imports") {
-      let base_imports_obj = base_imports.as_object().unwrap();
-      for (key, value) in base_imports_obj.iter() {
-        synthetic_import_map_imports.insert(key.to_owned(), value.to_owned());
-      }
-    }
-    if let Some(base_scopes) = self.base_import_map_value.get("scopes") {
-      let base_scopes_obj = base_scopes.as_object().unwrap();
-      for (key, value) in base_scopes_obj.iter() {
-        synthetic_import_map_scopes.insert(key.to_owned(), value.to_owned());
-      }
-    }
-
-    let mut import_map = json!({});
-
-    if !synthetic_import_map_imports.is_empty() {
-      import_map["imports"] = import_map_imports;
-    }
-    if !synthetic_import_map_scopes.is_empty() {
-      import_map["scopes"] = import_map_scopes;
-    }
-
-    if !import_map.as_object().unwrap().is_empty() {
-      Ok(Some(import_map))
-    } else {
-      Ok(None)
-    }
-  }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
