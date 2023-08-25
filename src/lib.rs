@@ -25,6 +25,7 @@ use ts::parse_compiler_options;
 pub use ts::CompilerOptions;
 pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
+pub use ts::EmitConfigOptions;
 pub use ts::TsConfig;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -422,7 +423,7 @@ pub enum LockConfig {
   PathBuf(PathBuf),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
   pub compiler_options: Option<Value>,
@@ -450,7 +451,7 @@ pub struct ConfigFileJson {
 #[derive(Clone, Debug)]
 pub struct ConfigFile {
   pub specifier: Url,
-  json: ConfigFileJson,
+  pub json: ConfigFileJson,
 }
 
 impl ConfigFile {
