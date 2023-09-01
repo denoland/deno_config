@@ -23,9 +23,9 @@ mod util;
 
 use ts::parse_compiler_options;
 pub use ts::CompilerOptions;
+pub use ts::EmitConfigOptions;
 pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
-pub use ts::EmitConfigOptions;
 pub use ts::TsConfig;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
