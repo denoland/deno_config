@@ -944,16 +944,13 @@ impl ConfigFile {
     match self.to_lock_config()? {
       Some(LockConfig::Bool(lock)) if !lock => Ok(None),
       Some(LockConfig::PathBuf(lock)) => Ok(Some(
-        util::specifier_to_file_path(&self.specifier)
-          .unwrap()
+        util::specifier_to_file_path(&self.specifier)?
           .parent()
           .unwrap()
           .join(lock),
       )),
       _ => {
-        let Ok(mut path) = self.specifier.to_file_path() else {
-          panic!("Config file is not a file path {}", self.specifier.as_str());
-        };
+        let mut path = util::specifier_to_file_path(&self.specifier)?;
         path.set_file_name("deno.lock");
         Ok(Some(path))
       }
