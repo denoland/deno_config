@@ -944,9 +944,7 @@ impl ConfigFile {
     match self.to_lock_config()? {
       Some(LockConfig::Bool(lock)) if !lock => Ok(None),
       Some(LockConfig::PathBuf(lock)) => Ok(Some(
-        self
-          .specifier
-          .to_file_path()
+        util::specifier_to_file_path(&self.specifier)
           .unwrap()
           .parent()
           .unwrap()
@@ -1547,6 +1545,16 @@ mod tests {
       }"#,
       "Configuration file task names cannot be empty",
     );
+  }
+
+  #[test]
+  fn resolve_lockfile_path_from_unix_path() {
+    let config_file =
+      ConfigFile::new("{}", Url::parse("file:///root/deno.json").unwrap())
+        .unwrap();
+    let lockfile_path = config_file.resolve_lockfile_path().unwrap();
+    let lockfile_path = lockfile_path.unwrap();
+    assert_eq!(lockfile_path, PathBuf::from("/root/deno.lock"));
   }
 
   fn run_task_error_test(config_text: &str, expected_error: &str) {
