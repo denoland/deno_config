@@ -14,334 +14,26 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+mod ts;
+mod util;
+
+use ts::parse_compiler_options;
+pub use ts::CompilerOptions;
+pub use ts::EmitConfigOptions;
+pub use ts::IgnoredCompilerOptions;
+pub use ts::JsxImportSourceConfig;
+pub use ts::TsConfig;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum ConfigFlag {
+  #[default]
   Discover,
   Path(String),
   Disabled,
-}
-
-/// Gets the parent of this module specifier.
-pub fn specifier_parent(specifier: &Url) -> Url {
-  let mut specifier = specifier.clone();
-  // don't use specifier.segments() because it will strip the leading slash
-  let mut segments = specifier.path().split('/').collect::<Vec<_>>();
-  if segments.iter().all(|s| s.is_empty()) {
-    return specifier;
-  }
-  if let Some(last) = segments.last() {
-    if last.is_empty() {
-      segments.pop();
-    }
-    segments.pop();
-    let new_path = format!("{}/", segments.join("/"));
-    specifier.set_path(&new_path);
-  }
-  specifier
-}
-
-/// Attempts to convert a specifier to a file path. By default, uses the Url
-/// crate's `to_file_path()` method, but falls back to try and resolve unix-style
-/// paths on Windows.
-pub fn specifier_to_file_path(specifier: &Url) -> Result<PathBuf, AnyError> {
-  let result = if specifier.scheme() != "file" {
-    Err(())
-  } else if cfg!(windows) {
-    match specifier.to_file_path() {
-      Ok(path) => Ok(path),
-      Err(()) => {
-        // This might be a unix-style path which is used in the tests even on Windows.
-        // Attempt to see if we can convert it to a `PathBuf`. This code should be removed
-        // once/if https://github.com/servo/rust-url/issues/730 is implemented.
-        if specifier.scheme() == "file"
-          && specifier.host().is_none()
-          && specifier.port().is_none()
-          && specifier.path_segments().is_some()
-        {
-          let path_str = specifier.path();
-          match String::from_utf8(
-            percent_encoding::percent_decode(path_str.as_bytes()).collect(),
-          ) {
-            Ok(path_str) => Ok(PathBuf::from(path_str)),
-            Err(_) => Err(()),
-          }
-        } else {
-          Err(())
-        }
-      }
-    }
-  } else {
-    specifier.to_file_path()
-  };
-  match result {
-    Ok(path) => Ok(path),
-    Err(()) => bail!("Invalid file path.\n  Specifier: {specifier}"),
-  }
-}
-
-#[derive(Debug, Clone, Hash)]
-pub struct JsxImportSourceConfig {
-  pub default_specifier: Option<String>,
-  pub module: String,
-  pub base_url: Url,
-}
-
-impl JsxImportSourceConfig {
-  pub fn maybe_specifier_text(&self) -> Option<String> {
-    self
-      .default_specifier
-      .as_ref()
-      .map(|default_specifier| format!("{}/{}", default_specifier, self.module))
-  }
-}
-
-/// The transpile options that are significant out of a user provided tsconfig
-/// file, that we want to deserialize out of the final config for a transpile.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EmitConfigOptions {
-  pub check_js: bool,
-  pub emit_decorator_metadata: bool,
-  pub imports_not_used_as_values: String,
-  pub inline_source_map: bool,
-  pub inline_sources: bool,
-  pub source_map: bool,
-  pub jsx: String,
-  pub jsx_factory: String,
-  pub jsx_fragment_factory: String,
-  pub jsx_import_source: Option<String>,
-}
-
-/// There are certain compiler options that can impact what modules are part of
-/// a module graph, which need to be deserialized into a structure for analysis.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompilerOptions {
-  pub jsx: Option<String>,
-  pub jsx_import_source: Option<String>,
-  pub types: Option<Vec<String>>,
-}
-
-/// A structure that represents a set of options that were ignored and the
-/// path those options came from.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct IgnoredCompilerOptions {
-  pub items: Vec<String>,
-  pub maybe_specifier: Option<Url>,
-}
-
-impl fmt::Display for IgnoredCompilerOptions {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    let mut codes = self.items.clone();
-    codes.sort_unstable();
-    if let Some(specifier) = &self.maybe_specifier {
-      write!(f, "Unsupported compiler options in \"{}\".\n  The following options were ignored:\n    {}", specifier, codes.join(", "))
-    } else {
-      write!(f, "Unsupported compiler options provided.\n  The following options were ignored:\n    {}", codes.join(", "))
-    }
-  }
-}
-
-impl Serialize for IgnoredCompilerOptions {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: Serializer,
-  {
-    Serialize::serialize(&self.items, serializer)
-  }
-}
-
-/// A static slice of all the compiler options that should be ignored that
-/// either have no effect on the compilation or would cause the emit to not work
-/// in Deno.
-pub const IGNORED_COMPILER_OPTIONS: &[&str] = &[
-  "allowImportingTsExtensions",
-  "allowSyntheticDefaultImports",
-  "allowUmdGlobalAccess",
-  "assumeChangesOnlyAffectDirectDependencies",
-  "baseUrl",
-  "build",
-  "charset",
-  "composite",
-  "declaration",
-  "declarationMap",
-  "diagnostics",
-  "disableSizeLimit",
-  "downlevelIteration",
-  "emitBOM",
-  "emitDeclarationOnly",
-  "esModuleInterop",
-  "experimentalDecorators",
-  "extendedDiagnostics",
-  "forceConsistentCasingInFileNames",
-  "generateCpuProfile",
-  "help",
-  "importHelpers",
-  "incremental",
-  "init",
-  "inlineSourceMap",
-  "inlineSources",
-  "isolatedModules",
-  "listEmittedFiles",
-  "listFiles",
-  "mapRoot",
-  "maxNodeModuleJsDepth",
-  "module",
-  "moduleDetection",
-  "moduleResolution",
-  "newLine",
-  "noEmit",
-  "noEmitHelpers",
-  "noEmitOnError",
-  "noLib",
-  "noResolve",
-  "out",
-  "outDir",
-  "outFile",
-  "paths",
-  "preserveConstEnums",
-  "preserveSymlinks",
-  "preserveWatchOutput",
-  "pretty",
-  "project",
-  "reactNamespace",
-  "resolveJsonModule",
-  "rootDir",
-  "rootDirs",
-  "showConfig",
-  "skipDefaultLibCheck",
-  "skipLibCheck",
-  "sourceMap",
-  "sourceRoot",
-  "stripInternal",
-  "target",
-  "traceResolution",
-  "tsBuildInfoFile",
-  "typeRoots",
-  "useDefineForClassFields",
-  "version",
-  "watch",
-];
-
-/// A function that works like JavaScript's `Object.assign()`.
-pub fn json_merge(a: &mut Value, b: &Value) {
-  match (a, b) {
-    (&mut Value::Object(ref mut a), Value::Object(b)) => {
-      for (k, v) in b {
-        json_merge(a.entry(k.clone()).or_insert(Value::Null), v);
-      }
-    }
-    (a, b) => {
-      *a = b.clone();
-    }
-  }
-}
-
-fn parse_compiler_options(
-  compiler_options: &HashMap<String, Value>,
-  maybe_specifier: Option<Url>,
-) -> Result<(Value, Option<IgnoredCompilerOptions>), AnyError> {
-  let mut filtered: HashMap<String, Value> = HashMap::new();
-  let mut items: Vec<String> = Vec::new();
-
-  for (key, value) in compiler_options.iter() {
-    let key = key.as_str();
-    // We don't pass "types" entries to typescript via the compiler
-    // options and instead provide those to tsc as "roots". This is
-    // because our "types" behavior is at odds with how TypeScript's
-    // "types" works.
-    if key != "types" {
-      if IGNORED_COMPILER_OPTIONS.contains(&key) {
-        items.push(key.to_string());
-      } else {
-        filtered.insert(key.to_string(), value.to_owned());
-      }
-    }
-  }
-  let value = serde_json::to_value(filtered)?;
-  let maybe_ignored_options = if !items.is_empty() {
-    Some(IgnoredCompilerOptions {
-      items,
-      maybe_specifier,
-    })
-  } else {
-    None
-  };
-
-  Ok((value, maybe_ignored_options))
-}
-
-/// A structure for managing the configuration of TypeScript
-#[derive(Debug, Clone)]
-pub struct TsConfig(pub Value);
-
-impl TsConfig {
-  /// Create a new `TsConfig` with the base being the `value` supplied.
-  pub fn new(value: Value) -> Self {
-    TsConfig(value)
-  }
-
-  pub fn as_bytes(&self) -> Vec<u8> {
-    let map = self.0.as_object().expect("invalid tsconfig");
-    let ordered: BTreeMap<_, _> = map.iter().collect();
-    let value = json!(ordered);
-    value.to_string().as_bytes().to_owned()
-  }
-
-  /// Return the value of the `checkJs` compiler option, defaulting to `false`
-  /// if not present.
-  pub fn get_check_js(&self) -> bool {
-    if let Some(check_js) = self.0.get("checkJs") {
-      check_js.as_bool().unwrap_or(false)
-    } else {
-      false
-    }
-  }
-
-  pub fn get_declaration(&self) -> bool {
-    if let Some(declaration) = self.0.get("declaration") {
-      declaration.as_bool().unwrap_or(false)
-    } else {
-      false
-    }
-  }
-
-  /// Merge a serde_json value into the configuration.
-  pub fn merge(&mut self, value: &Value) {
-    json_merge(&mut self.0, value);
-  }
-
-  /// Take an optional user provided config file
-  /// which was passed in via the `--config` flag and merge `compilerOptions` with
-  /// the configuration.  Returning the result which optionally contains any
-  /// compiler options that were ignored.
-  pub fn merge_tsconfig_from_config_file(
-    &mut self,
-    maybe_config_file: Option<&ConfigFile>,
-  ) -> Result<Option<IgnoredCompilerOptions>, AnyError> {
-    if let Some(config_file) = maybe_config_file {
-      let (value, maybe_ignored_options) = config_file.to_compiler_options()?;
-      self.merge(&value);
-      Ok(maybe_ignored_options)
-    } else {
-      Ok(None)
-    }
-  }
-}
-
-impl Serialize for TsConfig {
-  /// Serializes inner hash map which is ordered by the key
-  fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-  where
-    S: Serializer,
-  {
-    Serialize::serialize(&self.0, serializer)
-  }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -364,8 +56,9 @@ impl SerializedFilesConfig {
     self,
     config_file_specifier: &Url,
   ) -> Result<FilesConfig, AnyError> {
-    let config_dir =
-      specifier_to_file_path(&specifier_parent(config_file_specifier))?;
+    let config_dir = util::specifier_to_file_path(&util::specifier_parent(
+      config_file_specifier,
+    ))?;
     Ok(FilesConfig {
       include: self
         .include
@@ -395,7 +88,7 @@ impl FilesConfig {
   /// Gets if the provided specifier is allowed based on the includes
   /// and excludes in the configuration file.
   pub fn matches_specifier(&self, specifier: &Url) -> bool {
-    let file_path = match specifier_to_file_path(specifier) {
+    let file_path = match util::specifier_to_file_path(specifier) {
       Ok(file_path) => file_path,
       Err(_) => return false,
     };
@@ -697,8 +390,8 @@ impl SerializedBenchConfig {
 
 #[derive(Debug, Default)]
 pub struct WorkspaceConfig {
-  members: Vec<WorkspaceMemberConfig>,
-  base_import_map_value: Value,
+  pub members: Vec<WorkspaceMemberConfig>,
+  pub base_import_map_value: Value,
 }
 
 #[derive(Debug)]
@@ -709,74 +402,6 @@ pub struct WorkspaceMemberConfig {
   pub package_name: String,
   pub package_version: String,
   pub config_file: ConfigFile,
-}
-
-impl WorkspaceConfig {
-  pub fn to_import_map_value(&self) -> Result<Option<Value>, AnyError> {
-    let mut import_map_imports = json!({});
-    let mut import_map_scopes = json!({});
-    let synthetic_import_map_imports =
-      import_map_imports.as_object_mut().unwrap();
-    let synthetic_import_map_scopes =
-      import_map_scopes.as_object_mut().unwrap();
-
-    for member_config in self.members.iter() {
-      let import_map_value = member_config.config_file.to_import_map_value();
-
-      let mut member_scope = json!({});
-
-      if let Some(imports) = import_map_value.get("imports") {
-        let member_scope_obj = member_scope.as_object_mut().unwrap();
-        for (key, value) in imports.as_object().unwrap() {
-          member_scope_obj.insert(key.to_string(), value.to_owned());
-        }
-        // TODO(bartlomieju): this need to resolve values in member_scope based
-        // on the "base URL" of the member import map filepath
-        synthetic_import_map_scopes
-          .insert(format!("./{}/", member_config.member_name), member_scope);
-      }
-
-      if let Some(scopes) = import_map_value.get("scopes") {
-        for (key, value) in scopes.as_object().unwrap() {
-          // Keys for scopes need to be processed - they might look like
-          // "/foo/" and coming from "bar" workspace member. So we need to
-          // prepend the member name to the scope.
-          let new_key = format!("./{}{}", member_config.member_name, key);
-          // TODO(bartlomieju): this need to resolve value based on the "base URL"
-          // of the member import map filepath
-          synthetic_import_map_scopes.insert(new_key, value.to_owned());
-        }
-      }
-    }
-
-    if let Some(base_imports) = self.base_import_map_value.get("imports") {
-      let base_imports_obj = base_imports.as_object().unwrap();
-      for (key, value) in base_imports_obj.iter() {
-        synthetic_import_map_imports.insert(key.to_owned(), value.to_owned());
-      }
-    }
-    if let Some(base_scopes) = self.base_import_map_value.get("scopes") {
-      let base_scopes_obj = base_scopes.as_object().unwrap();
-      for (key, value) in base_scopes_obj.iter() {
-        synthetic_import_map_scopes.insert(key.to_owned(), value.to_owned());
-      }
-    }
-
-    let mut import_map = json!({});
-
-    if !synthetic_import_map_imports.is_empty() {
-      import_map["imports"] = import_map_imports;
-    }
-    if !synthetic_import_map_scopes.is_empty() {
-      import_map["scopes"] = import_map_scopes;
-    }
-
-    if !import_map.as_object().unwrap().is_empty() {
-      Ok(Some(import_map))
-    } else {
-      Ok(None)
-    }
-  }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -798,7 +423,7 @@ pub enum LockConfig {
   PathBuf(PathBuf),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
   pub compiler_options: Option<Value>,
@@ -826,7 +451,7 @@ pub struct ConfigFileJson {
 #[derive(Clone, Debug)]
 pub struct ConfigFile {
   pub specifier: Url,
-  json: ConfigFileJson,
+  pub json: ConfigFileJson,
 }
 
 impl ConfigFile {
@@ -933,7 +558,7 @@ impl ConfigFile {
 
   pub fn from_specifier(specifier: Url) -> Result<Self, AnyError> {
     let config_path =
-      specifier_to_file_path(&specifier).with_context(|| {
+      util::specifier_to_file_path(&specifier).with_context(|| {
         format!("Invalid config file path for '{}'.", specifier)
       })?;
     Self::from_specifier_and_path(specifier, &config_path)
@@ -1461,7 +1086,6 @@ pub fn get_ts_config_for_emit(
 mod tests {
   use super::*;
   use pretty_assertions::assert_eq;
-  use serde_json::json;
   use std::path::PathBuf;
 
   fn testdata_path() -> PathBuf {
@@ -1486,27 +1110,6 @@ mod tests {
     let path = testdata_path().join("404.json");
     let error = ConfigFile::read(path.as_path()).err().unwrap();
     assert!(error.to_string().contains("404.json"));
-  }
-
-  #[test]
-  fn test_json_merge() {
-    let mut value_a = json!({
-      "a": true,
-      "b": "c"
-    });
-    let value_b = json!({
-      "b": "d",
-      "e": false,
-    });
-    json_merge(&mut value_a, &value_b);
-    assert_eq!(
-      value_a,
-      json!({
-        "a": true,
-        "b": "d",
-        "e": false,
-      })
-    );
   }
 
   #[test]
@@ -1861,27 +1464,6 @@ mod tests {
   }
 
   #[test]
-  fn test_tsconfig_as_bytes() {
-    let mut tsconfig1 = TsConfig::new(json!({
-      "strict": true,
-      "target": "esnext",
-    }));
-    tsconfig1.merge(&json!({
-      "target": "es5",
-      "module": "amd",
-    }));
-    let mut tsconfig2 = TsConfig::new(json!({
-      "target": "esnext",
-      "strict": true,
-    }));
-    tsconfig2.merge(&json!({
-      "module": "amd",
-      "target": "es5",
-    }));
-    assert_eq!(tsconfig1.as_bytes(), tsconfig2.as_bytes());
-  }
-
-  #[test]
   fn discover_from_success() {
     // testdata/fmt/deno.jsonc exists
     let testdata = testdata_path();
@@ -1977,37 +1559,5 @@ mod tests {
         .to_string(),
       expected_error,
     );
-  }
-
-  #[test]
-  fn test_specifier_parent() {
-    run_test("file:///", "file:///");
-    run_test("file:///test", "file:///");
-    run_test("file:///test/", "file:///");
-    run_test("file:///test/other", "file:///test/");
-    run_test("file:///test/other.txt", "file:///test/");
-    run_test("file:///test/other/", "file:///test/");
-
-    fn run_test(specifier: &str, expected: &str) {
-      let result = specifier_parent(&Url::parse(specifier).unwrap());
-      assert_eq!(result.to_string(), expected);
-    }
-  }
-
-  #[test]
-  fn test_specifier_to_file_path() {
-    run_success_test("file:///", "/");
-    run_success_test("file:///test", "/test");
-    run_success_test("file:///dir/test/test.txt", "/dir/test/test.txt");
-    run_success_test(
-      "file:///dir/test%20test/test.txt",
-      "/dir/test test/test.txt",
-    );
-
-    fn run_success_test(specifier: &str, expected_path: &str) {
-      let result =
-        specifier_to_file_path(&Url::parse(specifier).unwrap()).unwrap();
-      assert_eq!(result, PathBuf::from(expected_path));
-    }
   }
 }
