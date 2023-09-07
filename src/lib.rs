@@ -47,7 +47,7 @@ pub struct LintRulesConfig {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 struct SerializedFilesConfig {
-  pub include: Vec<String>,
+  pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
 }
 
@@ -62,9 +62,7 @@ impl SerializedFilesConfig {
     Ok(FilesConfig {
       include: self
         .include
-        .into_iter()
-        .map(|p| config_dir.join(p))
-        .collect::<Vec<_>>(),
+        .map(|i| i.into_iter().map(|p| config_dir.join(p)).collect()),
       exclude: self
         .exclude
         .into_iter()
@@ -74,13 +72,13 @@ impl SerializedFilesConfig {
   }
 
   pub fn is_empty(&self) -> bool {
-    self.include.is_empty() && self.exclude.is_empty()
+    self.include.is_none() && self.exclude.is_empty()
   }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FilesConfig {
-  pub include: Vec<PathBuf>,
+  pub include: Option<Vec<PathBuf>>,
   pub exclude: Vec<PathBuf>,
 }
 
@@ -97,14 +95,24 @@ impl FilesConfig {
       return false;
     }
 
-    // Ignore files not in the include list if it's not empty.
-    self.include.is_empty()
-      || self.include.iter().any(|i| file_path.starts_with(i))
+    // Ignore files not in the include list if it's present.
+    if let Some(include) = &self.include {
+      return include.iter().any(|p| file_path.starts_with(p));
+    }
+
+    true
   }
 
   fn extend(self, rhs: Self) -> Self {
     Self {
-      include: [self.include, rhs.include].concat(),
+      include: match (self.include, rhs.include) {
+        (None, None) => None,
+        (Some(lhs), None) => Some(lhs),
+        (None, Some(rhs)) => Some(rhs),
+        (Some(lhs), Some(rhs)) => {
+          Some(lhs.into_iter().filter(|p| rhs.contains(p)).collect())
+        }
+      },
       exclude: [self.exclude, rhs.exclude].concat(),
     }
   }
@@ -156,7 +164,7 @@ fn choose_files(
 #[serde(default, deny_unknown_fields)]
 struct SerializedLintConfig {
   pub rules: LintRulesConfig,
-  pub include: Vec<String>,
+  pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
 
   #[serde(rename = "files")]
@@ -279,7 +287,7 @@ struct SerializedFmtConfig {
   pub semi_colons: Option<bool>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
-  pub include: Vec<String>,
+  pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
   #[serde(rename = "files")]
   pub deprecated_files: SerializedFilesConfig,
@@ -328,7 +336,7 @@ impl FmtConfig {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 struct SerializedTestConfig {
-  pub include: Vec<String>,
+  pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
   #[serde(rename = "files")]
   pub deprecated_files: SerializedFilesConfig,
@@ -367,7 +375,7 @@ impl TestConfig {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 struct SerializedBenchConfig {
-  pub include: Vec<String>,
+  pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
   #[serde(rename = "files")]
   pub deprecated_files: SerializedFilesConfig,
@@ -1160,7 +1168,7 @@ mod tests {
       unpack_object(config_file.to_lint_config(), "lint"),
       LintConfig {
         files: FilesConfig {
-          include: vec![PathBuf::from("/deno/src/")],
+          include: Some(vec![PathBuf::from("/deno/src/")]),
           exclude: vec![PathBuf::from("/deno/src/testdata/")],
         },
         rules: LintRulesConfig {
@@ -1175,7 +1183,7 @@ mod tests {
       unpack_object(config_file.to_fmt_config(), "fmt"),
       FmtConfig {
         files: FilesConfig {
-          include: vec![PathBuf::from("/deno/src/")],
+          include: Some(vec![PathBuf::from("/deno/src/")]),
           exclude: vec![PathBuf::from("/deno/src/testdata/")],
         },
         options: FmtOptionsConfig {
@@ -1229,7 +1237,7 @@ mod tests {
     assert_eq!(
       lint_files,
       FilesConfig {
-        include: vec![PathBuf::from("/deno/src/")],
+        include: Some(vec![PathBuf::from("/deno/src/")]),
         exclude: vec![],
       }
     );
@@ -1239,19 +1247,19 @@ mod tests {
       fmt_files,
       FilesConfig {
         exclude: vec![PathBuf::from("/deno/dist/")],
-        include: vec![],
+        include: None,
       }
     );
 
     let test_include = unpack_object(config_file.to_test_config(), "test")
       .files
       .include;
-    assert_eq!(test_include, vec![PathBuf::from("/deno/src/")]);
+    assert_eq!(test_include, Some(vec![PathBuf::from("/deno/src/")]));
 
     let bench_include = unpack_object(config_file.to_bench_config(), "bench")
       .files
       .include;
-    assert_eq!(bench_include, vec![PathBuf::from("/deno/src/")]);
+    assert_eq!(bench_include, Some(vec![PathBuf::from("/deno/src/")]));
   }
 
   #[test]
@@ -1269,12 +1277,12 @@ mod tests {
     let lint_include = unpack_object(config_file.to_lint_config(), "lint")
       .files
       .include;
-    assert_eq!(lint_include, vec![PathBuf::from("/deno/src/")]);
+    assert_eq!(lint_include, Some(vec![PathBuf::from("/deno/src/")]));
 
     let fmt_include = unpack_object(config_file.to_fmt_config(), "fmt")
       .files
       .include;
-    assert_eq!(fmt_include, vec![PathBuf::from("/deno/src/")]);
+    assert_eq!(fmt_include, Some(vec![PathBuf::from("/deno/src/")]));
 
     let test_exclude = unpack_object(config_file.to_test_config(), "test")
       .files
@@ -1355,7 +1363,7 @@ mod tests {
     assert!(options_value.is_object());
 
     let test_config = config_file.to_test_config().unwrap().unwrap();
-    assert_eq!(test_config.files.include, Vec::<PathBuf>::new());
+    assert_eq!(test_config.files.include, None);
     assert_eq!(
       test_config.files.exclude,
       vec![PathBuf::from("/deno/npm/"), PathBuf::from("/deno/foo/")]
@@ -1379,18 +1387,16 @@ mod tests {
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
 
-    let empty_include = Vec::<PathBuf>::new();
-
     let files_config = config_file.to_files_config().unwrap().unwrap();
-    assert_eq!(files_config.include, empty_include);
+    assert_eq!(files_config.include, None);
     assert_eq!(files_config.exclude, vec![PathBuf::from("/deno/npm/")]);
 
     let lint_config = config_file.to_lint_config().unwrap().unwrap();
-    assert_eq!(lint_config.files.include, empty_include);
+    assert_eq!(lint_config.files.include, None);
     assert_eq!(lint_config.files.exclude, vec![PathBuf::from("/deno/npm/")]);
 
     let fmt_config = config_file.to_fmt_config().unwrap().unwrap();
-    assert_eq!(fmt_config.files.include, empty_include);
+    assert_eq!(fmt_config.files.include, None);
     assert_eq!(fmt_config.files.exclude, vec![PathBuf::from("/deno/npm/")],);
   }
 
