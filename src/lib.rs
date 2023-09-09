@@ -88,7 +88,7 @@ impl FilesConfig {
   pub fn matches_specifier(&self, specifier: &Url) -> bool {
     let file_path = match util::specifier_to_file_path(specifier) {
       Ok(file_path) => file_path,
-      Err(_) => return false,
+      Err(_) => return true,
     };
     // Skip files which is in the exclude list.
     if self.exclude.iter().any(|i| file_path.starts_with(i)) {
@@ -1548,6 +1548,12 @@ mod tests {
       }"#,
       "Configuration file task names cannot be empty",
     );
+  }
+
+  #[test]
+  fn files_config_matches_remote() {
+    assert!(FilesConfig::default()
+      .matches_specifier(&Url::parse("https://example.com/mod.ts").unwrap()));
   }
 
   #[test]
