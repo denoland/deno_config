@@ -11,7 +11,6 @@ repository = "https://github.com/denoland/deno_config"
 
 [dependencies]
 anyhow = "1.0.57"
-deno_semver = "0.4.0"
 indexmap = { version = "2", features = ["serde"] }
 jsonc-parser = { version = "=0.21.1", features = ["serde"] }
 log = "0.4.20"
