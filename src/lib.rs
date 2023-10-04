@@ -1209,11 +1209,8 @@ mod tests {
       tasks_config["server"],
       "deno run --allow-net --allow-read server.ts"
     );
-  
-    assert_eq!(
-      config_file.json.features,
-      vec!["kv".to_string()],
-    )
+
+    assert_eq!(config_file.json.features, vec!["kv".to_string()],)
   }
 
   /// if either "include" or "exclude" is specified, "files" is ignored
