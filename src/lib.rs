@@ -1210,7 +1210,10 @@ mod tests {
       "deno run --allow-net --allow-read server.ts"
     );
 
-    assert_eq!(config_file.json.unstable, vec!["kv".to_string(), "ffi".to_string()],)
+    assert_eq!(
+      config_file.json.unstable,
+      vec!["kv".to_string(), "ffi".to_string()],
+    )
   }
 
   /// if either "include" or "exclude" is specified, "files" is ignored
