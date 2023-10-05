@@ -455,7 +455,7 @@ pub struct ConfigFileJson {
   #[serde(default)]
   pub members: Vec<String>,
   #[serde(default)]
-  pub features: Vec<String>,
+  pub unstable: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1148,7 +1148,7 @@ mod tests {
         "build": "deno run --allow-read --allow-write build.ts",
         "server": "deno run --allow-net --allow-read server.ts"
       },
-      "features": ["kv"]
+      "unstable": ["kv", "ffi"]
     }"#;
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
@@ -1210,7 +1210,7 @@ mod tests {
       "deno run --allow-net --allow-read server.ts"
     );
 
-    assert_eq!(config_file.json.features, vec!["kv".to_string()],)
+    assert_eq!(config_file.json.unstable, vec!["kv".to_string(), "ffi".to_string()],)
   }
 
   /// if either "include" or "exclude" is specified, "files" is ignored
