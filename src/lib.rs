@@ -676,6 +676,10 @@ impl ConfigFile {
     self.json.imports.is_some() || self.json.scopes.is_some()
   }
 
+  pub fn has_unstable(&self, name: &str) -> bool {
+    self.json.unstable.iter().any(|v| v == name)
+  }
+
   pub fn to_files_config(&self) -> Result<Option<FilesConfig>, AnyError> {
     let mut exclude: Vec<String> =
       if let Some(exclude) = self.json.exclude.clone() {
