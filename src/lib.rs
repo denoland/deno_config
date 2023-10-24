@@ -914,7 +914,7 @@ impl ConfigFile {
       Some("precompile") => "jsx-runtime".to_string(),
       Some("precompile-dev") => "jsx-dev-runtime".to_string(),
       Some(setting) => bail!(
-        "Unsupported 'jsx' compiler option value '{}'. Supported: 'react-jsx', 'react-jsxdev', 'react'\n  at {}",
+        "Unsupported 'jsx' compiler option value '{}'. Supported: 'react-jsx', 'react-jsxdev', 'react', 'precompile', 'precompile-jsx'\n  at {}",
         setting,
         self.specifier,
       ),
