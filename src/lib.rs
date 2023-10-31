@@ -911,8 +911,9 @@ impl ConfigFile {
         }
         return Ok(None);
       }
+      Some("precompile") => "jsx-runtime".to_string(),
       Some(setting) => bail!(
-        "Unsupported 'jsx' compiler option value '{}'. Supported: 'react-jsx', 'react-jsxdev', 'react'\n  at {}",
+        "Unsupported 'jsx' compiler option value '{}'. Supported: 'react-jsx', 'react-jsxdev', 'react', 'precompile'\n  at {}",
         setting,
         self.specifier,
       ),
@@ -1436,7 +1437,7 @@ mod tests {
     assert_eq!(
       config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
       concat!(
-        "Unsupported 'jsx' compiler option value 'preserve'. Supported: 'react-jsx', 'react-jsxdev', 'react'\n",
+        "Unsupported 'jsx' compiler option value 'preserve'. Supported: 'react-jsx', 'react-jsxdev', 'react', 'precompile'\n",
         "  at file:///deno/tsconfig.json",
       ),
     );
