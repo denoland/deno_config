@@ -684,6 +684,11 @@ impl ConfigFile {
   pub fn to_exports_config(
     &self,
   ) -> Result<IndexMap<String, String>, AnyError> {
+    fn has_extension(value: &str) -> bool {
+      let search_text = &value[value.rfind('/').unwrap_or(0)..];
+      search_text.contains('.')
+    }
+
     fn validate_value(key: &str, value: &str) -> Result<(), AnyError> {
       if value.is_empty() {
         bail!("Exports config key '{}' must have non-empty value.", key);
@@ -694,6 +699,9 @@ impl ConfigFile {
           key,
           value,
         );
+      }
+      if value.ends_with('/') || !has_extension(value) {
+        bail!("Exports config key '{}' must have value that is a file with an extension. (Invalid value: '{}')", key, value);
       }
       Ok(())
     }
@@ -1700,6 +1708,16 @@ mod tests {
     run_test(
       r#"{ "exports": { "./mod": "mod.ts" } }"#,
       "Exports config key './mod' must have value that starts with './'. (Invalid value: 'mod.ts')",
+    );
+    // value with a trailing slash
+    run_test(
+      r#"{ "exports": { "./mod": "./folder/" } }"#,
+      "Exports config key './mod' must have value that is a file with an extension. (Invalid value: './folder/')",
+    );
+    // value without an extension
+    run_test(
+      r#"{ "exports": { "./mod": "./folder" } }"#,
+      "Exports config key './mod' must have value that is a file with an extension. (Invalid value: './folder')",
     );
     // boolean key value
     run_test(
