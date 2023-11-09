@@ -706,7 +706,7 @@ impl ConfigFile {
           if !valid_key {
             bail!("Exports config key '{}' must be equal to '.' or start with './'.", k);
           }
-          if k.ends_with("/") {
+          if k.ends_with('/') {
             bail!("Exports config key '{}' must not end with '/'. Remove the trailing slash.", k);
           }
           match v {
