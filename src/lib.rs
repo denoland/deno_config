@@ -422,13 +422,13 @@ impl SerializedBenchConfig {
   }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WorkspaceConfig {
   pub members: Vec<WorkspaceMemberConfig>,
   pub base_import_map_value: Value,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WorkspaceMemberConfig {
   // As defined in `member` setting of the workspace deno.json.
   pub member_name: String,
