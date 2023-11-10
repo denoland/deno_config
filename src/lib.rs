@@ -330,6 +330,32 @@ impl FmtConfig {
   }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportsConfig {
+  base: Url,
+  map: IndexMap<String, String>,
+}
+
+impl ExportsConfig {
+  pub fn into_map(self) -> IndexMap<String, String> {
+    self.map
+  }
+
+  pub fn get(&self, export_name: &str) -> Option<&String> {
+    self.map.get(export_name)
+  }
+
+  pub fn get_resolved(
+    &self,
+    export_name: &str,
+  ) -> Result<Option<Url>, url::ParseError> {
+    match self.get(export_name) {
+      Some(name) => self.base.join(name).map(Some),
+      None => Ok(None),
+    }
+  }
+}
+
 /// `test` config representation for serde
 ///
 /// fields `include` and `exclude` are expanded from [SerializedFilesConfig].
@@ -681,9 +707,7 @@ impl ConfigFile {
     self.json.unstable.iter().any(|v| v == name)
   }
 
-  pub fn to_exports_config(
-    &self,
-  ) -> Result<IndexMap<String, String>, AnyError> {
+  pub fn to_exports_config(&self) -> Result<ExportsConfig, AnyError> {
     fn has_extension(value: &str) -> bool {
       let search_text = &value[value.rfind('/').unwrap_or(0)..];
       search_text.contains('.')
@@ -706,7 +730,7 @@ impl ConfigFile {
       Ok(())
     }
 
-    match &self.json.exports {
+    let map = match &self.json.exports {
       Some(Value::Object(map)) => {
         let mut result = IndexMap::with_capacity(map.len());
         for (k, v) in map {
@@ -733,17 +757,22 @@ impl ConfigFile {
             }
           }
         }
-        Ok(result)
+        result
       }
       Some(Value::String(value)) => {
         validate_value(".", value)?;
-        Ok(IndexMap::from([(".".to_string(), value.clone())]))
+        IndexMap::from([(".".to_string(), value.clone())])
       }
       Some(Value::Bool(_)) | Some(Value::Array(_)) | Some(Value::Number(_)) => {
-        Err(anyhow!("Expected a string or object in exports config."))
+        bail!("Expected a string or object in exports config.");
       }
-      Some(Value::Null) | None => Ok(IndexMap::new()),
-    }
+      Some(Value::Null) | None => IndexMap::new(),
+    };
+
+    Ok(ExportsConfig {
+      base: self.specifier.clone(),
+      map,
+    })
   }
 
   pub fn to_files_config(&self) -> Result<Option<FilesConfig>, AnyError> {
@@ -1658,7 +1687,7 @@ mod tests {
 
   #[test]
   fn exports() {
-    fn get_exports(config_text: &str) -> IndexMap<String, String> {
+    fn get_exports(config_text: &str) -> ExportsConfig {
       let config_dir = Url::parse("file:///deno/").unwrap();
       let config_specifier = config_dir.join("tsconfig.json").unwrap();
       let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
@@ -1666,17 +1695,31 @@ mod tests {
     }
 
     // no exports
-    assert_eq!(get_exports("{}"), IndexMap::<String, String>::new());
+    assert_eq!(
+      get_exports("{}").into_map(),
+      IndexMap::<String, String>::new()
+    );
     // string export
     assert_eq!(
-      get_exports(r#"{ "exports": "./mod.ts" }"#),
+      get_exports(r#"{ "exports": "./mod.ts" }"#).into_map(),
       IndexMap::from([(".".to_string(), "./mod.ts".to_string())])
     );
     // map export
     assert_eq!(
-      get_exports(r#"{ "exports": { "./export": "./mod.ts" } }"#),
+      get_exports(r#"{ "exports": { "./export": "./mod.ts" } }"#).into_map(),
       IndexMap::from([("./export".to_string(), "./mod.ts".to_string())])
     );
+    // resolve an export
+    let exports = get_exports(r#"{ "exports": { "./export": "./mod.ts" } }"#);
+    assert_eq!(
+      exports
+        .get_resolved("./export")
+        .unwrap()
+        .unwrap()
+        .to_string(),
+      "file:///deno/mod.ts"
+    );
+    assert!(exports.get_resolved("./non-existent").unwrap().is_none());
   }
 
   #[test]
