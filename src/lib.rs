@@ -330,6 +330,32 @@ impl FmtConfig {
   }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportsConfig {
+  base: Url,
+  map: IndexMap<String, String>,
+}
+
+impl ExportsConfig {
+  pub fn into_map(self) -> IndexMap<String, String> {
+    self.map
+  }
+
+  pub fn get(&self, export_name: &str) -> Option<&String> {
+    self.map.get(export_name)
+  }
+
+  pub fn get_resolved(
+    &self,
+    export_name: &str,
+  ) -> Result<Option<Url>, url::ParseError> {
+    match self.get(export_name) {
+      Some(name) => self.base.join(name).map(Some),
+      None => Ok(None),
+    }
+  }
+}
+
 /// `test` config representation for serde
 ///
 /// fields `include` and `exclude` are expanded from [SerializedFilesConfig].
@@ -452,6 +478,7 @@ pub struct ConfigFileJson {
   pub version: Option<String>,
   #[serde(default)]
   pub workspace: bool,
+  pub exports: Option<Value>,
   #[serde(default)]
   pub members: Vec<String>,
   #[serde(default)]
@@ -678,6 +705,74 @@ impl ConfigFile {
 
   pub fn has_unstable(&self, name: &str) -> bool {
     self.json.unstable.iter().any(|v| v == name)
+  }
+
+  pub fn to_exports_config(&self) -> Result<ExportsConfig, AnyError> {
+    fn has_extension(value: &str) -> bool {
+      let search_text = &value[value.rfind('/').unwrap_or(0)..];
+      search_text.contains('.')
+    }
+
+    fn validate_value(key: &str, value: &str) -> Result<(), AnyError> {
+      if value.is_empty() {
+        bail!("Exports config key '{}' must have non-empty value.", key);
+      }
+      if !value.starts_with("./") {
+        bail!(
+          "Exports config key '{}' must have value that starts with './'. (Invalid value: '{}')",
+          key,
+          value,
+        );
+      }
+      if value.ends_with('/') || !has_extension(value) {
+        bail!("Exports config key '{}' must have value that is a file with an extension. (Invalid value: '{}')", key, value);
+      }
+      Ok(())
+    }
+
+    let map = match &self.json.exports {
+      Some(Value::Object(map)) => {
+        let mut result = IndexMap::with_capacity(map.len());
+        for (k, v) in map {
+          let valid_key = k == "." || k.starts_with("./");
+          if !valid_key {
+            bail!("Exports config key '{}' must be equal to '.' or start with './'.", k);
+          }
+          if k.ends_with('/') {
+            bail!("Exports config key '{}' must not end with '/'. Remove the trailing slash.", k);
+          }
+          match v {
+            Value::String(value) => {
+              validate_value(k, value)?;
+              result.insert(k.clone(), value.clone());
+            }
+            Value::Bool(_)
+            | Value::Number(_)
+            | Value::Object(_)
+            | Value::Array(_) => {
+              bail!("Expected a string in exports config key '{}'.", k);
+            }
+            Value::Null => {
+              // ignore
+            }
+          }
+        }
+        result
+      }
+      Some(Value::String(value)) => {
+        validate_value(".", value)?;
+        IndexMap::from([(".".to_string(), value.clone())])
+      }
+      Some(Value::Bool(_)) | Some(Value::Array(_)) | Some(Value::Number(_)) => {
+        bail!("Expected a string or object in exports config.");
+      }
+      Some(Value::Null) | None => IndexMap::new(),
+    };
+
+    Ok(ExportsConfig {
+      base: self.specifier.clone(),
+      map,
+    })
   }
 
   pub fn to_files_config(&self) -> Result<Option<FilesConfig>, AnyError> {
@@ -1563,6 +1658,17 @@ mod tests {
     );
   }
 
+  #[track_caller]
+  fn run_task_error_test(config_text: &str, expected_error: &str) {
+    let config_dir = Url::parse("file:///deno/").unwrap();
+    let config_specifier = config_dir.join("tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    assert_eq!(
+      config_file.resolve_tasks_config().unwrap_err().to_string(),
+      expected_error,
+    );
+  }
+
   #[test]
   fn files_config_matches_remote() {
     assert!(FilesConfig::default()
@@ -1579,17 +1685,92 @@ mod tests {
     assert_eq!(lockfile_path, PathBuf::from("/root/deno.lock"));
   }
 
-  fn run_task_error_test(config_text: &str, expected_error: &str) {
-    let config_dir = Url::parse("file:///deno/").unwrap();
-    let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+  #[test]
+  fn exports() {
+    fn get_exports(config_text: &str) -> ExportsConfig {
+      let config_dir = Url::parse("file:///deno/").unwrap();
+      let config_specifier = config_dir.join("tsconfig.json").unwrap();
+      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+      config_file.to_exports_config().unwrap()
+    }
+
+    // no exports
     assert_eq!(
-      config_file
-        .resolve_tasks_config()
-        .err()
+      get_exports("{}").into_map(),
+      IndexMap::<String, String>::new()
+    );
+    // string export
+    assert_eq!(
+      get_exports(r#"{ "exports": "./mod.ts" }"#).into_map(),
+      IndexMap::from([(".".to_string(), "./mod.ts".to_string())])
+    );
+    // map export
+    assert_eq!(
+      get_exports(r#"{ "exports": { "./export": "./mod.ts" } }"#).into_map(),
+      IndexMap::from([("./export".to_string(), "./mod.ts".to_string())])
+    );
+    // resolve an export
+    let exports = get_exports(r#"{ "exports": { "./export": "./mod.ts" } }"#);
+    assert_eq!(
+      exports
+        .get_resolved("./export")
+        .unwrap()
         .unwrap()
         .to_string(),
-      expected_error,
+      "file:///deno/mod.ts"
+    );
+    assert!(exports.get_resolved("./non-existent").unwrap().is_none());
+  }
+
+  #[test]
+  fn exports_errors() {
+    #[track_caller]
+    fn run_test(config_text: &str, expected_error: &str) {
+      let config_dir = Url::parse("file:///deno/").unwrap();
+      let config_specifier = config_dir.join("tsconfig.json").unwrap();
+      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+      assert_eq!(
+        config_file.to_exports_config().unwrap_err().to_string(),
+        expected_error,
+      );
+    }
+
+    // trailing slash in key
+    run_test(r#"{ "exports": { "./mod/": "./mod.ts" } }"#, "Exports config key './mod/' must not end with '/'. Remove the trailing slash.");
+    // no ./ at start
+    run_test(
+      r#"{ "exports": { "mod": "./mod.ts" } }"#,
+      "Exports config key 'mod' must be equal to '.' or start with './'.",
+    );
+    // empty value
+    run_test(
+      r#"{ "exports": { "./mod": "" } }"#,
+      "Exports config key './mod' must have non-empty value.",
+    );
+    // value without ./ at start
+    run_test(
+      r#"{ "exports": { "./mod": "mod.ts" } }"#,
+      "Exports config key './mod' must have value that starts with './'. (Invalid value: 'mod.ts')",
+    );
+    // value with a trailing slash
+    run_test(
+      r#"{ "exports": { "./mod": "./folder/" } }"#,
+      "Exports config key './mod' must have value that is a file with an extension. (Invalid value: './folder/')",
+    );
+    // value without an extension
+    run_test(
+      r#"{ "exports": { "./mod": "./folder" } }"#,
+      "Exports config key './mod' must have value that is a file with an extension. (Invalid value: './folder')",
+    );
+    // boolean key value
+    run_test(
+      r#"{ "exports": { "./mod": true } }"#,
+      "Expected a string in exports config key './mod'.",
+    );
+    // non-map or string value
+    run_test(
+      r#"{ "exports": [] }"#,
+      "Expected a string or object in exports config.",
     );
   }
 }
