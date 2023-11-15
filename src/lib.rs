@@ -477,10 +477,8 @@ pub struct ConfigFileJson {
   pub name: Option<String>,
   pub version: Option<String>,
   #[serde(default)]
-  pub workspace: bool,
+  pub workspaces: Vec<String>,
   pub exports: Option<Value>,
-  #[serde(default)]
-  pub members: Vec<String>,
   #[serde(default)]
   pub unstable: Vec<String>,
 }
@@ -866,9 +864,9 @@ impl ConfigFile {
     };
 
     let config_file_directory = config_file_path.parent().unwrap();
-    let mut members = Vec::with_capacity(self.json.members.len());
+    let mut members = Vec::with_capacity(self.json.workspaces.len());
 
-    for member in self.json.members.iter() {
+    for member in self.json.workspaces.iter() {
       let member_path = config_file_directory.join(member);
       let member_deno_json = member_path.as_path().join("deno.json");
       if !member_deno_json.exists() {
