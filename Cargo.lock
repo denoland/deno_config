@@ -10,7 +10,7 @@ checksum = "a4668cab20f66d8d020e1fbc0ebe47217433c1b6c8f2040faf858554e394ace6"
 
 [[package]]
 name = "deno_config"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "indexmap",
