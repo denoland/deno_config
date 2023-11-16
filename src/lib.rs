@@ -863,6 +863,10 @@ impl ConfigFile {
       return Ok(None);
     };
 
+    if self.json.workspaces.is_empty() {
+      return Ok(None);
+    }
+
     let config_file_directory = config_file_path.parent().unwrap();
     let mut members = Vec::with_capacity(self.json.workspaces.len());
 
@@ -1770,5 +1774,17 @@ mod tests {
       r#"{ "exports": [] }"#,
       "Expected a string or object in exports config.",
     );
+  }
+
+  #[test]
+  fn test_empty_workspaces() {
+    let config_text = r#"{
+      "workspaces": [],
+    }"#;
+    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let workspace_config = config_file.to_workspace_config().unwrap();
+    assert!(workspace_config.is_none());
   }
 }
