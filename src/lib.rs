@@ -859,6 +859,9 @@ impl ConfigFile {
   pub fn to_workspace_config(
     &self,
   ) -> Result<Option<WorkspaceConfig>, AnyError> {
+    if self.specifier.scheme() != "file" {
+      return Ok(None);
+    };
     let Ok(config_file_path) = self.specifier.to_file_path() else {
       return Ok(None);
     };
@@ -868,10 +871,26 @@ impl ConfigFile {
     }
 
     let config_file_directory = config_file_path.parent().unwrap();
+    let config_file_directory_url =
+      Url::from_directory_path(config_file_directory).unwrap();
     let mut members = Vec::with_capacity(self.json.workspaces.len());
 
+    let mut all_member_paths_and_names: Vec<(PathBuf, String)> = vec![];
+
     for member in self.json.workspaces.iter() {
-      let member_path = config_file_directory.join(member);
+      let member_path_url = config_file_directory_url.join(member)?;
+      let member_path = member_path_url.to_file_path().unwrap();
+      if !member_path_url
+        .as_str()
+        .starts_with(config_file_directory_url.as_str())
+      {
+        bail!(
+          "Workspace member '{}' is outside root configuration directory ('{}')", 
+          member,
+          member_path.display()
+        );
+      }
+      all_member_paths_and_names.push((member_path.clone(), member.clone()));
       let member_deno_json = member_path.as_path().join("deno.json");
       if !member_deno_json.exists() {
         bail!(
@@ -897,6 +916,18 @@ impl ConfigFile {
         package_version: package_version.to_string(),
         config_file: member_config_file,
       });
+    }
+
+    for (path, name) in &all_member_paths_and_names {
+      for (other_path, other_name) in &all_member_paths_and_names {
+        if other_path == path {
+          continue;
+        }
+
+        if path.starts_with(other_path) {
+          bail!("Workspace member '{}' is nested within other workspace member '{}'", name, other_name);
+        }
+      }
     }
 
     let base_import_map_value = self.to_import_map_value();
@@ -1196,6 +1227,16 @@ mod tests {
   use super::*;
   use pretty_assertions::assert_eq;
   use std::path::PathBuf;
+
+  #[macro_export]
+  macro_rules! assert_contains {
+    ($string:expr, $($test:expr),+ $(,)?) => {
+      let string = &$string; // This might be a function call or something
+      if !($(string.contains($test))||+) {
+        panic!("{:?} does not contain any of {:?}", string, [$($test),+]);
+      }
+    }
+  }
 
   fn testdata_path() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"))).join("testdata")
@@ -1781,10 +1822,33 @@ mod tests {
     let config_text = r#"{
       "workspaces": [],
     }"#;
-    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    let config_specifier = root_url().join("tsconfig.json").unwrap();
     let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
     let workspace_config = config_file.to_workspace_config().unwrap();
     assert!(workspace_config.is_none());
+  }
+
+  #[test]
+  fn test_workspaces_outside_root_config_dir() {
+    let config_text = r#"{
+      "workspaces": ["../a"],
+    }"#;
+    let config_specifier = root_url().join("tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let workspace_config_err = config_file.to_workspace_config().unwrap_err();
+    assert_contains!(
+      workspace_config_err.to_string(),
+      "Workspace member '../a' is outside root configuration directory"
+    );
+  }
+
+  fn root_url() -> Url {
+    if cfg!(windows) {
+      Url::parse("file://c:/deno/").unwrap()
+    } else {
+      Url::parse("file:///deno/").unwrap()
+    }
   }
 }
