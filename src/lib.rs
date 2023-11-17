@@ -877,7 +877,9 @@ impl ConfigFile {
     for member in self.json.workspaces.iter() {
       let member_path_url = config_file_directory_url.join(member)?;
       let member_path = member_path_url.to_file_path().unwrap();
-      if !member_path_url.as_str().starts_with(config_file_directory_url.as_str())
+      if !member_path_url
+        .as_str()
+        .starts_with(config_file_directory_url.as_str())
       {
         bail!(
           "Workspace member '{}' is outside root configuration directory ('{}')", 
