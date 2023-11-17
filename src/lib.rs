@@ -859,6 +859,9 @@ impl ConfigFile {
   pub fn to_workspace_config(
     &self,
   ) -> Result<Option<WorkspaceConfig>, AnyError> {
+    if self.specifier.scheme() != "file" {
+      return Ok(None);
+    };
     let Ok(config_file_path) = self.specifier.to_file_path() else {
       return Ok(None);
     };
@@ -1819,7 +1822,7 @@ mod tests {
     let config_text = r#"{
       "workspaces": [],
     }"#;
-    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    let config_specifier = root_url().join("tsconfig.json").unwrap();
     let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
     let workspace_config = config_file.to_workspace_config().unwrap();
@@ -1831,7 +1834,7 @@ mod tests {
     let config_text = r#"{
       "workspaces": ["../a"],
     }"#;
-    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    let config_specifier = root_url().join("tsconfig.json").unwrap();
     let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
     let workspace_config_err = config_file.to_workspace_config().unwrap_err();
@@ -1839,5 +1842,13 @@ mod tests {
       workspace_config_err.to_string(),
       "Workspace member '../a' is outside root configuration directory"
     );
+  }
+
+  fn root_url() -> Url {
+    if cfg!(windows) {
+      Url::parse("file://c:/deno/").unwrap()
+    } else {
+      Url::parse("file:///deno/").unwrap()
+    }
   }
 }
