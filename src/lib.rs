@@ -759,7 +759,9 @@ impl ConfigFile {
         validate_value(".", value)?;
         IndexMap::from([(".".to_string(), value.clone())])
       }
-      Some(Value::Bool(_) | Value::Array(_) | Value::Number(_) | Value::Null) => {
+      Some(
+        Value::Bool(_) | Value::Array(_) | Value::Number(_) | Value::Null,
+      ) => {
         bail!("Expected a string or object in exports config.");
       }
       None => IndexMap::new(),
