@@ -759,10 +759,10 @@ impl ConfigFile {
         validate_value(".", value)?;
         IndexMap::from([(".".to_string(), value.clone())])
       }
-      Some(Value::Bool(_)) | Some(Value::Array(_)) | Some(Value::Number(_)) => {
+      Some(Value::Bool(_) | Value::Array(_) | Value::Number(_) | Value::Null) => {
         bail!("Expected a string or object in exports config.");
       }
-      Some(Value::Null) | None => IndexMap::new(),
+      None => IndexMap::new(),
     };
 
     Ok(ExportsConfig {
@@ -1812,6 +1812,11 @@ mod tests {
     run_test(
       r#"{ "exports": [] }"#,
       "Expected a string or object in exports config.",
+    );
+    // null
+    run_test(
+      r#"{ "exports": { "./mod": null }  }"#,
+      "Expected a string in exports config key './mod'.",
     );
   }
 
