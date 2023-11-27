@@ -747,11 +747,9 @@ impl ConfigFile {
             Value::Bool(_)
             | Value::Number(_)
             | Value::Object(_)
-            | Value::Array(_) => {
+            | Value::Array(_)
+            | Value::Null => {
               bail!("Expected a string in exports config key '{}'.", k);
-            }
-            Value::Null => {
-              // ignore
             }
           }
         }
