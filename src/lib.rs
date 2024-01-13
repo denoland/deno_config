@@ -68,13 +68,13 @@ impl SerializedFilesConfig {
         Some(i) => Some(PathOrPatternSet::from_relative_path_or_patterns(
           &config_dir,
           &i,
-        )?),
+        ).context("Invalid config file include.")?),
         None => None,
       },
       exclude: PathOrPatternSet::from_relative_path_or_patterns(
         &config_dir,
         &self.exclude,
-      )?,
+      ).context("Invalid config file exclude.")?,
     })
   }
 

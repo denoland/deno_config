@@ -313,6 +313,10 @@ impl GlobPattern {
     Ok(Self(pattern))
   }
 
+  pub fn as_str(&self) -> &str {
+    self.0.as_str()
+  }
+
   pub fn matches_path(&self, path: &Path) -> bool {
     self.0.matches_path_with(path, match_options())
   }
@@ -567,5 +571,15 @@ mod test {
     assert_eq!(pattern.matches_path(&cwd.join("dir/foo.ts")), true);
     assert_eq!(pattern.matches_path(&cwd.join("foo.js")), false);
     assert_eq!(pattern.matches_path(&cwd.join("dir/foo.js")), false);
+  }
+
+  #[test]
+  fn from_relative_dot_slash() {
+    let cwd = std::env::current_dir().unwrap();
+    let pattern = PathOrPattern::from_relative(&cwd, "./").unwrap();
+    match pattern {
+      PathOrPattern::Path(p) => assert_eq!(p, cwd),
+      PathOrPattern::RemoteUrl(_) | PathOrPattern::Pattern(_) => unreachable!(),
+    }
   }
 }
