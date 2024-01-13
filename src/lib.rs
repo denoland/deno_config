@@ -30,7 +30,6 @@ pub use ts::JsxImportSourceConfig;
 pub use ts::TsConfig;
 
 use self::glob::FilePatterns;
-use self::glob::PathOrPattern;
 use self::glob::PathOrPatternSet;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -64,34 +63,18 @@ impl SerializedFilesConfig {
     let config_dir = util::specifier_to_file_path(&util::specifier_parent(
       config_file_specifier,
     ))?;
-    let join_dir = |p: String| -> Result<PathOrPattern, anyhow::Error> {
-      if glob::is_glob_pattern(&p) {
-        let p = p.strip_prefix("./").unwrap_or(&p);
-        let mut pattern = config_dir.to_string_lossy().replace('\\', "/");
-        if !pattern.ends_with('/') {
-          pattern.push('/');
-        }
-        let p = p.strip_suffix('/').unwrap_or(p);
-        pattern.push_str(p);
-        PathOrPattern::new(&pattern)
-      } else {
-        Ok(PathOrPattern::Path(config_dir.join(p)))
-      }
-    };
     Ok(FilePatterns {
       include: match self.include {
-        Some(i) => Some(PathOrPatternSet::new(
-          i.into_iter().map(join_dir).collect::<Result<Vec<_>, _>>()?,
-        )),
+        Some(i) => Some(PathOrPatternSet::from_relative_path_or_patterns(
+          &config_dir,
+          &i,
+        )?),
         None => None,
       },
-      exclude: PathOrPatternSet::new(
-        self
-          .exclude
-          .into_iter()
-          .map(join_dir)
-          .collect::<Result<Vec<_>, _>>()?,
-      ),
+      exclude: PathOrPatternSet::from_relative_path_or_patterns(
+        &config_dir,
+        &self.exclude,
+      )?,
     })
   }
 
@@ -1206,6 +1189,8 @@ pub fn get_ts_config_for_emit(
 
 #[cfg(test)]
 mod tests {
+  use crate::glob::PathOrPattern;
+
   use super::*;
   use pretty_assertions::assert_eq;
   use std::path::PathBuf;
@@ -1379,7 +1364,7 @@ mod tests {
       lint_files,
       FilePatterns {
         include: Some(
-          PathOrPatternSet::from_absolute_paths(vec!["/deno/src/".to_string()])
+          PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
             .unwrap()
         ),
         exclude: Default::default(),
@@ -1391,7 +1376,7 @@ mod tests {
       fmt_files,
       FilePatterns {
         include: None,
-        exclude: PathOrPatternSet::from_absolute_paths(vec![
+        exclude: PathOrPatternSet::from_absolute_paths(&[
           "/deno/dist/".to_string()
         ])
         .unwrap(),
@@ -1404,7 +1389,7 @@ mod tests {
     assert_eq!(
       test_include,
       Some(
-        PathOrPatternSet::from_absolute_paths(vec!["/deno/src/".to_string()])
+        PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
           .unwrap()
       )
     );
@@ -1415,7 +1400,7 @@ mod tests {
     assert_eq!(
       bench_include,
       Some(
-        PathOrPatternSet::from_absolute_paths(vec!["/deno/src/".to_string()])
+        PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
           .unwrap()
       )
     );
@@ -1439,7 +1424,7 @@ mod tests {
     assert_eq!(
       lint_include,
       Some(
-        PathOrPatternSet::from_absolute_paths(vec!["/deno/src/".to_string()])
+        PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
           .unwrap()
       )
     );
@@ -1450,7 +1435,7 @@ mod tests {
     assert_eq!(
       fmt_include,
       Some(
-        PathOrPatternSet::from_absolute_paths(vec!["/deno/src/".to_string()])
+        PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
           .unwrap()
       )
     );
@@ -1460,7 +1445,7 @@ mod tests {
       .exclude;
     assert_eq!(
       test_exclude,
-      PathOrPatternSet::from_absolute_paths(vec!["/deno/dist/".to_string()])
+      PathOrPatternSet::from_absolute_paths(&["/deno/dist/".to_string()])
         .unwrap()
     );
 
@@ -1469,7 +1454,7 @@ mod tests {
       .exclude;
     assert_eq!(
       bench_exclude,
-      PathOrPatternSet::from_absolute_paths(vec!["/deno/dist/".to_string()])
+      PathOrPatternSet::from_absolute_paths(&["/deno/dist/".to_string()])
         .unwrap()
     );
   }
@@ -1545,7 +1530,7 @@ mod tests {
     assert_eq!(test_config.files.include, None);
     assert_eq!(
       test_config.files.exclude,
-      PathOrPatternSet::from_absolute_paths(vec![
+      PathOrPatternSet::from_absolute_paths(&[
         "/deno/npm/".to_string(),
         "/deno/foo/".to_string()
       ])
@@ -1555,7 +1540,7 @@ mod tests {
     let bench_config = config_file.to_bench_config().unwrap().unwrap();
     assert_eq!(
       bench_config.files.exclude,
-      PathOrPatternSet::from_absolute_paths(vec!["/deno/foo/".to_string()])
+      PathOrPatternSet::from_absolute_paths(&["/deno/foo/".to_string()])
         .unwrap()
     );
   }
@@ -1575,7 +1560,7 @@ mod tests {
     assert_eq!(files_config.include, None);
     assert_eq!(
       files_config.exclude,
-      PathOrPatternSet::from_absolute_paths(vec!["/deno/npm/".to_string()])
+      PathOrPatternSet::from_absolute_paths(&["/deno/npm/".to_string()])
         .unwrap()
     );
 
@@ -1583,7 +1568,7 @@ mod tests {
     assert_eq!(lint_config.files.include, None);
     assert_eq!(
       lint_config.files.exclude,
-      PathOrPatternSet::from_absolute_paths(vec!["/deno/npm/".to_string()])
+      PathOrPatternSet::from_absolute_paths(&["/deno/npm/".to_string()])
         .unwrap()
     );
 
@@ -1591,7 +1576,7 @@ mod tests {
     assert_eq!(fmt_config.files.include, None);
     assert_eq!(
       fmt_config.files.exclude,
-      PathOrPatternSet::from_absolute_paths(vec!["/deno/npm/".to_string()])
+      PathOrPatternSet::from_absolute_paths(&["/deno/npm/".to_string()])
         .unwrap()
     );
   }

@@ -176,11 +176,23 @@ impl PathOrPatternSet {
     Self(elements)
   }
 
-  pub fn from_absolute_paths(path: Vec<String>) -> Result<Self, anyhow::Error> {
+  pub fn from_absolute_paths(paths: &[String]) -> Result<Self, anyhow::Error> {
     Ok(Self(
-      path
-        .into_iter()
-        .map(|p| PathOrPattern::new(&p))
+      paths
+        .iter()
+        .map(|p| PathOrPattern::new(p))
+        .collect::<Result<Vec<_>, _>>()?,
+    ))
+  }
+
+  pub fn from_relative_path_or_patterns(
+    base: &Path,
+    paths: &[String],
+  ) -> Result<Self, anyhow::Error> {
+    Ok(Self(
+      paths
+        .iter()
+        .map(|p| PathOrPattern::from_relative(base, p))
         .collect::<Result<Vec<_>, _>>()?,
     ))
   }
@@ -216,7 +228,7 @@ impl PathOrPatternSet {
   }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum PathOrPattern {
   Path(PathBuf),
   RemoteUrl(Url),
@@ -247,6 +259,24 @@ impl PathOrPattern {
     })
   }
 
+  pub fn from_relative(
+    base: &Path,
+    p: &str,
+  ) -> Result<PathOrPattern, anyhow::Error> {
+    if is_glob_pattern(p) {
+      let p = p.strip_prefix("./").unwrap_or(p);
+      let mut pattern = base.to_string_lossy().replace('\\', "/");
+      if !pattern.ends_with('/') {
+        pattern.push('/');
+      }
+      let p = p.strip_suffix('/').unwrap_or(p);
+      pattern.push_str(p);
+      PathOrPattern::new(&pattern)
+    } else {
+      Ok(PathOrPattern::Path(base.join(p)))
+    }
+  }
+
   pub fn matches_path(&self, path: &Path) -> bool {
     match self {
       PathOrPattern::Path(p) => path.starts_with(p),
@@ -265,7 +295,7 @@ impl PathOrPattern {
   }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GlobPattern(glob::Pattern);
 
 impl GlobPattern {
@@ -277,9 +307,7 @@ impl GlobPattern {
   }
 
   pub fn new(pattern: &str) -> Result<Self, anyhow::Error> {
-    let pattern = escape_brackets(pattern)
-      .replace('\\', "/")
-      .replace("/./", "/");
+    let pattern = escape_brackets(pattern).replace('\\', "/");
     let pattern = glob::Pattern::new(&pattern)
       .with_context(|| format!("Failed to expand glob: \"{}\"", pattern))?;
     Ok(Self(pattern))
@@ -302,9 +330,9 @@ impl GlobPattern {
 }
 
 pub fn is_glob_pattern(path: &str) -> bool {
-  !path.starts_with("http:")
-    && !path.starts_with("https:")
-    && !path.starts_with("file:")
+  !path.starts_with("http://")
+    && !path.starts_with("https://")
+    && !path.starts_with("file://")
     && has_glob_chars(path)
 }
 
@@ -529,5 +557,15 @@ mod test {
         )
       ]
     );
+  }
+
+  #[test]
+  fn from_relative() {
+    let cwd = std::env::current_dir().unwrap();
+    let pattern = PathOrPattern::from_relative(&cwd, "./**/*.ts").unwrap();
+    assert_eq!(pattern.matches_path(&cwd.join("foo.ts")), true);
+    assert_eq!(pattern.matches_path(&cwd.join("dir/foo.ts")), true);
+    assert_eq!(pattern.matches_path(&cwd.join("foo.js")), false);
+    assert_eq!(pattern.matches_path(&cwd.join("dir/foo.js")), false);
   }
 }
