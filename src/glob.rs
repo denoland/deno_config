@@ -272,6 +272,11 @@ impl PathOrPattern {
       let p = p.strip_suffix('/').unwrap_or(p);
       pattern.push_str(p);
       PathOrPattern::new(&pattern)
+    } else if p.starts_with("http://")
+      || p.starts_with("https://")
+      || p.starts_with("file://")
+    {
+      PathOrPattern::new(p)
     } else {
       Ok(PathOrPattern::Path(base.join(p)))
     }
@@ -580,6 +585,34 @@ mod test {
     match pattern {
       PathOrPattern::Path(p) => assert_eq!(p, cwd),
       PathOrPattern::RemoteUrl(_) | PathOrPattern::Pattern(_) => unreachable!(),
+    }
+  }
+
+  #[test]
+  fn from_relative_specifier() {
+    let cwd = std::env::current_dir().unwrap();
+    for scheme in &["http", "https"] {
+      let url = format!("{}://deno.land/x/test", scheme);
+      let pattern = PathOrPattern::from_relative(&cwd, &url).unwrap();
+      match pattern {
+        PathOrPattern::RemoteUrl(p) => {
+          assert_eq!(p.as_str(), url)
+        }
+        PathOrPattern::Path(_) | PathOrPattern::Pattern(_) => unreachable!(),
+      }
+    }
+    {
+      let file_specifier = Url::from_directory_path(&cwd).unwrap();
+      let pattern =
+        PathOrPattern::from_relative(&cwd, file_specifier.as_str()).unwrap();
+      match pattern {
+        PathOrPattern::Path(p) => {
+          assert_eq!(p, cwd);
+        }
+        PathOrPattern::RemoteUrl(_) | PathOrPattern::Pattern(_) => {
+          unreachable!()
+        }
+      }
     }
   }
 }
