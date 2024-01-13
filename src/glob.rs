@@ -5,8 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use url::Url;
 use indexmap::IndexMap;
+use url::Url;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq)]
 pub struct FilePatterns {
@@ -56,7 +56,7 @@ impl FilePatterns {
       match path_or_pattern {
         PathOrPattern::Path(path) => include_paths.push((path.is_file(), path)),
         PathOrPattern::Pattern(pattern) => include_patterns.push(pattern),
-        PathOrPattern::RemoteUrl(_) => {},
+        PathOrPattern::RemoteUrl(_) => {}
       }
     }
     let include_patterns_by_base_path = include_patterns.into_iter().fold(
@@ -159,9 +159,9 @@ impl FilePatterns {
         (None, None) => None,
         (Some(lhs), None) => Some(lhs),
         (None, Some(rhs)) => Some(rhs),
-        (Some(lhs), Some(rhs)) => {
-          Some(PathOrPatternSet(lhs.0.into_iter().filter(|p| rhs.0.contains(p)).collect()))
-        }
+        (Some(lhs), Some(rhs)) => Some(PathOrPatternSet(
+          lhs.0.into_iter().filter(|p| rhs.0.contains(p)).collect(),
+        )),
       },
       exclude: PathOrPatternSet([self.exclude.0, rhs.exclude.0].concat()),
     }
@@ -381,23 +381,28 @@ mod test {
 
   impl ComparableFilePatterns {
     pub fn new(root: &Path, file_patterns: &FilePatterns) -> Self {
-      fn path_or_pattern_to_string(root: &Path, p: &PathOrPattern) -> Option<String> {
+      fn path_or_pattern_to_string(
+        root: &Path,
+        p: &PathOrPattern,
+      ) -> Option<String> {
         match p {
           PathOrPattern::RemoteUrl(_) => None,
-          PathOrPattern::Path(p) => Some(p
-            .strip_prefix(root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/")),
-          PathOrPattern::Pattern(p) => Some(p
-            .0
-            .as_str()
-            .strip_prefix(&format!(
-              "{}/",
-              root.to_string_lossy().replace('\\', "/")
-            ))
-            .unwrap()
-            .to_string()),
+          PathOrPattern::Path(p) => Some(
+            p.strip_prefix(root)
+              .unwrap()
+              .to_string_lossy()
+              .replace('\\', "/"),
+          ),
+          PathOrPattern::Pattern(p) => Some(
+            p.0
+              .as_str()
+              .strip_prefix(&format!(
+                "{}/",
+                root.to_string_lossy().replace('\\', "/")
+              ))
+              .unwrap()
+              .to_string(),
+          ),
         }
       }
 
