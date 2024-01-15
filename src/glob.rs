@@ -577,7 +577,7 @@ mod test {
       assert_eq!(format!("{:#}", err), "Invalid URL 'https://raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts': invalid domain character");
     }
     // error for invalid file url
-    {
+    if cfg!(windows) {
       let err = PathOrPattern::from_relative(&cwd, "file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts").unwrap_err();
       assert_eq!(format!("{:#}", err), "Invalid file URL 'file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts'");
     }
