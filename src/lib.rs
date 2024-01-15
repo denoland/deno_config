@@ -677,19 +677,88 @@ impl ConfigFile {
       search_text.contains('.')
     }
 
-    fn validate_value(key: &str, value: &str) -> Result<(), AnyError> {
-      if value.is_empty() {
-        bail!("Exports config key '{}' must have non-empty value.", key);
+    fn validate_key(
+      key_display: &dyn Fn() -> Cow<'static, str>,
+      key: &str,
+    ) -> Result<(), AnyError> {
+      if key == "." {
+        return Ok(());
       }
-      if !value.starts_with("./") {
+      if key.is_empty() {
         bail!(
-          "Exports config key '{}' must have value that starts with './'. (Invalid value: '{}')",
-          key,
-          value,
+          "The {} must not be empty. Use '.' if you meant the root export.",
+          key_display()
         );
       }
-      if value.ends_with('/') || !has_extension(value) {
-        bail!("Exports config key '{}' must have value that is a file with an extension. (Invalid value: '{}')", key, value);
+      if !key.starts_with("./") {
+        let suggestion = if key.starts_with('/') {
+          format!(".{}", key)
+        } else {
+          format!("./{}", key)
+        };
+        bail!(
+          "The {} must start with './'. Did you mean '{suggestion}'?",
+          key_display(),
+        );
+      }
+      if key.ends_with('/') {
+        let suggestion = key.trim_end_matches('/');
+        bail!(
+          "The {} must not end with '/'. Did you mean '{suggestion}'?",
+          key_display(),
+        );
+      }
+      // ban anything that is not [a-zA-Z0-9_-./]
+      if key.chars().any(|c| {
+        !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' | '.' | '/')
+      }) {
+        bail!(
+          "The {} must only contain alphanumeric characters, underscores (_), dashes (-), dots (.), and slashes (/).",
+          key_display()
+        );
+      }
+      // ban parts consisting of only dots, and empty parts (e.g. `./foo//bar`)
+      for part in key.split('/').skip(1) {
+        if part.is_empty() || part.chars().all(|c| c == '.') {
+          bail!(
+            "The {} must not contain double slashes (//), or parts consisting entirely of dots (.).",
+            key_display()
+          );
+        }
+      }
+      Ok(())
+    }
+
+    fn validate_value(
+      key_display: &dyn Fn() -> Cow<'static, str>,
+      value: &str,
+    ) -> Result<(), AnyError> {
+      if value.is_empty() {
+        bail!("The path for the {} must not be empty.", key_display());
+      }
+      if !value.starts_with("./") {
+        let suggestion = if value.starts_with('/') {
+          format!(".{}", value)
+        } else {
+          format!("./{}", value)
+        };
+        bail!(
+          "The path '{value}' at the {} could not be resolved as a relative path from the config file. Did you mean '{suggestion}'?",
+          key_display(),
+        );
+      }
+      if value.ends_with('/') {
+        let suggestion = value.trim_end_matches('/');
+        bail!(
+          "The path '{value}' at the {} must not end with '/'. Did you mean '{suggestion}'?",
+          key_display(),
+        );
+      }
+      if !has_extension(value) {
+        bail!(
+          "The path '{value}' at the {} is missing a file extension. Add a file extension such as '.js' or '.ts'.",
+          key_display()
+        );
       }
       Ok(())
     }
@@ -698,37 +767,37 @@ impl ConfigFile {
       Some(Value::Object(map)) => {
         let mut result = IndexMap::with_capacity(map.len());
         for (k, v) in map {
-          let valid_key = k == "." || k.starts_with("./");
-          if !valid_key {
-            bail!("Exports config key '{}' must be equal to '.' or start with './'.", k);
-          }
-          if k.ends_with('/') {
-            bail!("Exports config key '{}' must not end with '/'. Remove the trailing slash.", k);
-          }
+          let key_display = || Cow::Owned(format!("'{}' export", k));
+          validate_key(&key_display, k)?;
           match v {
             Value::String(value) => {
-              validate_value(k, value)?;
+              validate_value(&key_display, value)?;
               result.insert(k.clone(), value.clone());
+            }
+            Value::Object(_) => {
+              bail!("The path of the {} must be a string, found invalid value '{}'. Exports in deno.json do not support conditional exports.", key_display(), v);
             }
             Value::Bool(_)
             | Value::Number(_)
-            | Value::Object(_)
             | Value::Array(_)
             | Value::Null => {
-              bail!("Expected a string in exports config key '{}'.", k);
+              bail!("The path of the {} must be a string, found invalid value '{}'.", key_display(), v);
             }
           }
         }
         result
       }
       Some(Value::String(value)) => {
-        validate_value(".", value)?;
+        validate_value(&|| "root export".into(), value)?;
         IndexMap::from([(".".to_string(), value.clone())])
       }
       Some(
-        Value::Bool(_) | Value::Array(_) | Value::Number(_) | Value::Null,
+        v @ Value::Bool(_)
+        | v @ Value::Array(_)
+        | v @ Value::Number(_)
+        | v @ Value::Null,
       ) => {
-        bail!("Expected a string or object in exports config.");
+        bail!("The 'exports' key must be a string or object, found invalid value '{v}'.");
       }
       None => IndexMap::new(),
     };
@@ -1812,47 +1881,91 @@ mod tests {
       );
     }
 
-    // trailing slash in key
-    run_test(r#"{ "exports": { "./mod/": "./mod.ts" } }"#, "Exports config key './mod/' must not end with '/'. Remove the trailing slash.");
-    // no ./ at start
+    // empty key
+    run_test(
+      r#"{ "exports": { "": "./mod.ts" } }"#,
+      "The '' export must not be empty. Use '.' if you meant the root export.",
+    );
+    // no ./ at start of key
     run_test(
       r#"{ "exports": { "mod": "./mod.ts" } }"#,
-      "Exports config key 'mod' must be equal to '.' or start with './'.",
+      "The 'mod' export must start with './'. Did you mean './mod'?",
     );
+    // trailing slash in key
+    run_test(
+      r#"{ "exports": { "./mod/": "./mod.ts" } }"#,
+      "The './mod/' export must not end with '/'. Did you mean './mod'?",
+    );
+    // multiple trailing slash in key
+    run_test(
+      r#"{ "exports": { "./mod//": "./mod.ts" } }"#,
+      "The './mod//' export must not end with '/'. Did you mean './mod'?",
+    );
+    // unsupported characters in key
+    run_test(
+      r#"{ "exports": { "./mod*": "./mod.ts" } }"#,
+      "The './mod*' export must only contain alphanumeric characters, underscores (_), dashes (-), dots (.), and slashes (/).",
+    );
+    // double slash in key
+    run_test(
+      r#"{ "exports": { "./mod//bar": "./mod.ts" } }"#,
+      "The './mod//bar' export must not contain double slashes (//), or parts consisting entirely of dots (.).",
+    );
+    // . part in key
+    run_test(
+      r#"{ "exports": { "././mod": "./mod.ts" } }"#,
+      "The '././mod' export must not contain double slashes (//), or parts consisting entirely of dots (.).",
+    );
+    // .. part in key
+    run_test(
+      r#"{ "exports": { "./../mod": "./mod.ts" } }"#,
+      "The './../mod' export must not contain double slashes (//), or parts consisting entirely of dots (.).",
+    );
+    // ...... part in key
+    run_test(
+      r#"{ "exports": { "./....../mod": "./mod.ts" } }"#,
+      "The './....../mod' export must not contain double slashes (//), or parts consisting entirely of dots (.).",
+    );
+
     // empty value
     run_test(
       r#"{ "exports": { "./mod": "" } }"#,
-      "Exports config key './mod' must have non-empty value.",
+      "The path for the './mod' export must not be empty.",
     );
     // value without ./ at start
     run_test(
       r#"{ "exports": { "./mod": "mod.ts" } }"#,
-      "Exports config key './mod' must have value that starts with './'. (Invalid value: 'mod.ts')",
+      "The path 'mod.ts' at the './mod' export could not be resolved as a relative path from the config file. Did you mean './mod.ts'?",
     );
     // value with a trailing slash
     run_test(
       r#"{ "exports": { "./mod": "./folder/" } }"#,
-      "Exports config key './mod' must have value that is a file with an extension. (Invalid value: './folder/')",
+      "The path './folder/' at the './mod' export must not end with '/'. Did you mean './folder'?",
     );
     // value without an extension
     run_test(
       r#"{ "exports": { "./mod": "./folder" } }"#,
-      "Exports config key './mod' must have value that is a file with an extension. (Invalid value: './folder')",
+      "The path './folder' at the './mod' export is missing a file extension. Add a file extension such as '.js' or '.ts'.",
     );
     // boolean key value
     run_test(
       r#"{ "exports": { "./mod": true } }"#,
-      "Expected a string in exports config key './mod'.",
+      "The path of the './mod' export must be a string, found invalid value 'true'.",
+    );
+    // object key value
+    run_test(
+      r#"{ "exports": { "./mod": {} } }"#,
+      "The path of the './mod' export must be a string, found invalid value '{}'. Exports in deno.json do not support conditional exports.",
     );
     // non-map or string value
     run_test(
       r#"{ "exports": [] }"#,
-      "Expected a string or object in exports config.",
+      "The 'exports' key must be a string or object, found invalid value '[]'.",
     );
     // null
     run_test(
       r#"{ "exports": { "./mod": null }  }"#,
-      "Expected a string in exports config key './mod'.",
+      "The path of the './mod' export must be a string, found invalid value 'null'.",
     );
   }
 
