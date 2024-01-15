@@ -711,19 +711,29 @@ impl ConfigFile {
       search_text.contains('.')
     }
 
-    fn validate_value(key: &str, value: &str) -> Result<(), AnyError> {
+    fn validate_value<'a>(
+      key_display: &dyn Fn() -> Cow<'static, str>,
+      value: &str,
+    ) -> Result<(), AnyError> {
       if value.is_empty() {
-        bail!("Exports config key '{}' must have non-empty value.", key);
+        bail!("The path for the {} must not be empty.", key_display());
       }
       if !value.starts_with("./") {
+        let suggestion = if value.starts_with('/') {
+          format!(".{}", value)
+        } else {
+          format!("./{}", value)
+        };
         bail!(
-          "Exports config key '{}' must have value that starts with './'. (Invalid value: '{}')",
-          key,
-          value,
+          "The path '{value}' at the {} could not be resolved as a relative path from the config file. Did you mean '{suggestion}'?",
+          key_display(),
         );
       }
       if value.ends_with('/') || !has_extension(value) {
-        bail!("Exports config key '{}' must have value that is a file with an extension. (Invalid value: '{}')", key, value);
+        bail!(
+          "The path '{value}' at the {} is missing a file extension. Add a file extension such as '.js' or '.ts'.",
+          key_display()
+        );
       }
       Ok(())
     }
@@ -732,16 +742,27 @@ impl ConfigFile {
       Some(Value::Object(map)) => {
         let mut result = IndexMap::with_capacity(map.len());
         for (k, v) in map {
+          let key_display = || Cow::Owned(format!("'{}' export", k));
+
           let valid_key = k == "." || k.starts_with("./");
           if !valid_key {
-            bail!("Exports config key '{}' must be equal to '.' or start with './'.", k);
+            let suggestion: String = if k.starts_with('/') {
+              format!(".{k}")
+            } else {
+              format!("./{k}")
+            };
+            bail!("The {} must be equal to '.' or start with './'. Did you mean '{suggestion}'?", key_display());
           }
           if k.ends_with('/') {
-            bail!("Exports config key '{}' must not end with '/'. Remove the trailing slash.", k);
+            let suggestion = k.trim_end_matches('/');
+            bail!(
+              "The {} must not end with '/'. Did you mean '{suggestion}'?",
+              key_display()
+            );
           }
           match v {
             Value::String(value) => {
-              validate_value(k, value)?;
+              validate_value(&key_display, value)?;
               result.insert(k.clone(), value.clone());
             }
             Value::Bool(_)
@@ -749,20 +770,23 @@ impl ConfigFile {
             | Value::Object(_)
             | Value::Array(_)
             | Value::Null => {
-              bail!("Expected a string in exports config key '{}'.", k);
+              bail!("The path of the {} must be a string, found invalid value '{}'. Exports in deno.json do not support conditional exports.", key_display(), v);
             }
           }
         }
         result
       }
       Some(Value::String(value)) => {
-        validate_value(".", value)?;
+        validate_value(&|| "root export".into(), value)?;
         IndexMap::from([(".".to_string(), value.clone())])
       }
       Some(
-        Value::Bool(_) | Value::Array(_) | Value::Number(_) | Value::Null,
+        v @ Value::Bool(_)
+        | v @ Value::Array(_)
+        | v @ Value::Number(_)
+        | v @ Value::Null,
       ) => {
-        bail!("Expected a string or object in exports config.");
+        bail!("The 'exports' key must be a string or object, found invalid value '{v}'.");
       }
       None => IndexMap::new(),
     };
