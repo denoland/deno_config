@@ -243,11 +243,12 @@ impl PathOrPattern {
       || path.starts_with("https://")
       || path.starts_with("file://")
     {
-      let url = Url::parse(path)?;
+      let url =
+        Url::parse(path).with_context(|| format!("Invalid URL '{}'", path))?;
       if url.scheme() == "file" {
         let path = url
           .to_file_path()
-          .map_err(|_| anyhow::anyhow!("Invalid file URL: \"{}\"", path))?;
+          .map_err(|_| anyhow::anyhow!("Invalid file URL '{}'", path))?;
         return Ok(Self::Path(path));
       } else {
         return Ok(Self::RemoteUrl(url));
@@ -569,6 +570,16 @@ mod test {
       assert_eq!(pattern.matches_path(&cwd.join("foo.ts")), true);
       assert_eq!(pattern.matches_path(&cwd.join("dir/foo.ts")), false);
       assert_eq!(pattern.matches_path(&cwd.join("foo.js")), false);
+    }
+    // error for invalid url
+    {
+      let err = PathOrPattern::from_relative(&cwd, "https://raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts").unwrap_err();
+      assert_eq!(format!("{:#}", err), "Invalid URL 'https://raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts': invalid domain character");
+    }
+    // error for invalid file url
+    if cfg!(windows) {
+      let err = PathOrPattern::from_relative(&cwd, "file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts").unwrap_err();
+      assert_eq!(format!("{:#}", err), "Invalid file URL 'file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts'");
     }
   }
 
