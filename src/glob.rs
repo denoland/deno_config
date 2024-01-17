@@ -10,13 +10,24 @@ use url::Url;
 use crate::util::normalize_path;
 use crate::util::specifier_to_file_path;
 
-#[derive(Clone, Default, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilePatterns {
+  /// Default base used when calling `split_by_base()` without
+  /// any `include` patterns.
+  pub base: PathBuf,
   pub include: Option<PathOrPatternSet>,
   pub exclude: PathOrPatternSet,
 }
 
 impl FilePatterns {
+  pub fn new_with_base(base: PathBuf) -> Self {
+    Self {
+      base,
+      include: Default::default(),
+      exclude: Default::default(),
+    }
+  }
+
   pub fn matches_specifier(&self, specifier: &Url) -> bool {
     if specifier.scheme() != "file" {
       return true;
@@ -38,7 +49,14 @@ impl FilePatterns {
     self
       .include
       .as_ref()
-      .map(|m| m.matches_path(path))
+      .map(|m| {
+        // if there are no include patterns, then everything is included
+        if m.inner().is_empty() {
+          true
+        } else {
+          m.matches_path(path)
+        }
+      })
       .unwrap_or(true)
   }
 
@@ -47,9 +65,9 @@ impl FilePatterns {
   ///
   /// The order these are returned in is the order that the directory traversal
   /// should occur in.
-  pub fn split_by_base(&self) -> Vec<(PathBuf, Self)> {
+  pub fn split_by_base(&self) -> Vec<Self> {
     let Some(include) = &self.include else {
-      return Vec::new();
+      return vec![self.clone()];
     };
 
     let mut include_paths = Vec::new();
@@ -112,15 +130,13 @@ impl FilePatterns {
     );
     for (is_file, path) in include_paths {
       let applicable_excludes = get_applicable_excludes(is_file, path);
-      result.push((
-        path.clone(),
-        Self {
-          include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
-            path.clone(),
-          )])),
-          exclude: PathOrPatternSet::new(applicable_excludes),
-        },
-      ));
+      result.push(Self {
+        base: path.clone(),
+        include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+          path.clone(),
+        )])),
+        exclude: PathOrPatternSet::new(applicable_excludes),
+      });
     }
 
     // todo(dsherret): This could be further optimized by not including
@@ -138,25 +154,26 @@ impl FilePatterns {
           );
         }
       }
-      result.push((
-        base_path.clone(),
-        Self {
-          include: Some(PathOrPatternSet::new(applicable_includes)),
-          exclude: PathOrPatternSet::new(applicable_excludes),
-        },
-      ));
+      result.push(Self {
+        base: base_path.clone(),
+        include: Some(PathOrPatternSet::new(applicable_includes)),
+        exclude: PathOrPatternSet::new(applicable_excludes),
+      });
     }
 
     // Sort by the longest base path first. This ensures that we visit opted into
     // nested directories first before visiting the parent directory. The directory
     // traverser will handle not going into directories it's already been in.
-    result.sort_by(|a, b| b.0.as_os_str().len().cmp(&a.0.as_os_str().len()));
+    result
+      .sort_by(|a, b| b.base.as_os_str().len().cmp(&a.base.as_os_str().len()));
 
     result
   }
 
   pub(crate) fn extend(self, rhs: Self) -> Self {
     Self {
+      // todo: investigate what should be done here
+      base: self.base,
       include: match (self.include, rhs.include) {
         (None, None) => None,
         (Some(lhs), None) => Some(lhs),
@@ -382,24 +399,28 @@ mod test {
   // For easier comparisons in tests.
   #[derive(Debug, PartialEq, Eq)]
   struct ComparableFilePatterns {
+    base: String,
     include: Option<Vec<String>>,
     exclude: Vec<String>,
   }
 
   impl ComparableFilePatterns {
     pub fn new(root: &Path, file_patterns: &FilePatterns) -> Self {
+      fn path_to_string(root: &Path, path: &Path) -> String {
+        path
+          .strip_prefix(root)
+          .unwrap()
+          .to_string_lossy()
+          .replace('\\', "/")
+      }
+
       fn path_or_pattern_to_string(
         root: &Path,
         p: &PathOrPattern,
       ) -> Option<String> {
         match p {
           PathOrPattern::RemoteUrl(_) => None,
-          PathOrPattern::Path(p) => Some(
-            p.strip_prefix(root)
-              .unwrap()
-              .to_string_lossy()
-              .replace('\\', "/"),
-          ),
+          PathOrPattern::Path(p) => Some(path_to_string(root, p)),
           PathOrPattern::Pattern(p) => Some(
             p.0
               .as_str()
@@ -414,6 +435,7 @@ mod test {
       }
 
       Self {
+        base: path_to_string(root, &file_patterns.base),
         include: file_patterns.include.as_ref().map(|p| {
           p.0
             .iter()
@@ -431,20 +453,11 @@ mod test {
 
     pub fn from_split(
       root: &Path,
-      patterns_by_base: &[(PathBuf, FilePatterns)],
-    ) -> Vec<(String, ComparableFilePatterns)> {
+      patterns_by_base: &[FilePatterns],
+    ) -> Vec<ComparableFilePatterns> {
       patterns_by_base
         .iter()
-        .map(|(base_path, file_patterns)| {
-          (
-            base_path
-              .strip_prefix(root)
-              .unwrap()
-              .to_string_lossy()
-              .replace('\\', "/"),
-            ComparableFilePatterns::new(root, file_patterns),
-          )
-        })
+        .map(|file_patterns| ComparableFilePatterns::new(root, file_patterns))
         .collect()
     }
   }
@@ -453,6 +466,7 @@ mod test {
   fn should_split_globs_by_base_dir() {
     let temp_dir = TempDir::new().unwrap();
     let patterns = FilePatterns {
+      base: temp_dir.path().to_path_buf(),
       include: Some(PathOrPatternSet::new(vec![
         PathOrPattern::Pattern(
           GlobPattern::new(&format!(
@@ -500,40 +514,32 @@ mod test {
     assert_eq!(
       split,
       vec![
-        (
-          "inner/sub/deeper".to_string(),
-          ComparableFilePatterns {
-            include: Some(vec![
-              "inner/sub/deeper/**/*.js".to_string(),
-              "inner/**/*.ts".to_string(),
-            ]),
-            exclude: vec!["inner/sub/deeper/file.js".to_string()],
-          }
-        ),
-        (
-          "sub/file.ts".to_string(),
-          ComparableFilePatterns {
-            include: Some(vec!["sub/file.ts".to_string()]),
-            exclude: vec![],
-          }
-        ),
-        (
-          "inner".to_string(),
-          ComparableFilePatterns {
-            include: Some(vec!["inner/**/*.ts".to_string()]),
-            exclude: vec![
-              "inner/other/**/*.ts".to_string(),
-              "inner/sub/deeper/file.js".to_string(),
-            ],
-          }
-        ),
-        (
-          "other".to_string(),
-          ComparableFilePatterns {
-            include: Some(vec!["other/**/*.js".to_string()]),
-            exclude: vec![],
-          }
-        )
+        ComparableFilePatterns {
+          base: "inner/sub/deeper".to_string(),
+          include: Some(vec![
+            "inner/sub/deeper/**/*.js".to_string(),
+            "inner/**/*.ts".to_string(),
+          ]),
+          exclude: vec!["inner/sub/deeper/file.js".to_string()],
+        },
+        ComparableFilePatterns {
+          base: "sub/file.ts".to_string(),
+          include: Some(vec!["sub/file.ts".to_string()]),
+          exclude: vec![],
+        },
+        ComparableFilePatterns {
+          base: "inner".to_string(),
+          include: Some(vec!["inner/**/*.ts".to_string()]),
+          exclude: vec![
+            "inner/other/**/*.ts".to_string(),
+            "inner/sub/deeper/file.js".to_string(),
+          ],
+        },
+        ComparableFilePatterns {
+          base: "other".to_string(),
+          include: Some(vec!["other/**/*.js".to_string()]),
+          exclude: vec![],
+        }
       ]
     );
   }
