@@ -423,7 +423,7 @@ pub enum LockConfig {
   PathBuf(PathBuf),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
   pub compiler_options: Option<Value>,
@@ -920,7 +920,7 @@ impl ConfigFile {
         .starts_with(config_file_directory_url.as_str())
       {
         bail!(
-          "Workspace member '{}' is outside root configuration directory ('{}')", 
+          "Workspace member '{}' is outside root configuration directory ('{}')",
           member,
           member_path.display()
         );
