@@ -172,7 +172,8 @@ impl FilePatterns {
 
   pub(crate) fn extend(self, rhs: Self) -> Self {
     Self {
-      // todo: investigate what should be done here
+      // maintain the same base as this is only used in
+      // this crate for merging args with the config file
       base: self.base,
       include: match (self.include, rhs.include) {
         (None, None) => None,
