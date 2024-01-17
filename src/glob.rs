@@ -49,14 +49,7 @@ impl FilePatterns {
     self
       .include
       .as_ref()
-      .map(|m| {
-        // if there are no include patterns, then everything is included
-        if m.inner().is_empty() {
-          true
-        } else {
-          m.matches_path(path)
-        }
-      })
+      .map(|m| m.matches_path(path))
       .unwrap_or(true)
   }
 
