@@ -12,7 +12,7 @@ use crate::util::specifier_to_file_path;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilePatterns {
-  /// Default base used when calling `split_by_base()` without
+  /// Default traversal base used when calling `split_by_base()` without
   /// any `include` patterns.
   pub base: PathBuf,
   pub include: Option<PathOrPatternSet>,
@@ -53,7 +53,7 @@ impl FilePatterns {
       .unwrap_or(true)
   }
 
-  /// Creates a collection of `FilePatterns` by base where the containing patterns
+  /// Creates a collection of `FilePatterns` where the containing patterns
   /// are only the ones applicable to the base.
   ///
   /// The order these are returned in is the order that the directory traversal
