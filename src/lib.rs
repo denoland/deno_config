@@ -17,6 +17,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
+use util::specifier_to_file_path;
 
 pub mod glob;
 mod ts;
@@ -64,6 +65,7 @@ impl SerializedFilesConfig {
       config_file_specifier,
     ))?;
     Ok(FilePatterns {
+      base: config_dir.clone(),
       include: match self.include {
         Some(i) => Some(
           PathOrPatternSet::from_relative_path_or_patterns(&config_dir, &i)
@@ -155,7 +157,7 @@ impl SerializedLintConfig {
   }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LintConfig {
   pub rules: LintRulesConfig,
   pub files: FilePatterns,
@@ -283,7 +285,7 @@ impl SerializedFmtConfig {
   }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FmtConfig {
   pub options: FmtOptionsConfig,
   pub files: FilePatterns,
@@ -349,7 +351,7 @@ impl SerializedTestConfig {
   }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TestConfig {
   pub files: FilePatterns,
 }
@@ -404,7 +406,7 @@ pub struct WorkspaceMemberConfig {
   pub config_file: ConfigFile,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BenchConfig {
   pub files: FilePatterns,
 }
@@ -596,6 +598,14 @@ impl ConfigFile {
     let json: ConfigFileJson = serde_json::from_value(jsonc)?;
 
     Ok(Self { specifier, json })
+  }
+
+  pub fn dir_path(&self) -> PathBuf {
+    specifier_to_file_path(&self.specifier)
+      .unwrap()
+      .parent()
+      .unwrap()
+      .to_path_buf()
   }
 
   /// Returns true if the configuration indicates that JavaScript should be
@@ -843,10 +853,17 @@ impl ConfigFile {
       return Ok(None);
     }
 
-    let fmt_config = fmt_config.unwrap_or_default();
-    let files_config = files_config.unwrap_or_default();
-
-    Ok(Some(fmt_config.with_files(files_config)))
+    Ok(Some(match fmt_config {
+      Some(fmt_config) => match files_config {
+        Some(files_config) => fmt_config.with_files(files_config),
+        None => fmt_config,
+      },
+      None => FmtConfig {
+        files: files_config
+          .unwrap_or_else(|| FilePatterns::new_with_base(self.dir_path())),
+        options: Default::default(),
+      },
+    }))
   }
 
   pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
@@ -864,10 +881,18 @@ impl ConfigFile {
       return Ok(None);
     }
 
-    let lint_config = lint_config.unwrap_or_default();
-    let files_config = files_config.unwrap_or_default();
-
-    Ok(Some(lint_config.with_files(files_config)))
+    Ok(Some(match lint_config {
+      Some(lint_config) => match files_config {
+        Some(files_config) => lint_config.with_files(files_config),
+        None => lint_config,
+      },
+      None => LintConfig {
+        files: files_config
+          .unwrap_or_else(|| FilePatterns::new_with_base(self.dir_path())),
+        rules: Default::default(),
+        report: Default::default(),
+      },
+    }))
   }
 
   pub fn to_test_config(&self) -> Result<Option<TestConfig>, AnyError> {
@@ -885,10 +910,16 @@ impl ConfigFile {
       return Ok(None);
     }
 
-    let test_config = test_config.unwrap_or_default();
-    let files_config = files_config.unwrap_or_default();
-
-    Ok(Some(test_config.with_files(files_config)))
+    Ok(Some(match test_config {
+      Some(test_config) => match files_config {
+        Some(files_config) => test_config.with_files(files_config),
+        None => test_config,
+      },
+      None => TestConfig {
+        files: files_config
+          .unwrap_or_else(|| FilePatterns::new_with_base(self.dir_path())),
+      },
+    }))
   }
 
   pub fn to_workspace_config(
@@ -989,10 +1020,16 @@ impl ConfigFile {
       return Ok(None);
     }
 
-    let bench_config = bench_config.unwrap_or_default();
-    let files_config = files_config.unwrap_or_default();
-
-    Ok(Some(bench_config.with_files(files_config)))
+    Ok(Some(match bench_config {
+      Some(bench_config) => match files_config {
+        Some(files_config) => bench_config.with_files(files_config),
+        None => bench_config,
+      },
+      None => BenchConfig {
+        files: files_config
+          .unwrap_or_else(|| FilePatterns::new_with_base(self.dir_path())),
+      },
+    }))
   }
 
   /// Return any tasks that are defined in the configuration file as a sequence
@@ -1260,6 +1297,7 @@ pub fn get_ts_config_for_emit(
 #[cfg(test)]
 mod tests {
   use crate::glob::PathOrPattern;
+  use crate::util::specifier_to_file_path;
 
   use super::*;
   use pretty_assertions::assert_eq;
@@ -1347,10 +1385,12 @@ mod tests {
       }),
     );
 
+    let config_dir_path = specifier_to_file_path(&config_dir).unwrap();
     assert_eq!(
       unpack_object(config_file.to_lint_config(), "lint"),
       LintConfig {
         files: FilePatterns {
+          base: config_dir_path.clone(),
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
             PathBuf::from("/deno/src/")
           )])),
@@ -1363,13 +1403,14 @@ mod tests {
           exclude: None,
           tags: Some(vec!["recommended".to_string()]),
         },
-        ..Default::default()
+        report: None,
       }
     );
     assert_eq!(
       unpack_object(config_file.to_fmt_config(), "fmt"),
       FmtConfig {
         files: FilePatterns {
+          base: config_dir_path.clone(),
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
             PathBuf::from("/deno/src/")
           )])),
@@ -1428,11 +1469,13 @@ mod tests {
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
     let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_dir_path = specifier_to_file_path(&config_dir).unwrap();
 
     let lint_files = unpack_object(config_file.to_lint_config(), "lint").files;
     assert_eq!(
       lint_files,
       FilePatterns {
+        base: config_dir_path.clone(),
         include: Some(
           PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
             .unwrap()
@@ -1445,6 +1488,7 @@ mod tests {
     assert_eq!(
       fmt_files,
       FilePatterns {
+        base: config_dir_path.clone(),
         include: None,
         exclude: PathOrPatternSet::from_absolute_paths(&[
           "/deno/dist/".to_string()
@@ -1817,7 +1861,7 @@ mod tests {
 
   #[test]
   fn files_pattern_matches_remote() {
-    assert!(FilePatterns::default()
+    assert!(FilePatterns::new_with_base(PathBuf::from("/"))
       .matches_specifier(&Url::parse("https://example.com/mod.ts").unwrap()));
   }
 
