@@ -1180,8 +1180,6 @@ impl ConfigFile {
 pub enum TsTypeLib {
   DenoWindow,
   DenoWorker,
-  UnstableDenoWindow,
-  UnstableDenoWorker,
 }
 
 impl Default for TsTypeLib {
@@ -1196,12 +1194,10 @@ impl Serialize for TsTypeLib {
     S: Serializer,
   {
     let value = match self {
-      Self::DenoWindow => vec!["deno.window".to_string()],
-      Self::DenoWorker => vec!["deno.worker".to_string()],
-      Self::UnstableDenoWindow => {
+      Self::DenoWindow => {
         vec!["deno.window".to_string(), "deno.unstable".to_string()]
       }
-      Self::UnstableDenoWorker => {
+      Self::DenoWorker => {
         vec!["deno.worker".to_string(), "deno.unstable".to_string()]
       }
     };
