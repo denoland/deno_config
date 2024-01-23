@@ -33,6 +33,7 @@ impl JsxImportSourceConfig {
 #[serde(rename_all = "camelCase")]
 pub struct EmitConfigOptions {
   pub check_js: bool,
+  pub experimental_decorators: bool,
   pub emit_decorator_metadata: bool,
   pub imports_not_used_as_values: String,
   pub inline_source_map: bool,
@@ -103,7 +104,6 @@ pub const IGNORED_COMPILER_OPTIONS: &[&str] = &[
   "emitBOM",
   "emitDeclarationOnly",
   "esModuleInterop",
-  "experimentalDecorators",
   "extendedDiagnostics",
   "forceConsistentCasingInFileNames",
   "generateCpuProfile",
