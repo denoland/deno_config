@@ -1248,7 +1248,7 @@ pub fn get_ts_config_for_emit(
       "allowSyntheticDefaultImports": true,
       "checkJs": false,
       "emitDecoratorMetadata": false,
-      "experimentalDecorators": true,
+      "experimentalDecorators": false,
       "incremental": true,
       "jsx": "react",
       "importsNotUsedAsValues": "remove",
