@@ -363,6 +363,42 @@ impl TestConfig {
   }
 }
 
+/// `publish` config representation for serde
+///
+/// fields `include` and `exclude` are expanded from [SerializedFilesConfig].
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+struct SerializedPublishConfig {
+  pub include: Option<Vec<String>>,
+  pub exclude: Vec<String>,
+}
+
+impl SerializedPublishConfig {
+  pub fn into_resolved(
+    self,
+    config_file_specifier: &Url,
+  ) -> Result<PublishConfig, AnyError> {
+    let (include, exclude) = (self.include, self.exclude);
+    let files = SerializedFilesConfig { include, exclude };
+
+    Ok(PublishConfig {
+      files: files.into_resolved(config_file_specifier)?,
+    })
+  }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublishConfig {
+  pub files: FilePatterns,
+}
+
+impl PublishConfig {
+  pub fn with_files(self, files: FilePatterns) -> Self {
+    let files = self.files.extend(files);
+    Self { files }
+  }
+}
+
 /// `bench` config representation for serde
 ///
 /// fields `include` and `exclude` are expanded from [SerializedFilesConfig].
@@ -441,6 +477,7 @@ pub struct ConfigFileJson {
   pub exclude: Option<Value>,
   pub node_modules_dir: Option<bool>,
   pub vendor: Option<bool>,
+  pub publish: Option<Value>,
 
   pub name: Option<String>,
   pub version: Option<String>,
@@ -916,6 +953,34 @@ impl ConfigFile {
         None => test_config,
       },
       None => TestConfig {
+        files: files_config
+          .unwrap_or_else(|| FilePatterns::new_with_base(self.dir_path())),
+      },
+    }))
+  }
+
+  pub fn to_publish_config(&self) -> Result<Option<PublishConfig>, AnyError> {
+    let files_config = self.to_files_config()?;
+    let publish_config = match self.json.publish.clone() {
+      Some(config) => {
+        let publish_config: SerializedPublishConfig =
+          serde_json::from_value(config)
+            .context("Failed to parse \"test\" configuration")?;
+        Some(publish_config.into_resolved(&self.specifier)?)
+      }
+      None => None,
+    };
+
+    if files_config.is_none() && publish_config.is_none() {
+      return Ok(None);
+    }
+
+    Ok(Some(match publish_config {
+      Some(publish_config) => match files_config {
+        Some(files_config) => publish_config.with_files(files_config),
+        None => publish_config,
+      },
+      None => PublishConfig {
         files: files_config
           .unwrap_or_else(|| FilePatterns::new_with_base(self.dir_path())),
       },
@@ -1654,6 +1719,32 @@ mod tests {
       bench_config.files.exclude,
       PathOrPatternSet::from_absolute_paths(&["/deno/foo/".to_string()])
         .unwrap()
+    );
+  }
+
+  #[test]
+  fn test_parse_config_publish() {
+    let config_text = r#"{
+      "exclude": ["foo/"],
+      "publish": {
+        "exclude": ["npm/"],
+      }
+    }"#;
+    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let (options_value, _) = config_file.to_compiler_options().unwrap();
+    assert!(options_value.is_object());
+
+    let publish_config = config_file.to_publish_config().unwrap().unwrap();
+    assert_eq!(publish_config.files.include, None);
+    assert_eq!(
+      publish_config.files.exclude,
+      PathOrPatternSet::from_absolute_paths(&[
+        "/deno/npm/".to_string(),
+        "/deno/foo/".to_string()
+      ])
+      .unwrap()
     );
   }
 
