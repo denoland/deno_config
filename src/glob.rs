@@ -292,7 +292,7 @@ impl PathOrPattern {
     {
       PathOrPattern::new(p)
     } else {
-      Ok(PathOrPattern::Path(base.join(p)))
+      Ok(PathOrPattern::Path(normalize_path(base.join(p))))
     }
   }
 
@@ -580,6 +580,20 @@ mod test {
     if cfg!(windows) {
       let err = PathOrPattern::from_relative(&cwd, "file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts").unwrap_err();
       assert_eq!(format!("{:#}", err), "Invalid file URL 'file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts'");
+    }
+    // sibling dir
+    {
+      let pattern = PathOrPattern::from_relative(&cwd, "../sibling").unwrap();
+      let parent_dir = cwd.parent().unwrap();
+      assert_eq!(pattern.base_path().unwrap(), parent_dir.join("sibling"));
+      assert_eq!(
+        pattern.matches_path(&parent_dir.join("sibling/foo.ts")),
+        true
+      );
+      assert_eq!(
+        pattern.matches_path(&parent_dir.join("./other/foo.js")),
+        false
+      );
     }
   }
 
