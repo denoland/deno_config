@@ -436,7 +436,8 @@ pub struct WorkspaceConfig {
 pub struct WorkspaceMemberConfig {
   // As defined in `member` setting of the workspace deno.json.
   pub member_name: String,
-  pub path: PathBuf,
+  /// Directory path of the workspace member.
+  pub dir_path: PathBuf,
   pub package_name: String,
   pub package_version: String,
   pub config_file: ConfigFile,
@@ -1042,7 +1043,7 @@ impl ConfigFile {
       };
       members.push(WorkspaceMemberConfig {
         member_name: member.to_string(),
-        path: member_path,
+        dir_path: member_path,
         package_name: package_name.to_string(),
         package_version: package_version.to_string(),
         config_file: member_config_file,
@@ -1067,6 +1068,37 @@ impl ConfigFile {
       members,
       base_import_map_value,
     }))
+  }
+
+  /// Converts the configuration file into a list of workspace members.
+  pub fn to_workspace_members(
+    &self,
+  ) -> Result<Vec<WorkspaceMemberConfig>, AnyError> {
+    let maybe_workspace_config = self.to_workspace_config()?;
+    match maybe_workspace_config {
+      Some(workspace_config) => Ok(workspace_config.members),
+      None => {
+        let package_name = match self.json.name.clone() {
+          Some(name) => name,
+          None => bail!("{} is missing 'name' field", self.specifier),
+        };
+        Ok(vec![WorkspaceMemberConfig {
+          member_name: package_name.clone(),
+          package_name,
+          package_version: match self.json.version.clone() {
+            Some(version) => version,
+            None => {
+              bail!("{} is missing 'version' field", self.specifier)
+            }
+          },
+          dir_path: specifier_to_file_path(&self.specifier)?
+            .parent()
+            .unwrap()
+            .to_path_buf(),
+          config_file: self.clone(),
+        }])
+      }
+    }
   }
 
   pub fn to_bench_config(&self) -> Result<Option<BenchConfig>, AnyError> {
@@ -2127,6 +2159,43 @@ mod tests {
       workspace_config_err.to_string(),
       "Workspace member '../a' is outside root configuration directory"
     );
+  }
+
+  #[test]
+  fn test_to_workspace_members_no_name() {
+    let config_text = r#"{
+      "version": "1.0.0"
+    }"#;
+    let config_specifier = root_url().join("tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let err = config_file.to_workspace_members().err().unwrap();
+    assert!(err.to_string().ends_with("is missing 'name' field"));
+  }
+
+  #[test]
+  fn test_to_workspace_members_no_version() {
+    let config_text = r#"{
+      "name": "@pkg/pkg"
+    }"#;
+    let config_specifier = root_url().join("tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let err = config_file.to_workspace_members().err().unwrap();
+    assert!(err.to_string().ends_with("is missing 'version' field"));
+  }
+
+  #[test]
+  fn test_to_workspace_members_single_config() {
+    let config_text = r#"{
+      "name": "@pkg/pkg"
+      "version": "1.0.0",
+    }"#;
+    let config_specifier = root_url().join("tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let members = config_file.to_workspace_members().unwrap();
+    assert_eq!(members.len(), 1);
   }
 
   fn root_url() -> Url {
