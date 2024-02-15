@@ -718,6 +718,24 @@ impl ConfigFile {
     self.json.unstable.iter().any(|v| v == name)
   }
 
+  /// Resolve the export values in a config file to their URLs.
+  pub fn resolve_export_value_urls(&self) -> Result<Vec<Url>, AnyError> {
+    let exports_config = self
+      .to_exports_config()
+      .with_context(|| {
+        format!("Failed to parse exports at {}", self.specifier)
+      })?
+      .into_map();
+    let mut exports = Vec::with_capacity(exports_config.len());
+    for (_, value) in exports_config {
+      let entry_point = self.specifier.join(&value).with_context(|| {
+        format!("Failed to join {} with {}", self.specifier, value)
+      })?;
+      exports.push(entry_point);
+    }
+    Ok(exports)
+  }
+
   pub fn to_exports_config(&self) -> Result<ExportsConfig, AnyError> {
     fn has_extension(value: &str) -> bool {
       let search_text = &value[value.rfind('/').unwrap_or(0)..];
@@ -2099,6 +2117,44 @@ mod tests {
     run_test(
       r#"{ "exports": { "./mod": null }  }"#,
       "The path of the './mod' export must be a string, found invalid value 'null'.",
+    );
+  }
+
+  #[test]
+  fn resolve_export_value_urls() {
+    fn get_exports(config_text: &str) -> Vec<String> {
+      let config_dir = Url::parse("file:///deno/").unwrap();
+      let config_specifier = config_dir.join("tsconfig.json").unwrap();
+      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+      config_file
+        .resolve_export_value_urls()
+        .unwrap()
+        .into_iter()
+        .map(|u| u.to_string())
+        .collect()
+    }
+
+    // no exports
+    assert_eq!(get_exports("{}"), Vec::<String>::new());
+    // string export
+    assert_eq!(
+      get_exports(r#"{ "exports": "./mod.ts" }"#),
+      vec!["file:///deno/mod.ts".to_string()]
+    );
+    // map export
+    assert_eq!(
+      get_exports(r#"{ "exports": { "./export": "./mod.ts" } }"#),
+      vec!["file:///deno/mod.ts".to_string()]
+    );
+    // multiple
+    assert_eq!(
+      get_exports(
+        r#"{ "exports": { "./export": "./mod.ts", "./other": "./other.ts" } }"#
+      ),
+      vec![
+        "file:///deno/mod.ts".to_string(),
+        "file:///deno/other.ts".to_string(),
+      ]
     );
   }
 
