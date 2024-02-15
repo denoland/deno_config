@@ -715,6 +715,12 @@ impl ConfigFile {
     self.json.imports.is_some() || self.json.scopes.is_some()
   }
 
+  pub fn is_package(&self) -> bool {
+    self.json.name.is_some()
+      && self.json.version.is_some()
+      && self.json.exports.is_some()
+  }
+
   pub fn has_unstable(&self, name: &str) -> bool {
     self.json.unstable.iter().any(|v| v == name)
   }
@@ -2196,6 +2202,47 @@ mod tests {
 
     let members = config_file.to_workspace_members().unwrap();
     assert_eq!(members.len(), 1);
+  }
+
+  #[test]
+  fn test_is_package() {
+    fn get_for_config(config_text: &str) -> bool {
+      let config_specifier = root_url().join("tsconfig.json").unwrap();
+      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+      config_file.is_package()
+    }
+
+    assert!(!get_for_config("{}"));
+    assert!(!get_for_config(
+      r#"{
+        "name": "test"
+      }"#
+    ));
+    assert!(!get_for_config(
+      r#"{
+        "name": "test",
+        "version": "1.0.0"
+      }"#
+    ));
+    assert!(!get_for_config(
+      r#"{
+        "name": "test",
+        "exports": "./mod.ts"
+      }"#
+    ));
+    assert!(!get_for_config(
+      r#"{
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }"#
+    ));
+    assert!(get_for_config(
+      r#"{
+        "name": "test",
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }"#
+    ));
   }
 
   fn root_url() -> Url {
