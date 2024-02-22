@@ -25,3 +25,6 @@ import_map = { version = "0.18.5", features = ["ext"] }
 tempfile = "3.4.0"
 pretty_assertions = "1.4.0"
 tokio = { version = "1.10.1", features = ["macros", "rt-multi-thread"] }
+
+[patch.crates-io]
+import_map = { path = "../import_map/rs-lib" }

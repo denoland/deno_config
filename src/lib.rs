@@ -736,8 +736,14 @@ impl ConfigFile {
     &self,
   ) -> Result<ImportMapWithDiagnostics, AnyError> {
     let value = self.to_import_map_value();
-    let mut result = import_map::parse_from_value(&self.specifier, value)?;
-    result.import_map.ext_expand_imports();
+    let result = import_map::parse_from_value_with_options(
+      &self.specifier,
+      value,
+      import_map::ImportMapOptions {
+        address_hook: None,
+        expand_imports: true,
+      },
+    )?;
     Ok(result)
   }
 
