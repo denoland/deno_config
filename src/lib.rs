@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error as AnyError;
+use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -698,6 +699,13 @@ impl ConfigFile {
     } else {
       None
     }
+  }
+
+  pub fn to_import_map(&self) -> Result<ImportMapWithDiagnostics, AnyError> {
+    let value = self.to_import_map_value();
+    let mut result = import_map::parse_from_value(&self.specifier, value)?;
+    result.import_map.ext_expand_imports();
+    Ok(result)
   }
 
   pub fn to_import_map_value(&self) -> Value {
@@ -2299,6 +2307,27 @@ mod tests {
         "exports": "./mod.ts"
       }"#
     ));
+  }
+
+  #[test]
+  fn test_to_import_map() {
+    let config_text = r#"{
+      "imports": {
+        "@std/test": "jsr:@std/test@0.2.0"
+      }
+    }"#;
+    let config_specifier = root_url().join("deno.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file.to_import_map().unwrap();
+
+    assert_eq!(
+      json!(result.import_map.imports()),
+      // imports should be expanded
+      json!({
+        "@std/test/": "jsr:/@std/test@0.2.0/",
+        "@std/test": "jsr:@std/test@0.2.0",
+      })
+    );
   }
 
   fn root_url() -> Url {
