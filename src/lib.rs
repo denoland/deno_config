@@ -2483,6 +2483,75 @@ mod tests {
     );
   }
 
+  #[tokio::test]
+  async fn test_to_import_map_import_map_remote() {
+    let config_text = r#"{
+      "importMap": "https://deno.land/import_map.json",
+    }"#;
+    let config_specifier = root_url().join("deno.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file
+      .to_import_map(|url| {
+        assert_eq!(url.as_str(), "https://deno.land/import_map.json");
+        async {
+          Ok(
+            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
+              .to_string(),
+          )
+        }
+      })
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(
+      result.import_map.base_url().as_str(),
+      "https://deno.land/import_map.json"
+    );
+    assert_eq!(
+      json!(result.import_map.imports()),
+      // imports should NOT be expanded
+      json!({
+        "@std/test": "jsr:@std/test@0.2.0",
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn test_to_import_map_import_map_remote_relative() {
+    let config_text = r#"{
+      "importMap": "./import_map.json",
+    }"#;
+    let config_specifier =
+      Url::parse("https://deno.land/import_map.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file
+      .to_import_map(|url| {
+        assert_eq!(url.as_str(), "https://deno.land/import_map.json");
+        async {
+          Ok(
+            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
+              .to_string(),
+          )
+        }
+      })
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(
+      result.import_map.base_url().as_str(),
+      "https://deno.land/import_map.json"
+    );
+    assert_eq!(
+      json!(result.import_map.imports()),
+      // imports should NOT be expanded
+      json!({
+        "@std/test": "jsr:@std/test@0.2.0",
+      })
+    );
+  }
+
   fn root_url() -> Url {
     if cfg!(windows) {
       Url::parse("file://C:/deno/").unwrap()
