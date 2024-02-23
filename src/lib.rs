@@ -431,7 +431,6 @@ impl SerializedBenchConfig {
 #[derive(Debug, Default, Clone)]
 pub struct WorkspaceConfig {
   pub members: Vec<WorkspaceMemberConfig>,
-  pub base_import_map_value: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -674,16 +673,25 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_import_map_path(&self) -> Option<&str> {
-    self.json.import_map.as_deref()
-  }
-
-  pub fn node_modules_dir_flag(&self) -> Option<bool> {
-    self.json.node_modules_dir
-  }
-
-  pub fn vendor_dir_flag(&self) -> Option<bool> {
-    self.json.vendor
+  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
+    let Some(value) = self.json.import_map.as_ref() else {
+      return Ok(None);
+    };
+    // try to resolve as a url
+    if let Ok(specifier) = Url::parse(value) {
+      return Ok(Some(specifier));
+    }
+    // now as a relative file path
+    if let Ok(config_file_path) = self.specifier.to_file_path() {
+      let path = config_file_path.parent().unwrap().join(value);
+      Url::from_file_path(&path)
+        .map_err(|()| {
+          anyhow::anyhow!("Failed converting {} to url.", path.display())
+        })
+        .map(Some)
+    } else {
+      Ok(Some(self.specifier.join(value)?))
+    }
   }
 
   pub fn vendor_dir_path(&self) -> Option<PathBuf> {
@@ -702,27 +710,46 @@ impl ConfigFile {
     }
   }
 
-  /// Resolves the import map potentially resolving the text at the "importMap" entry.
+  /// Resolves the import map potentially resolving the file specified
+  /// at the "importMap" entry.
   pub async fn to_import_map<
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
     &self,
     fetch_text: impl Fn(&Url) -> TReturn,
   ) -> Result<Option<ImportMapWithDiagnostics>, AnyError> {
+    let maybe_result = self.to_import_map_value(fetch_text).await?;
+    match maybe_result {
+      Some((specifier, value)) => {
+        let import_map =
+          import_map::parse_from_value(specifier.into_owned(), value)?;
+        Ok(Some(import_map))
+      }
+      None => Ok(None),
+    }
+  }
+
+  /// Resolves the import map `serde_json::Value` potentially resolving the
+  /// file specified at the "importMap" entry.
+  pub async fn to_import_map_value<
+    TReturn: Future<Output = Result<String, AnyError>>,
+  >(
+    &self,
+    fetch_text: impl Fn(&Url) -> TReturn,
+  ) -> Result<Option<(Cow<Url>, serde_json::Value)>, AnyError> {
     // has higher precedence over the path
     if self.json.imports.is_some() || self.json.scopes.is_some() {
-      self.to_import_map_from_imports().map(Some)
+      Ok(Some((
+        Cow::Borrowed(&self.specifier),
+        self.to_import_map_value_from_imports(),
+      )))
     } else {
-      match self.to_import_map_path() {
-        Some(relative_path) => {
-          let import_map_specifier = self.specifier.join(relative_path)?;
+      match self.to_import_map_specifier()? {
+        Some(import_map_specifier) => {
           let text = fetch_text(&import_map_specifier).await?;
           let value = serde_json::from_str(&text)?;
           // does not expand the imports because this one will use the import map standard
-          Ok(Some(import_map::parse_from_value(
-            &import_map_specifier,
-            value,
-          )?))
+          Ok(Some((Cow::Owned(import_map_specifier), value)))
         }
         None => Ok(None),
       }
@@ -735,19 +762,12 @@ impl ConfigFile {
   pub fn to_import_map_from_imports(
     &self,
   ) -> Result<ImportMapWithDiagnostics, AnyError> {
-    let value = self.to_import_map_value();
-    let result = import_map::parse_from_value_with_options(
-      &self.specifier,
-      value,
-      import_map::ImportMapOptions {
-        address_hook: None,
-        expand_imports: true,
-      },
-    )?;
+    let value = self.to_import_map_value_from_imports();
+    let result = import_map::parse_from_value(self.specifier.clone(), value)?;
     Ok(result)
   }
 
-  pub fn to_import_map_value(&self) -> Value {
+  pub fn to_import_map_value_from_imports(&self) -> Value {
     let mut value = serde_json::Map::with_capacity(2);
     if let Some(imports) = &self.json.imports {
       value.insert("imports".to_string(), imports.clone());
@@ -755,7 +775,7 @@ impl ConfigFile {
     if let Some(scopes) = &self.json.scopes {
       value.insert("scopes".to_string(), scopes.clone());
     }
-    value.into()
+    import_map::ext::expand_import_map_value(Value::Object(value))
   }
 
   pub fn is_an_import_map(&self) -> bool {
@@ -936,7 +956,7 @@ impl ConfigFile {
         Vec::new()
       };
 
-    if self.vendor_dir_flag() == Some(true) {
+    if self.json.vendor == Some(true) {
       exclude.push("vendor".to_string());
     }
 
@@ -1133,12 +1153,7 @@ impl ConfigFile {
       }
     }
 
-    let base_import_map_value = self.to_import_map_value();
-
-    Ok(Some(WorkspaceConfig {
-      members,
-      base_import_map_value,
-    }))
+    Ok(Some(WorkspaceConfig { members }))
   }
 
   /// Converts the configuration file into a list of workspace members.
@@ -2468,7 +2483,7 @@ mod tests {
 
   fn root_url() -> Url {
     if cfg!(windows) {
-      Url::parse("file://c:/deno/").unwrap()
+      Url::parse("file://C:/deno/").unwrap()
     } else {
       Url::parse("file:///deno/").unwrap()
     }

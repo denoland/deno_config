@@ -19,12 +19,9 @@ percent-encoding = "2.3.0"
 serde = { version = "1.0.149", features = ["derive"] }
 serde_json = "1.0.85"
 url = { version = "2.3.1" }
-import_map = { version = "0.18.5", features = ["ext"] }
+import_map = { version = "0.19.0", features = ["ext"] }
 
 [dev-dependencies]
 tempfile = "3.4.0"
 pretty_assertions = "1.4.0"
 tokio = { version = "1.10.1", features = ["macros", "rt-multi-thread"] }
-
-[patch.crates-io]
-import_map = { path = "../import_map/rs-lib" }
