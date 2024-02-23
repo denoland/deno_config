@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error as AnyError;
+use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -14,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
@@ -429,7 +431,6 @@ impl SerializedBenchConfig {
 #[derive(Debug, Default, Clone)]
 pub struct WorkspaceConfig {
   pub members: Vec<WorkspaceMemberConfig>,
-  pub base_import_map_value: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -672,16 +673,27 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_import_map_path(&self) -> Option<String> {
-    self.json.import_map.clone()
-  }
-
-  pub fn node_modules_dir_flag(&self) -> Option<bool> {
-    self.json.node_modules_dir
-  }
-
-  pub fn vendor_dir_flag(&self) -> Option<bool> {
-    self.json.vendor
+  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
+    let Some(value) = self.json.import_map.as_ref() else {
+      return Ok(None);
+    };
+    // try to resolve as a url
+    if let Ok(specifier) = Url::parse(value) {
+      return Ok(Some(specifier));
+    }
+    // now as a relative file path
+    if let Ok(config_file_path) = self.specifier.to_file_path() {
+      // people may specify a file path without a leading `./` so
+      // this handles that
+      let path = config_file_path.parent().unwrap().join(value);
+      Url::from_file_path(&path)
+        .map_err(|()| {
+          anyhow::anyhow!("Failed converting {} to url.", path.display())
+        })
+        .map(Some)
+    } else {
+      Ok(Some(self.specifier.join(value)?))
+    }
   }
 
   pub fn vendor_dir_path(&self) -> Option<PathBuf> {
@@ -700,7 +712,64 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_import_map_value(&self) -> Value {
+  /// Resolves the import map potentially resolving the file specified
+  /// at the "importMap" entry.
+  pub async fn to_import_map<
+    TReturn: Future<Output = Result<String, AnyError>>,
+  >(
+    &self,
+    fetch_text: impl Fn(&Url) -> TReturn,
+  ) -> Result<Option<ImportMapWithDiagnostics>, AnyError> {
+    let maybe_result = self.to_import_map_value(fetch_text).await?;
+    match maybe_result {
+      Some((specifier, value)) => {
+        let import_map =
+          import_map::parse_from_value(specifier.into_owned(), value)?;
+        Ok(Some(import_map))
+      }
+      None => Ok(None),
+    }
+  }
+
+  /// Resolves the import map `serde_json::Value` potentially resolving the
+  /// file specified at the "importMap" entry.
+  pub async fn to_import_map_value<
+    TReturn: Future<Output = Result<String, AnyError>>,
+  >(
+    &self,
+    fetch_text: impl Fn(&Url) -> TReturn,
+  ) -> Result<Option<(Cow<Url>, serde_json::Value)>, AnyError> {
+    // has higher precedence over the path
+    if self.json.imports.is_some() || self.json.scopes.is_some() {
+      Ok(Some((
+        Cow::Borrowed(&self.specifier),
+        self.to_import_map_value_from_imports(),
+      )))
+    } else {
+      match self.to_import_map_specifier()? {
+        Some(import_map_specifier) => {
+          let text = fetch_text(&import_map_specifier).await?;
+          let value = serde_json::from_str(&text)?;
+          // does not expand the imports because this one will use the import map standard
+          Ok(Some((Cow::Owned(import_map_specifier), value)))
+        }
+        None => Ok(None),
+      }
+    }
+  }
+
+  /// Creates the import map from the imports entry.
+  ///
+  /// Warning: This does not take into account the 'importMap' entry. Use `to_import_map` instead.
+  pub fn to_import_map_from_imports(
+    &self,
+  ) -> Result<ImportMapWithDiagnostics, AnyError> {
+    let value = self.to_import_map_value_from_imports();
+    let result = import_map::parse_from_value(self.specifier.clone(), value)?;
+    Ok(result)
+  }
+
+  pub fn to_import_map_value_from_imports(&self) -> Value {
     let mut value = serde_json::Map::with_capacity(2);
     if let Some(imports) = &self.json.imports {
       value.insert("imports".to_string(), imports.clone());
@@ -708,7 +777,7 @@ impl ConfigFile {
     if let Some(scopes) = &self.json.scopes {
       value.insert("scopes".to_string(), scopes.clone());
     }
-    value.into()
+    import_map::ext::expand_import_map_value(Value::Object(value))
   }
 
   pub fn is_an_import_map(&self) -> bool {
@@ -889,7 +958,7 @@ impl ConfigFile {
         Vec::new()
       };
 
-    if self.vendor_dir_flag() == Some(true) {
+    if self.json.vendor == Some(true) {
       exclude.push("vendor".to_string());
     }
 
@@ -1086,12 +1155,7 @@ impl ConfigFile {
       }
     }
 
-    let base_import_map_value = self.to_import_map_value();
-
-    Ok(Some(WorkspaceConfig {
-      members,
-      base_import_map_value,
-    }))
+    Ok(Some(WorkspaceConfig { members }))
   }
 
   /// Converts the configuration file into a list of workspace members.
@@ -2301,9 +2365,196 @@ mod tests {
     ));
   }
 
+  #[test]
+  fn test_to_import_map_from_imports() {
+    let config_text = r#"{
+      "imports": {
+        "@std/test": "jsr:@std/test@0.2.0"
+      }
+    }"#;
+    let config_specifier = root_url().join("deno.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file.to_import_map_from_imports().unwrap();
+
+    assert_eq!(
+      json!(result.import_map.imports()),
+      // imports should be expanded
+      json!({
+        "@std/test/": "jsr:/@std/test@0.2.0/",
+        "@std/test": "jsr:@std/test@0.2.0",
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn test_to_import_map_imports_entry() {
+    let config_text = r#"{
+      "imports": { "@std/test": "jsr:@std/test@0.2.0" },
+      // will be ignored because imports and scopes takes precedence
+      "importMap": "import_map.json",
+    }"#;
+    let config_specifier = root_url().join("deno.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file
+      .to_import_map(|_url| async { unreachable!() })
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(
+      result.import_map.base_url(),
+      &root_url().join("deno.json").unwrap()
+    );
+    assert_eq!(
+      json!(result.import_map.imports()),
+      // imports should be expanded
+      json!({
+        "@std/test/": "jsr:/@std/test@0.2.0/",
+        "@std/test": "jsr:@std/test@0.2.0",
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn test_to_import_map_scopes_entry() {
+    let config_text = r#"{
+      "scopes": { "https://deno.land/x/test/mod.ts": { "@std/test": "jsr:@std/test@0.2.0" } },
+      // will be ignored because imports and scopes takes precedence
+      "importMap": "import_map.json",
+    }"#;
+    let config_specifier = root_url().join("deno.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file
+      .to_import_map(|_url| async { unreachable!() })
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(
+      result.import_map.base_url(),
+      &root_url().join("deno.json").unwrap()
+    );
+    assert_eq!(
+      json!(result.import_map),
+      // imports should be expanded
+      json!({
+        "imports": {},
+        "scopes": {
+          "https://deno.land/x/test/mod.ts": {
+            "@std/test/": "jsr:/@std/test@0.2.0/",
+            "@std/test": "jsr:@std/test@0.2.0",
+          }
+        }
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn test_to_import_map_import_map_entry() {
+    let config_text = r#"{
+      "importMap": "import_map.json",
+    }"#;
+    let config_specifier = root_url().join("deno.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file
+      .to_import_map(|url| {
+        assert_eq!(url, &root_url().join("import_map.json").unwrap());
+        async {
+          Ok(
+            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
+              .to_string(),
+          )
+        }
+      })
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(
+      result.import_map.base_url(),
+      &root_url().join("import_map.json").unwrap()
+    );
+    assert_eq!(
+      json!(result.import_map.imports()),
+      // imports should NOT be expanded
+      json!({
+        "@std/test": "jsr:@std/test@0.2.0",
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn test_to_import_map_import_map_remote() {
+    let config_text = r#"{
+      "importMap": "https://deno.land/import_map.json",
+    }"#;
+    let config_specifier = root_url().join("deno.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file
+      .to_import_map(|url| {
+        assert_eq!(url.as_str(), "https://deno.land/import_map.json");
+        async {
+          Ok(
+            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
+              .to_string(),
+          )
+        }
+      })
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(
+      result.import_map.base_url().as_str(),
+      "https://deno.land/import_map.json"
+    );
+    assert_eq!(
+      json!(result.import_map.imports()),
+      // imports should NOT be expanded
+      json!({
+        "@std/test": "jsr:@std/test@0.2.0",
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn test_to_import_map_import_map_remote_relative() {
+    let config_text = r#"{
+      "importMap": "./import_map.json",
+    }"#;
+    let config_specifier =
+      Url::parse("https://deno.land/import_map.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let result = config_file
+      .to_import_map(|url| {
+        assert_eq!(url.as_str(), "https://deno.land/import_map.json");
+        async {
+          Ok(
+            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
+              .to_string(),
+          )
+        }
+      })
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert_eq!(
+      result.import_map.base_url().as_str(),
+      "https://deno.land/import_map.json"
+    );
+    assert_eq!(
+      json!(result.import_map.imports()),
+      // imports should NOT be expanded
+      json!({
+        "@std/test": "jsr:@std/test@0.2.0",
+      })
+    );
+  }
+
   fn root_url() -> Url {
     if cfg!(windows) {
-      Url::parse("file://c:/deno/").unwrap()
+      Url::parse("file://C:/deno/").unwrap()
     } else {
       Url::parse("file:///deno/").unwrap()
     }
