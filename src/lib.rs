@@ -683,6 +683,8 @@ impl ConfigFile {
     }
     // now as a relative file path
     if let Ok(config_file_path) = self.specifier.to_file_path() {
+      // people may specify a file path without a leading `./` so
+      // this handles that
       let path = config_file_path.parent().unwrap().join(value);
       Url::from_file_path(&path)
         .map_err(|()| {
