@@ -501,6 +501,7 @@ impl ConfigFile {
     config_flag: &ConfigFlag,
     maybe_config_path_args: Option<Vec<PathBuf>>,
     cwd: &Path,
+    additional_config_file_names: Option<Vec<&str>>,
   ) -> Result<Option<ConfigFile>, AnyError> {
     match config_flag {
       ConfigFlag::Disabled => Ok(None),
@@ -517,12 +518,12 @@ impl ConfigFile {
         if let Some(config_path_args) = maybe_config_path_args {
           let mut checked = HashSet::new();
           for f in config_path_args {
-            if let Some(cf) = Self::discover_from(&f, &mut checked)? {
+            if let Some(cf) = Self::discover_from(&f, &mut checked, additional_config_file_names.as_ref())? {
               return Ok(Some(cf));
             }
           }
           // From CWD walk up to root looking for deno.json or deno.jsonc
-          Self::discover_from(cwd, &mut checked)
+          Self::discover_from(cwd, &mut checked, additional_config_file_names.as_ref())
         } else {
           Ok(None)
         }
@@ -533,6 +534,7 @@ impl ConfigFile {
   pub fn discover_from(
     start: &Path,
     checked: &mut HashSet<PathBuf>,
+    additional_config_file_names: Option<&Vec<&str>>,
   ) -> Result<Option<ConfigFile>, AnyError> {
     fn is_skippable_err(e: &AnyError) -> bool {
       if let Some(ioerr) = e.downcast_ref::<std::io::Error>() {
@@ -554,6 +556,11 @@ impl ConfigFile {
 
     /// Filenames that Deno will recognize when discovering config.
     const CONFIG_FILE_NAMES: [&str; 2] = ["deno.json", "deno.jsonc"];
+    let config_file_names = if let Some(additional) = additional_config_file_names {
+      CONFIG_FILE_NAMES.into_iter().chain(additional.to_vec()).collect::<Vec<_>>()
+    } else {
+      CONFIG_FILE_NAMES.to_vec()
+    };
 
     // todo(dsherret): in the future, we should force all callers
     // to provide a resolved path
@@ -565,7 +572,7 @@ impl ConfigFile {
 
     for ancestor in start.ancestors() {
       if checked.insert(ancestor.to_path_buf()) {
-        for config_filename in CONFIG_FILE_NAMES {
+        for config_filename in &config_file_names {
           let f = ancestor.join(config_filename);
           match ConfigFile::read(&f) {
             Ok(cf) => {
@@ -1976,7 +1983,7 @@ mod tests {
     let testdata = testdata_path();
     let c_md = testdata.join("fmt/with_config/subdir/c.md");
     let mut checked = HashSet::new();
-    let config_file = ConfigFile::discover_from(&c_md, &mut checked)
+    let config_file = ConfigFile::discover_from(&c_md, &mut checked, None)
       .unwrap()
       .unwrap();
     assert!(checked.contains(c_md.parent().unwrap()));
@@ -1998,7 +2005,7 @@ mod tests {
     }
 
     // If we call discover_from again starting at testdata, we ought to get None.
-    assert!(ConfigFile::discover_from(testdata.as_path(), &mut checked)
+    assert!(ConfigFile::discover_from(testdata.as_path(), &mut checked, None)
       .unwrap()
       .is_none());
   }
@@ -2008,7 +2015,7 @@ mod tests {
     let testdata = testdata_path();
     let d = testdata.join("malformed_config/");
     let mut checked = HashSet::new();
-    let err = ConfigFile::discover_from(d.as_path(), &mut checked).unwrap_err();
+    let err = ConfigFile::discover_from(d.as_path(), &mut checked, None).unwrap_err();
     assert!(err.to_string().contains("Unable to parse config file"));
   }
 
