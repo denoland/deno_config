@@ -518,12 +518,20 @@ impl ConfigFile {
         if let Some(config_path_args) = maybe_config_path_args {
           let mut checked = HashSet::new();
           for f in config_path_args {
-            if let Some(cf) = Self::discover_from(&f, &mut checked, additional_config_file_names.as_ref())? {
+            if let Some(cf) = Self::discover_from(
+              &f,
+              &mut checked,
+              additional_config_file_names.as_ref(),
+            )? {
               return Ok(Some(cf));
             }
           }
           // From CWD walk up to root looking for deno.json or deno.jsonc
-          Self::discover_from(cwd, &mut checked, additional_config_file_names.as_ref())
+          Self::discover_from(
+            cwd,
+            &mut checked,
+            additional_config_file_names.as_ref(),
+          )
         } else {
           Ok(None)
         }
@@ -556,11 +564,15 @@ impl ConfigFile {
 
     /// Filenames that Deno will recognize when discovering config.
     const CONFIG_FILE_NAMES: [&str; 2] = ["deno.json", "deno.jsonc"];
-    let config_file_names = if let Some(additional) = additional_config_file_names {
-      CONFIG_FILE_NAMES.into_iter().chain(additional.to_vec()).collect::<Vec<_>>()
-    } else {
-      CONFIG_FILE_NAMES.to_vec()
-    };
+    let config_file_names =
+      if let Some(additional) = additional_config_file_names {
+        CONFIG_FILE_NAMES
+          .into_iter()
+          .chain(additional.to_vec())
+          .collect::<Vec<_>>()
+      } else {
+        CONFIG_FILE_NAMES.to_vec()
+      };
 
     // todo(dsherret): in the future, we should force all callers
     // to provide a resolved path
@@ -2005,9 +2017,11 @@ mod tests {
     }
 
     // If we call discover_from again starting at testdata, we ought to get None.
-    assert!(ConfigFile::discover_from(testdata.as_path(), &mut checked, None)
-      .unwrap()
-      .is_none());
+    assert!(
+      ConfigFile::discover_from(testdata.as_path(), &mut checked, None)
+        .unwrap()
+        .is_none()
+    );
   }
 
   #[test]
@@ -2015,7 +2029,8 @@ mod tests {
     let testdata = testdata_path();
     let d = testdata.join("malformed_config/");
     let mut checked = HashSet::new();
-    let err = ConfigFile::discover_from(d.as_path(), &mut checked, None).unwrap_err();
+    let err =
+      ConfigFile::discover_from(d.as_path(), &mut checked, None).unwrap_err();
     assert!(err.to_string().contains("Unable to parse config file"));
   }
 
