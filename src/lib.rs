@@ -2025,6 +2025,19 @@ mod tests {
   }
 
   #[test]
+  fn discover_from_additional_config_file_names_success() {
+    let testdata = testdata_path();
+    let dir = testdata.join("additional_files/");
+    let mut checked = HashSet::new();
+    let config_file = ConfigFile::discover_from(&dir, &mut checked, Some(&vec!["jsr.json"]))
+      .unwrap()
+      .unwrap();
+    assert!(checked.contains(&dir));
+    assert!(!checked.contains(testdata.as_path()));
+    assert_eq!(config_file.json.name.unwrap(), "@foo/bar");
+  }
+
+  #[test]
   fn discover_from_malformed() {
     let testdata = testdata_path();
     let d = testdata.join("malformed_config/");
