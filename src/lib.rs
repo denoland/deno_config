@@ -1036,7 +1036,6 @@ impl ConfigFile {
             .context("Failed to parse \"test\" configuration")?;
         // top level excludes at the start because they're lower priority
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
-        eprintln!("EXCLUDE:: {:?}", exclude_patterns);
         serialized.exclude = exclude_patterns;
         serialized
       }
