@@ -162,23 +162,6 @@ impl FilePatterns {
 
     result
   }
-
-  pub(crate) fn extend(self, rhs: Self) -> Self {
-    Self {
-      // maintain the same base as this is only used in
-      // this crate for merging args with the config file
-      base: self.base,
-      include: match (self.include, rhs.include) {
-        (None, None) => None,
-        (Some(lhs), None) => Some(lhs),
-        (None, Some(rhs)) => Some(rhs),
-        (Some(lhs), Some(rhs)) => Some(PathOrPatternSet(
-          lhs.0.into_iter().filter(|p| rhs.0.contains(p)).collect(),
-        )),
-      },
-      exclude: PathOrPatternSet([self.exclude.0, rhs.exclude.0].concat()),
-    }
-  }
 }
 
 #[derive(Clone, Default, Debug, Eq, PartialEq)]
@@ -312,6 +295,15 @@ impl PathOrPattern {
       PathOrPattern::Pattern(p) => Some(p.base_path()),
     }
   }
+
+  /// If this is a negated pattern.
+  pub fn is_negated(&self) -> bool {
+    match self {
+      PathOrPattern::Path(_) => false,
+      PathOrPattern::RemoteUrl(_) => false,
+      PathOrPattern::Pattern(p) => p.is_negated(),
+    }
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -349,6 +341,10 @@ impl GlobPattern {
       .collect::<Vec<_>>()
       .join(std::path::MAIN_SEPARATOR_STR);
     PathBuf::from(base_path)
+  }
+
+  pub fn is_negated(&self) -> bool {
+    self.0.as_str().starts_with('!')
   }
 }
 
