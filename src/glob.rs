@@ -136,10 +136,17 @@ impl FilePatterns {
 
     let mut include_paths = Vec::new();
     let mut include_patterns = Vec::new();
+    let mut exclude_patterns = Vec::new();
     for path_or_pattern in &include.0 {
       match path_or_pattern {
         PathOrPattern::Path(path) => include_paths.push((path.is_file(), path)),
-        PathOrPattern::Pattern(pattern) => include_patterns.push(pattern),
+        PathOrPattern::Pattern(pattern) => {
+          if pattern.is_negated() {
+            exclude_patterns.push(PathOrPattern::Pattern(pattern.as_negated()));
+          } else {
+            include_patterns.push(pattern.clone());
+          }
+        }
         PathOrPattern::RemoteUrl(_) => {}
       }
     }
@@ -154,6 +161,7 @@ impl FilePatterns {
       .exclude
       .0
       .iter()
+      .chain(exclude_patterns.iter())
       .filter_map(|s| Some((s.base_path()?, s)))
       .collect::<Vec<_>>();
     let get_applicable_excludes =
@@ -479,6 +487,13 @@ impl GlobPattern {
 
   pub fn is_negated(&self) -> bool {
     self.is_negated
+  }
+
+  fn as_negated(&self) -> GlobPattern {
+    Self {
+      is_negated: !self.is_negated,
+      pattern: self.pattern.clone(),
+    }
   }
 }
 
