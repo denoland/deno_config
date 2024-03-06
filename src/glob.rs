@@ -48,7 +48,7 @@ impl FilePatterns {
   }
 
   pub fn matches_specifier(&self, specifier: &Url) -> bool {
-    self.matches_specifier_detail(&specifier) != FilePatternsMatch::Excluded
+    self.matches_specifier_detail(specifier) != FilePatternsMatch::Excluded
   }
 
   pub fn matches_specifier_detail(&self, specifier: &Url) -> FilePatternsMatch {
@@ -590,7 +590,7 @@ mod test {
   }
 
   #[test]
-  fn should_split_globs_by_base_dir() {
+  fn file_patterns_split_globs_by_base_dir() {
     let temp_dir = TempDir::new().unwrap();
     let patterns = FilePatterns {
       base: temp_dir.path().to_path_buf(),
@@ -615,6 +615,10 @@ mod test {
             temp_dir.path().to_string_lossy().replace('\\', "/")
           ))
           .unwrap(),
+        ),
+        PathOrPattern::Pattern(
+          GlobPattern::from_relative(temp_dir.path(), "!./other/**/*.ts")
+            .unwrap(),
         ),
         PathOrPattern::Path(temp_dir.path().join("sub/file.ts").to_path_buf()),
       ])),
@@ -665,9 +669,195 @@ mod test {
         ComparableFilePatterns {
           base: "other".to_string(),
           include: Some(vec!["other/**/*.js".to_string()]),
-          exclude: vec![],
+          exclude: vec!["other/**/*.ts".to_string()],
         }
       ]
+    );
+  }
+
+  #[track_caller]
+  fn run_file_patterns_match_test(
+    file_patterns: &FilePatterns,
+    path: &Path,
+    kind: PathKind,
+    expected: FilePatternsMatch,
+  ) {
+    assert_eq!(
+      file_patterns.matches_path_detail(path, kind),
+      expected,
+      "path: {:?}, kind: {:?}",
+      path,
+      kind
+    );
+    assert_eq!(
+      file_patterns.matches_path(path, kind),
+      match expected {
+        FilePatternsMatch::Passed
+        | FilePatternsMatch::PassedOptedOutExclude => true,
+        FilePatternsMatch::Excluded => false,
+      }
+    )
+  }
+
+  #[test]
+  fn file_patterns_include() {
+    let cwd = std::env::current_dir().unwrap();
+    // include is a closed set
+    let file_patterns = FilePatterns {
+      base: cwd.clone(),
+      include: Some(PathOrPatternSet(vec![
+        PathOrPattern::from_relative(&cwd, "target").unwrap(),
+        PathOrPattern::from_relative(&cwd, "other/**/*.ts").unwrap(),
+      ])),
+      exclude: PathOrPatternSet(vec![]),
+    };
+    let run_test =
+      |path: &Path, kind: PathKind, expected: FilePatternsMatch| {
+        run_file_patterns_match_test(&file_patterns, path, kind, expected);
+      };
+    run_test(&cwd, PathKind::Directory, FilePatternsMatch::Passed);
+    run_test(
+      &cwd.join("other"),
+      PathKind::Directory,
+      FilePatternsMatch::Passed,
+    );
+    run_test(
+      &cwd.join("other/sub_dir"),
+      PathKind::Directory,
+      FilePatternsMatch::Passed,
+    );
+    run_test(
+      &cwd.join("not_matched"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+    run_test(
+      &cwd.join("other/test.ts"),
+      PathKind::File,
+      FilePatternsMatch::Passed,
+    );
+    run_test(
+      &cwd.join("other/test.js"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+  }
+
+  #[test]
+  fn file_patterns_exclude() {
+    let cwd = std::env::current_dir().unwrap();
+    let file_patterns = FilePatterns {
+      base: cwd.clone(),
+      include: None,
+      exclude: PathOrPatternSet(vec![
+        PathOrPattern::from_relative(&cwd, "target").unwrap(),
+        PathOrPattern::from_relative(&cwd, "!not_excluded").unwrap(),
+        // lower items take priority
+        PathOrPattern::from_relative(&cwd, "excluded_then_not_excluded")
+          .unwrap(),
+        PathOrPattern::from_relative(&cwd, "!excluded_then_not_excluded")
+          .unwrap(),
+        PathOrPattern::from_relative(&cwd, "!not_excluded_then_excluded")
+          .unwrap(),
+        PathOrPattern::from_relative(&cwd, "not_excluded_then_excluded")
+          .unwrap(),
+      ]),
+    };
+    let run_test =
+      |path: &Path, kind: PathKind, expected: FilePatternsMatch| {
+        run_file_patterns_match_test(&file_patterns, path, kind, expected);
+      };
+    run_test(&cwd, PathKind::Directory, FilePatternsMatch::Passed);
+    run_test(
+      &cwd.join("target"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+    run_test(
+      &cwd.join("not_excluded"),
+      PathKind::File,
+      FilePatternsMatch::PassedOptedOutExclude,
+    );
+    run_test(
+      &cwd.join("excluded_then_not_excluded"),
+      PathKind::File,
+      FilePatternsMatch::PassedOptedOutExclude,
+    );
+    run_test(
+      &cwd.join("not_excluded_then_excluded"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+  }
+
+  #[test]
+  fn file_patterns_include_exclude() {
+    let cwd = std::env::current_dir().unwrap();
+    let file_patterns = FilePatterns {
+      base: cwd.clone(),
+      include: Some(PathOrPatternSet(vec![
+        PathOrPattern::from_relative(&cwd, "other").unwrap(),
+        PathOrPattern::from_relative(&cwd, "target").unwrap(),
+        PathOrPattern::from_relative(&cwd, "**/*.js").unwrap(),
+        PathOrPattern::from_relative(&cwd, "**/file.ts").unwrap(),
+      ])),
+      exclude: PathOrPatternSet(vec![
+        PathOrPattern::from_relative(&cwd, "target").unwrap(),
+        PathOrPattern::from_relative(&cwd, "!target/other/**").unwrap(),
+        PathOrPattern::from_relative(&cwd, "**/*.ts").unwrap(),
+        PathOrPattern::from_relative(&cwd, "!**/file.ts").unwrap(),
+      ]),
+    };
+    let run_test =
+      |path: &Path, kind: PathKind, expected: FilePatternsMatch| {
+        run_file_patterns_match_test(&file_patterns, path, kind, expected);
+      };
+    // matches other
+    run_test(
+      &cwd.join("other/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::Passed,
+    );
+    // matches **/*.js
+    run_test(
+      &cwd.join("sub_dir/test.js"),
+      PathKind::File,
+      FilePatternsMatch::Passed,
+    );
+    // not in include set
+    run_test(
+      &cwd.join("sub_dir/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+    // .ts extension not matched
+    run_test(
+      &cwd.join("other/test.ts"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+    // file.ts excluded from excludes
+    run_test(
+      &cwd.join("other/file.ts"),
+      PathKind::File,
+      FilePatternsMatch::PassedOptedOutExclude,
+    );
+    // not allowed target dir
+    run_test(
+      &cwd.join("target/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+    // but allowed target/other dir
+    run_test(
+      &cwd.join("target/other/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::PassedOptedOutExclude,
+    );
+    run_test(
+      &cwd.join("target/other/sub/dir/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::PassedOptedOutExclude,
     );
   }
 
