@@ -119,9 +119,11 @@ impl FilePatterns {
       return vec![self.clone()];
     };
 
-    let mut include_paths = Vec::new();
-    let mut include_patterns = Vec::new();
-    let mut exclude_patterns = Vec::new();
+    let mut include_paths = Vec::with_capacity(include.0.len());
+    let mut include_patterns = Vec::with_capacity(include.0.len());
+    let mut exclude_patterns =
+      Vec::with_capacity(include.0.len() + self.exclude.0.len());
+
     for path_or_pattern in &include.0 {
       match path_or_pattern {
         PathOrPattern::Path(path) => include_paths.push((path.is_file(), path)),
