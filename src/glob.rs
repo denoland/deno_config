@@ -47,11 +47,7 @@ impl FilePatterns {
     }
   }
 
-  pub fn matches_specifier(
-    &self,
-    specifier: &Url,
-    path_kind: PathKind,
-  ) -> bool {
+  pub fn matches_specifier(&self, specifier: &Url) -> bool {
     if specifier.scheme() != "file" {
       return true;
     }
@@ -59,7 +55,7 @@ impl FilePatterns {
       Ok(path) => path,
       Err(_) => return true,
     };
-    self.matches_path(&path, path_kind)
+    self.matches_path(&path, PathKind::File) // use file matching behavior
   }
 
   pub fn matches_specifier_detail(
@@ -688,32 +684,74 @@ mod test {
     // leading dot slash
     {
       let pattern = PathOrPattern::from_relative(&cwd, "./**/*.ts").unwrap();
-      assert_eq!(pattern.matches_path(&cwd.join("foo.ts")), true);
-      assert_eq!(pattern.matches_path(&cwd.join("dir/foo.ts")), true);
-      assert_eq!(pattern.matches_path(&cwd.join("foo.js")), false);
-      assert_eq!(pattern.matches_path(&cwd.join("dir/foo.js")), false);
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.ts")),
+        PathGlobMatch::Matched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("dir/foo.ts")),
+        PathGlobMatch::Matched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.js")),
+        PathGlobMatch::NotMatched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("dir/foo.js")),
+        PathGlobMatch::NotMatched
+      );
     }
     // no leading dot slash
     {
       let pattern = PathOrPattern::from_relative(&cwd, "**/*.ts").unwrap();
-      assert_eq!(pattern.matches_path(&cwd.join("foo.ts")), true);
-      assert_eq!(pattern.matches_path(&cwd.join("dir/foo.ts")), true);
-      assert_eq!(pattern.matches_path(&cwd.join("foo.js")), false);
-      assert_eq!(pattern.matches_path(&cwd.join("dir/foo.js")), false);
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.ts")),
+        PathGlobMatch::Matched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("dir/foo.ts")),
+        PathGlobMatch::Matched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.js")),
+        PathGlobMatch::NotMatched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("dir/foo.js")),
+        PathGlobMatch::NotMatched
+      );
     }
     // exact file, leading dot slash
     {
       let pattern = PathOrPattern::from_relative(&cwd, "./foo.ts").unwrap();
-      assert_eq!(pattern.matches_path(&cwd.join("foo.ts")), true);
-      assert_eq!(pattern.matches_path(&cwd.join("dir/foo.ts")), false);
-      assert_eq!(pattern.matches_path(&cwd.join("foo.js")), false);
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.ts")),
+        PathGlobMatch::Matched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("dir/foo.ts")),
+        PathGlobMatch::NotMatched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.js")),
+        PathGlobMatch::NotMatched
+      );
     }
     // exact file, no leading dot slash
     {
       let pattern = PathOrPattern::from_relative(&cwd, "foo.ts").unwrap();
-      assert_eq!(pattern.matches_path(&cwd.join("foo.ts")), true);
-      assert_eq!(pattern.matches_path(&cwd.join("dir/foo.ts")), false);
-      assert_eq!(pattern.matches_path(&cwd.join("foo.js")), false);
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.ts")),
+        PathGlobMatch::Matched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("dir/foo.ts")),
+        PathGlobMatch::NotMatched
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.js")),
+        PathGlobMatch::NotMatched
+      );
     }
     // error for invalid url
     {
@@ -732,11 +770,11 @@ mod test {
       assert_eq!(pattern.base_path().unwrap(), parent_dir.join("sibling"));
       assert_eq!(
         pattern.matches_path(&parent_dir.join("sibling/foo.ts")),
-        true
+        PathGlobMatch::Matched
       );
       assert_eq!(
         pattern.matches_path(&parent_dir.join("./other/foo.js")),
-        false
+        PathGlobMatch::NotMatched
       );
     }
   }
