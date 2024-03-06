@@ -48,21 +48,10 @@ impl FilePatterns {
   }
 
   pub fn matches_specifier(&self, specifier: &Url) -> bool {
-    if specifier.scheme() != "file" {
-      return true;
-    }
-    let path = match specifier_to_file_path(specifier) {
-      Ok(path) => path,
-      Err(_) => return true,
-    };
-    self.matches_path(&path, PathKind::File) // use file matching behavior
+    self.matches_specifier_detail(&specifier) != FilePatternsMatch::Excluded
   }
 
-  pub fn matches_specifier_detail(
-    &self,
-    specifier: &Url,
-    path_kind: PathKind,
-  ) -> FilePatternsMatch {
+  pub fn matches_specifier_detail(&self, specifier: &Url) -> FilePatternsMatch {
     if specifier.scheme() != "file" {
       // can't do .gitignore on a non-file specifier
       return FilePatternsMatch::PassedOptedOutExclude;
@@ -71,7 +60,7 @@ impl FilePatterns {
       Ok(path) => path,
       Err(_) => return FilePatternsMatch::PassedOptedOutExclude,
     };
-    self.matches_path_detail(&path, path_kind)
+    self.matches_path_detail(&path, PathKind::File) // use file matching behavior
   }
 
   pub fn matches_path(&self, path: &Path, path_kind: PathKind) -> bool {
@@ -356,22 +345,7 @@ impl PathOrPattern {
     p: &str,
   ) -> Result<PathOrPattern, anyhow::Error> {
     if is_glob_pattern(p) {
-      let (is_negated, p) = match p.strip_prefix('!') {
-        Some(p) => (true, p),
-        None => (false, p),
-      };
-      let p = p.strip_prefix("./").unwrap_or(p);
-      let mut pattern = String::new();
-      if is_negated {
-        pattern.push('!');
-      }
-      pattern.push_str(&base.to_string_lossy().replace('\\', "/"));
-      if !pattern.ends_with('/') {
-        pattern.push('/');
-      }
-      let p = p.strip_suffix('/').unwrap_or(p);
-      pattern.push_str(p);
-      GlobPattern::new(&pattern).map(PathOrPattern::Pattern)
+      GlobPattern::from_relative(base, p).map(PathOrPattern::Pattern)
     } else if p.starts_with("http://")
       || p.starts_with("https://")
       || p.starts_with("file://")
@@ -448,6 +422,25 @@ impl GlobPattern {
       is_negated,
       pattern,
     })
+  }
+
+  pub fn from_relative(base: &Path, p: &str) -> Result<Self, anyhow::Error> {
+    let (is_negated, p) = match p.strip_prefix('!') {
+      Some(p) => (true, p),
+      None => (false, p),
+    };
+    let p = p.strip_prefix("./").unwrap_or(p);
+    let mut pattern = String::new();
+    if is_negated {
+      pattern.push('!');
+    }
+    pattern.push_str(&base.to_string_lossy().replace('\\', "/"));
+    if !pattern.ends_with('/') {
+      pattern.push('/');
+    }
+    let p = p.strip_suffix('/').unwrap_or(p);
+    pattern.push_str(p);
+    GlobPattern::new(&pattern)
   }
 
   pub fn as_str(&self) -> Cow<str> {
@@ -814,6 +807,41 @@ mod test {
           unreachable!()
         }
       }
+    }
+  }
+
+  #[test]
+  fn negated_globs() {
+    let cwd = std::env::current_dir().unwrap();
+    {
+      let pattern = GlobPattern::from_relative(&cwd, "!./**/*.ts").unwrap();
+      assert!(pattern.is_negated());
+      assert_eq!(pattern.base_path(), cwd);
+      assert!(pattern.as_str().starts_with('!'));
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.ts")),
+        PathGlobMatch::MatchedNegated
+      );
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.js")),
+        PathGlobMatch::NotMatched
+      );
+      let pattern = pattern.as_negated();
+      assert!(!pattern.is_negated());
+      assert_eq!(pattern.base_path(), cwd);
+      assert!(!pattern.as_str().starts_with('!'));
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.ts")),
+        PathGlobMatch::Matched
+      );
+      let pattern = pattern.as_negated();
+      assert!(pattern.is_negated());
+      assert_eq!(pattern.base_path(), cwd);
+      assert!(pattern.as_str().starts_with('!'));
+      assert_eq!(
+        pattern.matches_path(&cwd.join("foo.ts")),
+        PathGlobMatch::MatchedNegated
+      );
     }
   }
 }
