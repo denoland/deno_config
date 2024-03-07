@@ -115,8 +115,23 @@ impl FilePatterns {
   /// The order these are returned in is the order that the directory traversal
   /// should occur in.
   pub fn split_by_base(&self) -> Vec<Self> {
-    let Some(include) = &self.include else {
-      return vec![self.clone()];
+    let negated_excludes = self
+      .exclude
+      .0
+      .iter()
+      .filter(|e| e.is_negated())
+      .collect::<Vec<_>>();
+    let include = match &self.include {
+      Some(include) => Cow::Borrowed(include),
+      None => {
+        if negated_excludes.is_empty() {
+          return vec![self.clone()];
+        } else {
+          Cow::Owned(PathOrPatternSet::new(vec![PathOrPattern::Path(
+            self.base.clone(),
+          )]))
+        }
+      }
     };
 
     let mut include_paths = Vec::with_capacity(include.0.len());
@@ -127,6 +142,9 @@ impl FilePatterns {
     for path_or_pattern in &include.0 {
       match path_or_pattern {
         PathOrPattern::Path(path) => include_paths.push((path.is_file(), path)),
+        PathOrPattern::NegatedPath(path) => {
+          exclude_patterns.push(PathOrPattern::Path(path.clone()));
+        }
         PathOrPattern::Pattern(pattern) => {
           if pattern.is_negated() {
             exclude_patterns.push(PathOrPattern::Pattern(pattern.as_negated()));
@@ -137,18 +155,33 @@ impl FilePatterns {
         PathOrPattern::RemoteUrl(_) => {}
       }
     }
-    let include_patterns_by_base_path = include_patterns.into_iter().fold(
-      IndexMap::new(),
+
+    let capacity = include_patterns.len() + negated_excludes.len();
+    let mut include_patterns_by_base_path = include_patterns.into_iter().fold(
+      IndexMap::with_capacity(capacity),
       |mut map: IndexMap<_, Vec<_>>, p| {
         map.entry(p.base_path()).or_default().push(p);
         map
       },
     );
-    let exclude_by_base_path = self
-      .exclude
-      .0
+    for p in &negated_excludes {
+      if let Some(base_path) = p.base_path() {
+        if !include_patterns_by_base_path.contains_key(&base_path) {
+          let has_any_base_parent = include_patterns_by_base_path
+            .keys()
+            .any(|k| base_path.starts_with(k))
+            || include_paths.iter().any(|(_, p)| base_path.starts_with(p));
+          // don't include an orphaned negated pattern
+          if has_any_base_parent {
+            include_patterns_by_base_path.insert(base_path, Vec::new());
+          }
+        }
+      }
+    }
+
+    let exclude_by_base_path = exclude_patterns
       .iter()
-      .chain(exclude_patterns.iter())
+      .chain(self.exclude.0.iter())
       .filter_map(|s| Some((s.base_path()?, s)))
       .collect::<Vec<_>>();
     let get_applicable_excludes =
@@ -158,7 +191,8 @@ impl FilePatterns {
           .filter_map(|(exclude_base_path, exclude)| {
             match exclude {
               PathOrPattern::RemoteUrl(_) => None,
-              PathOrPattern::Path(exclude_path) => {
+              PathOrPattern::Path(exclude_path)
+              | PathOrPattern::NegatedPath(exclude_path) => {
                 // For explicitly specified files, ignore when the exclude path starts
                 // with it. Regardless, include excludes that are on a sub path of the dir.
                 if is_file_path && base_path.starts_with(exclude_path)
@@ -191,9 +225,13 @@ impl FilePatterns {
       let applicable_excludes = get_applicable_excludes(is_file, path);
       result.push(Self {
         base: path.clone(),
-        include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
-          path.clone(),
-        )])),
+        include: if self.include.is_none() {
+          None
+        } else {
+          Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+            path.clone(),
+          )]))
+        },
         exclude: PathOrPatternSet::new(applicable_excludes),
       });
     }
@@ -215,7 +253,18 @@ impl FilePatterns {
       }
       result.push(Self {
         base: base_path.clone(),
-        include: Some(PathOrPatternSet::new(applicable_includes)),
+        include: if self.include.is_none()
+          || applicable_includes.is_empty()
+            && self
+              .include
+              .as_ref()
+              .map(|i| !i.0.is_empty())
+              .unwrap_or(false)
+        {
+          None
+        } else {
+          Some(PathOrPatternSet::new(applicable_includes))
+        },
         exclude: PathOrPatternSet::new(applicable_excludes),
       });
     }
@@ -295,7 +344,7 @@ impl PathOrPatternSet {
     let mut result = Vec::with_capacity(self.0.len());
     for element in &self.0 {
       match element {
-        PathOrPattern::Path(path) => {
+        PathOrPattern::Path(path) | PathOrPattern::NegatedPath(path) => {
           result.push(path.to_path_buf());
         }
         PathOrPattern::RemoteUrl(_) => {
@@ -313,6 +362,7 @@ impl PathOrPatternSet {
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum PathOrPattern {
   Path(PathBuf),
+  NegatedPath(PathBuf),
   RemoteUrl(Url),
   Pattern(GlobPattern),
 }
@@ -353,6 +403,8 @@ impl PathOrPattern {
       || p.starts_with("file://")
     {
       PathOrPattern::new(p)
+    } else if let Some(path) = p.strip_prefix('!') {
+      Ok(PathOrPattern::NegatedPath(normalize_path(base.join(path))))
     } else {
       Ok(PathOrPattern::Path(normalize_path(base.join(p))))
     }
@@ -367,6 +419,13 @@ impl PathOrPattern {
           PathGlobMatch::NotMatched
         }
       }
+      PathOrPattern::NegatedPath(p) => {
+        if path.starts_with(p) {
+          PathGlobMatch::MatchedNegated
+        } else {
+          PathGlobMatch::NotMatched
+        }
+      }
       PathOrPattern::RemoteUrl(_) => PathGlobMatch::NotMatched,
       PathOrPattern::Pattern(p) => p.matches_path(path),
     }
@@ -375,7 +434,7 @@ impl PathOrPattern {
   /// Returns the base path of the pattern if it's not a remote url pattern.
   pub fn base_path(&self) -> Option<PathBuf> {
     match self {
-      PathOrPattern::Path(p) => Some(p.clone()),
+      PathOrPattern::Path(p) | PathOrPattern::NegatedPath(p) => Some(p.clone()),
       PathOrPattern::RemoteUrl(_) => None,
       PathOrPattern::Pattern(p) => Some(p.base_path()),
     }
@@ -385,6 +444,7 @@ impl PathOrPattern {
   pub fn is_negated(&self) -> bool {
     match self {
       PathOrPattern::Path(_) => false,
+      PathOrPattern::NegatedPath(_) => true,
       PathOrPattern::RemoteUrl(_) => false,
       PathOrPattern::Pattern(p) => p.is_negated(),
     }
@@ -492,7 +552,7 @@ pub fn is_glob_pattern(path: &str) -> bool {
   !path.starts_with("http://")
     && !path.starts_with("https://")
     && !path.starts_with("file://")
-    && (has_glob_chars(path) || path.starts_with('!'))
+    && has_glob_chars(path)
 }
 
 fn has_glob_chars(pattern: &str) -> bool {
@@ -551,15 +611,30 @@ mod test {
         match p {
           PathOrPattern::RemoteUrl(_) => None,
           PathOrPattern::Path(p) => Some(path_to_string(root, p)),
-          PathOrPattern::Pattern(p) => Some(
-            p.as_str()
+          PathOrPattern::NegatedPath(p) => {
+            Some(format!("!{}", path_to_string(root, p)))
+          }
+          PathOrPattern::Pattern(p) => {
+            let was_negated = p.is_negated();
+            let p = if was_negated {
+              p.as_negated()
+            } else {
+              p.clone()
+            };
+            let text = p
+              .as_str()
               .strip_prefix(&format!(
                 "{}/",
                 root.to_string_lossy().replace('\\', "/")
               ))
-              .unwrap()
-              .to_string(),
-          ),
+              .unwrap_or_else(|| panic!("pattern: {:?}, root: {:?}", p, root))
+              .to_string();
+            Some(if was_negated {
+              format!("!{}", text)
+            } else {
+              text
+            })
+          }
         }
       }
 
@@ -592,7 +667,7 @@ mod test {
   }
 
   #[test]
-  fn file_patterns_split_globs_by_base_dir() {
+  fn file_patterns_split_by_base_dir() {
     let temp_dir = TempDir::new().unwrap();
     let patterns = FilePatterns {
       base: temp_dir.path().to_path_buf(),
@@ -618,11 +693,9 @@ mod test {
           ))
           .unwrap(),
         ),
-        PathOrPattern::Pattern(
-          GlobPattern::from_relative(temp_dir.path(), "!./other/**/*.ts")
-            .unwrap(),
-        ),
-        PathOrPattern::Path(temp_dir.path().join("sub/file.ts").to_path_buf()),
+        PathOrPattern::from_relative(temp_dir.path(), "!./other/**/*.ts")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "sub/file.ts").unwrap(),
       ])),
       exclude: PathOrPatternSet::new(vec![
         PathOrPattern::Pattern(
@@ -672,6 +745,140 @@ mod test {
           base: "other".to_string(),
           include: Some(vec!["other/**/*.js".to_string()]),
           exclude: vec!["other/**/*.ts".to_string()],
+        }
+      ]
+    );
+  }
+
+  #[test]
+  fn file_patterns_split_by_base_dir_unexcluded() {
+    let temp_dir = TempDir::new().unwrap();
+    let patterns = FilePatterns {
+      base: temp_dir.path().to_path_buf(),
+      include: None,
+      exclude: PathOrPatternSet::new(vec![
+        PathOrPattern::from_relative(temp_dir.path(), "./ignored").unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./ignored/unexcluded")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./ignored/test/**")
+          .unwrap(),
+      ]),
+    };
+    let split = ComparableFilePatterns::from_split(
+      temp_dir.path(),
+      &patterns.split_by_base(),
+    );
+    assert_eq!(
+      split,
+      vec![
+        ComparableFilePatterns {
+          base: "ignored/unexcluded".to_string(),
+          include: None,
+          exclude: vec![
+            // keep the glob for the current dir because it
+            // could be used to override the .gitignore
+            "!ignored/unexcluded".to_string(),
+          ],
+        },
+        ComparableFilePatterns {
+          base: "ignored/test".to_string(),
+          include: None,
+          exclude: vec!["!ignored/test/**".to_string(),],
+        },
+        ComparableFilePatterns {
+          base: "".to_string(),
+          include: None,
+          exclude: vec![
+            "ignored".to_string(),
+            "!ignored/unexcluded".to_string(),
+            "!ignored/test/**".to_string(),
+          ],
+        },
+      ]
+    );
+  }
+
+  #[test]
+  fn file_patterns_split_by_base_dir_unexcluded_with_path_includes() {
+    let temp_dir = TempDir::new().unwrap();
+    let patterns = FilePatterns {
+      base: temp_dir.path().to_path_buf(),
+      include: Some(PathOrPatternSet::new(vec![PathOrPattern::from_relative(
+        temp_dir.path(),
+        "./sub",
+      )
+      .unwrap()])),
+      exclude: PathOrPatternSet::new(vec![
+        PathOrPattern::from_relative(temp_dir.path(), "./sub/ignored").unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./sub/ignored/test/**")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "./orphan").unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./orphan/test/**")
+          .unwrap(),
+      ]),
+    };
+    let split = ComparableFilePatterns::from_split(
+      temp_dir.path(),
+      &patterns.split_by_base(),
+    );
+    assert_eq!(
+      split,
+      vec![
+        ComparableFilePatterns {
+          base: "sub/ignored/test".to_string(),
+          include: None,
+          exclude: vec!["!sub/ignored/test/**".to_string(),],
+        },
+        ComparableFilePatterns {
+          base: "sub".to_string(),
+          include: Some(vec!["sub".to_string()]),
+          exclude: vec![
+            "sub/ignored".to_string(),
+            "!sub/ignored/test/**".to_string(),
+          ],
+        },
+      ]
+    );
+  }
+
+  #[test]
+  fn file_patterns_split_by_base_dir_unexcluded_with_glob_includes() {
+    let temp_dir = TempDir::new().unwrap();
+    let patterns = FilePatterns {
+      base: temp_dir.path().to_path_buf(),
+      include: Some(PathOrPatternSet::new(vec![PathOrPattern::from_relative(
+        temp_dir.path(),
+        "./sub/**",
+      )
+      .unwrap()])),
+      exclude: PathOrPatternSet::new(vec![
+        PathOrPattern::from_relative(temp_dir.path(), "./sub/ignored").unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./sub/ignored/test/**")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./orphan/test/**")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!orphan/other").unwrap(),
+      ]),
+    };
+    let split = ComparableFilePatterns::from_split(
+      temp_dir.path(),
+      &patterns.split_by_base(),
+    );
+    assert_eq!(
+      split,
+      vec![
+        ComparableFilePatterns {
+          base: "sub/ignored/test".to_string(),
+          include: Some(vec!["sub/**".to_string()]),
+          exclude: vec!["!sub/ignored/test/**".to_string()],
+        },
+        ComparableFilePatterns {
+          base: "sub".to_string(),
+          include: Some(vec!["sub/**".to_string()]),
+          exclude: vec![
+            "sub/ignored".to_string(),
+            "!sub/ignored/test/**".to_string(),
+          ],
         }
       ]
     );
@@ -805,6 +1012,7 @@ mod test {
       ])),
       exclude: PathOrPatternSet(vec![
         PathOrPattern::from_relative(&cwd, "target").unwrap(),
+        PathOrPattern::from_relative(&cwd, "!target/unexcluded/").unwrap(),
         PathOrPattern::from_relative(&cwd, "!target/other/**").unwrap(),
         PathOrPattern::from_relative(&cwd, "**/*.ts").unwrap(),
         PathOrPattern::from_relative(&cwd, "!**/file.ts").unwrap(),
@@ -850,6 +1058,11 @@ mod test {
       PathKind::File,
       FilePatternsMatch::Excluded,
     );
+    run_test(
+      &cwd.join("target/sub_dir/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
     // but allowed target/other dir
     run_test(
       &cwd.join("target/other/test.txt"),
@@ -858,6 +1071,39 @@ mod test {
     );
     run_test(
       &cwd.join("target/other/sub/dir/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::PassedOptedOutExclude,
+    );
+    // and in target/unexcluded
+    run_test(
+      &cwd.join("target/unexcluded/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::PassedOptedOutExclude,
+    );
+  }
+
+  #[test]
+  fn file_patterns_include_excluded() {
+    let cwd = std::env::current_dir().unwrap();
+    let file_patterns = FilePatterns {
+      base: cwd.clone(),
+      include: None,
+      exclude: PathOrPatternSet(vec![
+        PathOrPattern::from_relative(&cwd, "js/").unwrap(),
+        PathOrPattern::from_relative(&cwd, "!js/sub_dir/").unwrap(),
+      ]),
+    };
+    let run_test =
+      |path: &Path, kind: PathKind, expected: FilePatternsMatch| {
+        run_file_patterns_match_test(&file_patterns, path, kind, expected);
+      };
+    run_test(
+      &cwd.join("js/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+    run_test(
+      &cwd.join("js/sub_dir/test.txt"),
       PathKind::File,
       FilePatternsMatch::PassedOptedOutExclude,
     );
@@ -970,7 +1216,7 @@ mod test {
     let pattern = PathOrPattern::from_relative(&cwd, "./").unwrap();
     match pattern {
       PathOrPattern::Path(p) => assert_eq!(p, cwd),
-      PathOrPattern::RemoteUrl(_) | PathOrPattern::Pattern(_) => unreachable!(),
+      _ => unreachable!(),
     }
   }
 
@@ -984,7 +1230,7 @@ mod test {
         PathOrPattern::RemoteUrl(p) => {
           assert_eq!(p.as_str(), url)
         }
-        PathOrPattern::Path(_) | PathOrPattern::Pattern(_) => unreachable!(),
+        _ => unreachable!(),
       }
     }
     {
@@ -995,7 +1241,7 @@ mod test {
         PathOrPattern::Path(p) => {
           assert_eq!(p, cwd);
         }
-        PathOrPattern::RemoteUrl(_) | PathOrPattern::Pattern(_) => {
+        _ => {
           unreachable!()
         }
       }
