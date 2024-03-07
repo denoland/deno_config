@@ -329,11 +329,6 @@ impl PathOrPatternSet {
       entry_path: &Path,
     ) -> Result<(), anyhow::Error> {
       for (negated_entry, negated_path) in found_negated_paths {
-        eprintln!(
-          "NEGATED: {}, {}",
-          negated_path.display(),
-          entry_path.display()
-        );
         if negated_path.starts_with(entry_path) {
           bail!(
             concat!(
