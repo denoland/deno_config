@@ -329,11 +329,16 @@ impl PathOrPatternSet {
       entry_path: &Path,
     ) -> Result<(), anyhow::Error> {
       for (negated_entry, negated_path) in found_negated_paths {
+        eprintln!(
+          "NEGATED: {}, {}",
+          negated_path.display(),
+          entry_path.display()
+        );
         if negated_path.starts_with(entry_path) {
           bail!(
             concat!(
               "Invalid config file exclude. The negation of '{0}' is never ",
-              "reached due to the higher priority '{1}' entry. Move '{0}' after '{1}'.",
+              "reached due to the higher priority '{1}' exclude. Move '{0}' after '{1}'.",
             ),
             negated_entry,
             entry,
@@ -359,9 +364,9 @@ impl PathOrPatternSet {
           // ignore
         }
         PathOrPattern::Pattern(p) => {
-          if !p.is_negated() {
+          if p.is_negated() {
             let base_path = p.base_path();
-            validate_entry(&found_negated_paths, entry, &base_path)?;
+            found_negated_paths.push((entry.as_str(), base_path));
           }
         }
       }

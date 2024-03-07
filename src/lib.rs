@@ -1728,7 +1728,7 @@ mod tests {
   }
 
   #[test]
-  fn test_parse_config_exclude_lower_priority() {
+  fn test_parse_config_exclude_lower_priority_path() {
     let config_text = r#"{
       "fmt": {
         "exclude": ["!dist/data", "dist/"]
@@ -1743,7 +1743,27 @@ mod tests {
       r#"Invalid config file exclude.
 
 Caused by:
-    Invalid config file exclude. The negation of '!dist/data' is never reached due to the higher priority 'dist/' entry. Move '!dist/data' after 'dist/'."#
+    Invalid config file exclude. The negation of '!dist/data' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data' after 'dist/'."#
+    );
+  }
+
+  #[test]
+  fn test_parse_config_exclude_lower_priority_glob() {
+    let config_text = r#"{
+      "fmt": {
+        "exclude": ["!dist/data/**/*.ts", "dist/"]
+      }
+    }"#;
+    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let err = config_file.to_fmt_config().err().unwrap();
+    assert_eq!(
+      format!("{:?}", err),
+      r#"Invalid config file exclude.
+
+Caused by:
+    Invalid config file exclude. The negation of '!dist/data/**/*.ts' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data/**/*.ts' after 'dist/'."#
     );
   }
 
