@@ -193,8 +193,7 @@ impl FilePatterns {
             PathOrPattern::RemoteUrl(_) => None,
             PathOrPattern::Path(exclude_path)
             | PathOrPattern::NegatedPath(exclude_path) => {
-              // For explicitly specified files, ignore when the exclude path starts
-              // with it. Regardless, include excludes that are on a sub path of the dir.
+              // include paths that's are sub paths or an ancestor path
               if base_path.starts_with(exclude_path)
                 || exclude_path.starts_with(base_path)
               {
@@ -204,7 +203,7 @@ impl FilePatterns {
               }
             }
             PathOrPattern::Pattern(_) => {
-              // include globs that's are sub paths or a parent path
+              // include globs that's are sub paths or an ancestor path
               if exclude_base_path.starts_with(base_path)
                 || base_path.starts_with(exclude_base_path)
               {
