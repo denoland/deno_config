@@ -74,7 +74,7 @@ impl SerializedFilesConfig {
             &config_dir,
             &i,
           )
-          .context("Invalid config file include.")?,
+          .context("Invalid include.")?,
         ),
         None => None,
       },
@@ -82,7 +82,7 @@ impl SerializedFilesConfig {
         &config_dir,
         &self.exclude,
       )
-      .context("Invalid config file exclude.")?,
+      .context("Invalid exclude.")?,
     })
   }
 
@@ -950,7 +950,9 @@ impl ConfigFile {
       exclude,
       ..Default::default()
     };
-    raw_files_config.into_resolved(&self.specifier)
+    raw_files_config
+      .into_resolved(&self.specifier)
+      .context("Invalid exclude config.")
   }
 
   fn resolve_exclude_patterns(&self) -> Result<Vec<String>, AnyError> {
@@ -983,7 +985,10 @@ impl ConfigFile {
       None => return Ok(None),
     };
 
-    serialized.into_resolved(&self.specifier).map(Some)
+    serialized
+      .into_resolved(&self.specifier)
+      .context("Invalid bench config.")
+      .map(Some)
   }
 
   pub fn to_fmt_config(&self) -> Result<Option<FmtConfig>, AnyError> {
@@ -1005,7 +1010,10 @@ impl ConfigFile {
       None => return Ok(None),
     };
 
-    serialized.into_resolved(&self.specifier).map(Some)
+    serialized
+      .into_resolved(&self.specifier)
+      .context("Invalid fmt config.")
+      .map(Some)
   }
 
   pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
@@ -1027,7 +1035,10 @@ impl ConfigFile {
       None => return Ok(None),
     };
 
-    serialized.into_resolved(&self.specifier).map(Some)
+    serialized
+      .into_resolved(&self.specifier)
+      .context("Invalid lint config.")
+      .map(Some)
   }
 
   pub fn to_test_config(&self) -> Result<Option<TestConfig>, AnyError> {
@@ -1049,7 +1060,10 @@ impl ConfigFile {
       None => return Ok(None),
     };
 
-    serialized.into_resolved(&self.specifier).map(Some)
+    serialized
+      .into_resolved(&self.specifier)
+      .context("Invalid test config.")
+      .map(Some)
   }
 
   pub fn to_publish_config(&self) -> Result<Option<PublishConfig>, AnyError> {
@@ -1071,7 +1085,10 @@ impl ConfigFile {
       None => return Ok(None),
     };
 
-    serialized.into_resolved(&self.specifier).map(Some)
+    serialized
+      .into_resolved(&self.specifier)
+      .context("Invalid publish config.")
+      .map(Some)
   }
 
   pub fn to_workspace_config(
@@ -1740,30 +1757,32 @@ mod tests {
     let err = config_file.to_fmt_config().err().unwrap();
     assert_eq!(
       format!("{:?}", err),
-      r#"Invalid config file exclude.
+      r#"Invalid fmt config.
 
 Caused by:
-    Invalid config file exclude. The negation of '!dist/data' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data' after 'dist/'."#
+    0: Invalid exclude.
+    1: The negation of '!dist/data' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data' after 'dist/'."#
     );
   }
 
   #[test]
   fn test_parse_config_exclude_lower_priority_glob() {
     let config_text = r#"{
-      "fmt": {
+      "lint": {
         "exclude": ["!dist/data/**/*.ts", "dist/"]
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
     let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
-    let err = config_file.to_fmt_config().err().unwrap();
+    let err = config_file.to_lint_config().err().unwrap();
     assert_eq!(
       format!("{:?}", err),
-      r#"Invalid config file exclude.
+      r#"Invalid lint config.
 
 Caused by:
-    Invalid config file exclude. The negation of '!dist/data/**/*.ts' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data/**/*.ts' after 'dist/'."#
+    0: Invalid exclude.
+    1: The negation of '!dist/data/**/*.ts' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data/**/*.ts' after 'dist/'."#
     );
   }
 

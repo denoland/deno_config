@@ -332,8 +332,8 @@ impl PathOrPatternSet {
         if negated_path.starts_with(entry_path) {
           bail!(
             concat!(
-              "Invalid config file exclude. The negation of '{0}' is never ",
-              "reached due to the higher priority '{1}' exclude. Move '{0}' after '{1}'.",
+              "The negation of '{0}' is never reached due to the higher ",
+              "priority '{1}' exclude. Move '{0}' after '{1}'.",
             ),
             negated_entry,
             entry,
