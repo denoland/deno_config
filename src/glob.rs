@@ -167,7 +167,14 @@ impl FilePatterns {
     for p in &negated_excludes {
       if let Some(base_path) = p.base_path() {
         if !include_patterns_by_base_path.contains_key(&base_path) {
-          include_patterns_by_base_path.insert(base_path, Vec::new());
+          let has_any_base_parent = include_patterns_by_base_path
+            .keys()
+            .any(|k| base_path.starts_with(k))
+            || include_paths.iter().any(|(_, p)| base_path.starts_with(p));
+          // don't include an orphaned negated pattern
+          if has_any_base_parent {
+            include_patterns_by_base_path.insert(base_path, Vec::new());
+          }
         }
       }
     }
@@ -246,7 +253,14 @@ impl FilePatterns {
       }
       result.push(Self {
         base: base_path.clone(),
-        include: if self.include.is_none() {
+        include: if self.include.is_none()
+          || applicable_includes.is_empty()
+            && self
+              .include
+              .as_ref()
+              .map(|i| !i.0.is_empty())
+              .unwrap_or(false)
+        {
           None
         } else {
           Some(PathOrPatternSet::new(applicable_includes))
@@ -780,6 +794,92 @@ mod test {
             "!ignored/test/**".to_string(),
           ],
         },
+      ]
+    );
+  }
+
+  #[test]
+  fn file_patterns_split_by_base_dir_unexcluded_with_path_includes() {
+    let temp_dir = TempDir::new().unwrap();
+    let patterns = FilePatterns {
+      base: temp_dir.path().to_path_buf(),
+      include: Some(PathOrPatternSet::new(vec![PathOrPattern::from_relative(
+        temp_dir.path(),
+        "./sub",
+      )
+      .unwrap()])),
+      exclude: PathOrPatternSet::new(vec![
+        PathOrPattern::from_relative(temp_dir.path(), "./sub/ignored").unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./sub/ignored/test/**")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "./orphan").unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./orphan/test/**")
+          .unwrap(),
+      ]),
+    };
+    let split = ComparableFilePatterns::from_split(
+      temp_dir.path(),
+      &patterns.split_by_base(),
+    );
+    assert_eq!(
+      split,
+      vec![
+        ComparableFilePatterns {
+          base: "sub/ignored/test".to_string(),
+          include: None,
+          exclude: vec!["!sub/ignored/test/**".to_string(),],
+        },
+        ComparableFilePatterns {
+          base: "sub".to_string(),
+          include: Some(vec!["sub".to_string()]),
+          exclude: vec![
+            "sub/ignored".to_string(),
+            "!sub/ignored/test/**".to_string(),
+          ],
+        },
+      ]
+    );
+  }
+
+  #[test]
+  fn file_patterns_split_by_base_dir_unexcluded_with_glob_includes() {
+    let temp_dir = TempDir::new().unwrap();
+    let patterns = FilePatterns {
+      base: temp_dir.path().to_path_buf(),
+      include: Some(PathOrPatternSet::new(vec![PathOrPattern::from_relative(
+        temp_dir.path(),
+        "./sub/**",
+      )
+      .unwrap()])),
+      exclude: PathOrPatternSet::new(vec![
+        PathOrPattern::from_relative(temp_dir.path(), "./sub/ignored").unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./sub/ignored/test/**")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./orphan/test/**")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!orphan/other").unwrap(),
+      ]),
+    };
+    let split = ComparableFilePatterns::from_split(
+      temp_dir.path(),
+      &patterns.split_by_base(),
+    );
+    assert_eq!(
+      split,
+      vec![
+        ComparableFilePatterns {
+          base: "sub/ignored/test".to_string(),
+          include: Some(vec!["sub/**".to_string()]),
+          exclude: vec!["!sub/ignored/test/**".to_string()],
+        },
+        ComparableFilePatterns {
+          base: "sub".to_string(),
+          include: Some(vec!["sub/**".to_string()]),
+          exclude: vec![
+            "sub/ignored".to_string(),
+            "!sub/ignored/test/**".to_string(),
+          ],
+        }
       ]
     );
   }
