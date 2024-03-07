@@ -1728,26 +1728,6 @@ mod tests {
   }
 
   #[test]
-  fn test_parse_config_include_negations() {
-    let config_text = r#"{
-      "fmt": {
-        "include": ["src/", "!src/testdata/"]
-      }
-    }"#;
-    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
-
-    let err = config_file.to_fmt_config().err().unwrap();
-    assert_eq!(
-      format!("{:?}", err),
-      r#"Invalid config file include.
-
-Caused by:
-    Negated entry '!src/testdata/' not supported in "include". Move to "exclude" instead."#
-    );
-  }
-
-  #[test]
   fn test_parse_config_exclude_lower_priority() {
     let config_text = r#"{
       "fmt": {

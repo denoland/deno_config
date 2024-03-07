@@ -303,22 +303,17 @@ impl PathOrPatternSet {
     ))
   }
 
-  /// Builds the set and ensures no negations.
+  /// Builds the set of path and patterns for an "include" list.
   pub fn from_include_relative_path_or_patterns(
     base: &Path,
     entries: &[String],
   ) -> Result<Self, anyhow::Error> {
-    let mut result = Vec::with_capacity(entries.len());
-    for entry in entries {
-      let p = PathOrPattern::from_relative(base, entry)?;
-      // for now, just don't support this until someone wants
-      // it even though it should work well with the current code
-      if p.is_negated() {
-        bail!("Negated entry '{}' not supported in \"include\". Move to \"exclude\" instead.", entry)
-      }
-      result.push(p);
-    }
-    Ok(Self(result))
+    Ok(Self(
+      entries
+        .iter()
+        .map(|p| PathOrPattern::from_relative(base, p))
+        .collect::<Result<Vec<_>, _>>()?,
+    ))
   }
 
   /// Builds the set and ensures no negations are overruled by
