@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
 
+use anyhow::bail;
 use anyhow::Context;
 use indexmap::IndexMap;
 use url::Url;
@@ -141,7 +142,7 @@ impl FilePatterns {
 
     for path_or_pattern in &include.0 {
       match path_or_pattern {
-        PathOrPattern::Path(path) => include_paths.push((path.is_file(), path)),
+        PathOrPattern::Path(path) => include_paths.push(path),
         PathOrPattern::NegatedPath(path) => {
           exclude_patterns.push(PathOrPattern::Path(path.clone()));
         }
@@ -170,7 +171,7 @@ impl FilePatterns {
           let has_any_base_parent = include_patterns_by_base_path
             .keys()
             .any(|k| base_path.starts_with(k))
-            || include_paths.iter().any(|(_, p)| base_path.starts_with(p));
+            || include_paths.iter().any(|p| base_path.starts_with(p));
           // don't include an orphaned negated pattern
           if has_any_base_parent {
             include_patterns_by_base_path.insert(base_path, Vec::new());
@@ -184,45 +185,44 @@ impl FilePatterns {
       .chain(self.exclude.0.iter())
       .filter_map(|s| Some((s.base_path()?, s)))
       .collect::<Vec<_>>();
-    let get_applicable_excludes =
-      |is_file_path: bool, base_path: &PathBuf| -> Vec<PathOrPattern> {
-        exclude_by_base_path
-          .iter()
-          .filter_map(|(exclude_base_path, exclude)| {
-            match exclude {
-              PathOrPattern::RemoteUrl(_) => None,
-              PathOrPattern::Path(exclude_path)
-              | PathOrPattern::NegatedPath(exclude_path) => {
-                // For explicitly specified files, ignore when the exclude path starts
-                // with it. Regardless, include excludes that are on a sub path of the dir.
-                if is_file_path && base_path.starts_with(exclude_path)
-                  || exclude_path.starts_with(base_path)
-                {
-                  Some((*exclude).clone())
-                } else {
-                  None
-                }
-              }
-              PathOrPattern::Pattern(_) => {
-                // include globs that's are sub paths or a parent path
-                if exclude_base_path.starts_with(base_path)
-                  || base_path.starts_with(exclude_base_path)
-                {
-                  Some((*exclude).clone())
-                } else {
-                  None
-                }
+    let get_applicable_excludes = |base_path: &PathBuf| -> Vec<PathOrPattern> {
+      exclude_by_base_path
+        .iter()
+        .filter_map(|(exclude_base_path, exclude)| {
+          match exclude {
+            PathOrPattern::RemoteUrl(_) => None,
+            PathOrPattern::Path(exclude_path)
+            | PathOrPattern::NegatedPath(exclude_path) => {
+              // For explicitly specified files, ignore when the exclude path starts
+              // with it. Regardless, include excludes that are on a sub path of the dir.
+              if base_path.starts_with(exclude_path)
+                || exclude_path.starts_with(base_path)
+              {
+                Some((*exclude).clone())
+              } else {
+                None
               }
             }
-          })
-          .collect::<Vec<_>>()
-      };
+            PathOrPattern::Pattern(_) => {
+              // include globs that's are sub paths or a parent path
+              if exclude_base_path.starts_with(base_path)
+                || base_path.starts_with(exclude_base_path)
+              {
+                Some((*exclude).clone())
+              } else {
+                None
+              }
+            }
+          }
+        })
+        .collect::<Vec<_>>()
+    };
 
     let mut result = Vec::with_capacity(
       include_paths.len() + include_patterns_by_base_path.len(),
     );
-    for (is_file, path) in include_paths {
-      let applicable_excludes = get_applicable_excludes(is_file, path);
+    for path in include_paths {
+      let applicable_excludes = get_applicable_excludes(path);
       result.push(Self {
         base: path.clone(),
         include: if self.include.is_none() {
@@ -239,7 +239,7 @@ impl FilePatterns {
     // todo(dsherret): This could be further optimized by not including
     // patterns that will only ever match another base.
     for base_path in include_patterns_by_base_path.keys() {
-      let applicable_excludes = get_applicable_excludes(false, base_path);
+      let applicable_excludes = get_applicable_excludes(base_path);
       let mut applicable_includes = Vec::new();
       // get all patterns that apply to the current or ancestor directories
       for path in base_path.ancestors() {
@@ -303,16 +303,77 @@ impl PathOrPatternSet {
     ))
   }
 
-  pub fn from_relative_path_or_patterns(
+  /// Builds the set and ensures no negations.
+  pub fn from_include_relative_path_or_patterns(
     base: &Path,
-    paths: &[String],
+    entries: &[String],
   ) -> Result<Self, anyhow::Error> {
-    Ok(Self(
-      paths
-        .iter()
-        .map(|p| PathOrPattern::from_relative(base, p))
-        .collect::<Result<Vec<_>, _>>()?,
-    ))
+    let mut result = Vec::with_capacity(entries.len());
+    for entry in entries {
+      let p = PathOrPattern::from_relative(base, entry)?;
+      // for now, just don't support this until someone wants
+      // it even though it should work well with the current code
+      if p.is_negated() {
+        bail!("Negated entry '{}' not supported in \"include\". Move to \"exclude\" instead.", entry)
+      }
+      result.push(p);
+    }
+    Ok(Self(result))
+  }
+
+  /// Builds the set and ensures no negations are overruled by
+  /// higher priority entries.
+  pub fn from_exclude_relative_path_or_patterns(
+    base: &Path,
+    entries: &[String],
+  ) -> Result<Self, anyhow::Error> {
+    // error when someone does something like:
+    // exclude: ["!./a/b", "./a"] as it should be the opposite
+    fn validate_entry(
+      found_negated_paths: &Vec<(&str, PathBuf)>,
+      entry: &str,
+      entry_path: &Path,
+    ) -> Result<(), anyhow::Error> {
+      for (negated_entry, negated_path) in found_negated_paths {
+        if negated_path.starts_with(entry_path) {
+          bail!(
+            concat!(
+              "Invalid config file exclude. The negation of '{0}' is never ",
+              "reached due to the higher priority '{1}' entry. Move '{0}' after '{1}'.",
+            ),
+            negated_entry,
+            entry,
+          );
+        }
+      }
+      Ok(())
+    }
+
+    let mut found_negated_paths: Vec<(&str, PathBuf)> =
+      Vec::with_capacity(entries.len());
+    let mut result = Vec::with_capacity(entries.len());
+    for entry in entries {
+      let p = PathOrPattern::from_relative(base, entry)?;
+      match &p {
+        PathOrPattern::Path(p) => {
+          validate_entry(&found_negated_paths, entry, p)?;
+        }
+        PathOrPattern::NegatedPath(p) => {
+          found_negated_paths.push((entry.as_str(), p.clone()));
+        }
+        PathOrPattern::RemoteUrl(_) => {
+          // ignore
+        }
+        PathOrPattern::Pattern(p) => {
+          if !p.is_negated() {
+            let base_path = p.base_path();
+            validate_entry(&found_negated_paths, entry, &base_path)?;
+          }
+        }
+      }
+      result.push(p);
+    }
+    Ok(Self(result))
   }
 
   pub fn inner(&self) -> &Vec<PathOrPattern> {
@@ -775,6 +836,9 @@ mod test {
           base: "ignored/unexcluded".to_string(),
           include: None,
           exclude: vec![
+            // still keeps the higher level exclude for cases
+            // where these two are accidentally swapped
+            "ignored".to_string(),
             // keep the glob for the current dir because it
             // could be used to override the .gitignore
             "!ignored/unexcluded".to_string(),
@@ -783,7 +847,7 @@ mod test {
         ComparableFilePatterns {
           base: "ignored/test".to_string(),
           include: None,
-          exclude: vec!["!ignored/test/**".to_string(),],
+          exclude: vec!["ignored".to_string(), "!ignored/test/**".to_string(),],
         },
         ComparableFilePatterns {
           base: "".to_string(),
@@ -827,7 +891,10 @@ mod test {
         ComparableFilePatterns {
           base: "sub/ignored/test".to_string(),
           include: None,
-          exclude: vec!["!sub/ignored/test/**".to_string(),],
+          exclude: vec![
+            "sub/ignored".to_string(),
+            "!sub/ignored/test/**".to_string(),
+          ],
         },
         ComparableFilePatterns {
           base: "sub".to_string(),
@@ -870,7 +937,10 @@ mod test {
         ComparableFilePatterns {
           base: "sub/ignored/test".to_string(),
           include: Some(vec!["sub/**".to_string()]),
-          exclude: vec!["!sub/ignored/test/**".to_string()],
+          exclude: vec![
+            "sub/ignored".to_string(),
+            "!sub/ignored/test/**".to_string()
+          ],
         },
         ComparableFilePatterns {
           base: "sub".to_string(),
@@ -880,6 +950,92 @@ mod test {
             "!sub/ignored/test/**".to_string(),
           ],
         }
+      ]
+    );
+  }
+
+  #[test]
+  fn file_patterns_split_by_base_dir_opposite_exclude() {
+    let temp_dir = TempDir::new().unwrap();
+    let patterns = FilePatterns {
+      base: temp_dir.path().to_path_buf(),
+      include: None,
+      // this will actually error before it gets here in integration,
+      // but it's best to ensure it's handled anyway
+      exclude: PathOrPatternSet::new(vec![
+        // this won't be unexcluded because it's lower priority than the entry below
+        PathOrPattern::from_relative(temp_dir.path(), "!./sub/ignored/test/")
+          .unwrap(),
+        // this is higher priority
+        PathOrPattern::from_relative(temp_dir.path(), "./sub/ignored").unwrap(),
+      ]),
+    };
+    let split = ComparableFilePatterns::from_split(
+      temp_dir.path(),
+      &patterns.split_by_base(),
+    );
+    assert_eq!(
+      split,
+      vec![
+        ComparableFilePatterns {
+          base: "sub/ignored/test".to_string(),
+          include: None,
+          exclude: vec![
+            "!sub/ignored/test".to_string(),
+            "sub/ignored".to_string(),
+          ],
+        },
+        ComparableFilePatterns {
+          base: "".to_string(),
+          include: None,
+          exclude: vec![
+            "!sub/ignored/test".to_string(),
+            "sub/ignored".to_string(),
+          ],
+        },
+      ]
+    );
+  }
+
+  #[test]
+  fn file_patterns_split_by_base_dir_exclude_unexcluded_and_glob() {
+    let temp_dir = TempDir::new().unwrap();
+    let patterns = FilePatterns {
+      base: temp_dir.path().to_path_buf(),
+      include: None,
+      exclude: PathOrPatternSet::new(vec![
+        PathOrPattern::from_relative(temp_dir.path(), "./sub/ignored").unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "!./sub/ignored/test/")
+          .unwrap(),
+        PathOrPattern::from_relative(temp_dir.path(), "./sub/ignored/**/*.ts")
+          .unwrap(),
+      ]),
+    };
+    let split = ComparableFilePatterns::from_split(
+      temp_dir.path(),
+      &patterns.split_by_base(),
+    );
+    assert_eq!(
+      split,
+      vec![
+        ComparableFilePatterns {
+          base: "sub/ignored/test".to_string(),
+          include: None,
+          exclude: vec![
+            "sub/ignored".to_string(),
+            "!sub/ignored/test".to_string(),
+            "sub/ignored/**/*.ts".to_string()
+          ],
+        },
+        ComparableFilePatterns {
+          base: "".to_string(),
+          include: None,
+          exclude: vec![
+            "sub/ignored".to_string(),
+            "!sub/ignored/test".to_string(),
+            "sub/ignored/**/*.ts".to_string(),
+          ],
+        },
       ]
     );
   }
@@ -1106,6 +1262,35 @@ mod test {
       &cwd.join("js/sub_dir/test.txt"),
       PathKind::File,
       FilePatternsMatch::PassedOptedOutExclude,
+    );
+  }
+
+  #[test]
+  fn file_patterns_opposite_incorrect_excluded_include() {
+    let cwd = std::env::current_dir().unwrap();
+    let file_patterns = FilePatterns {
+      base: cwd.clone(),
+      include: None,
+      exclude: PathOrPatternSet(vec![
+        // this is lower priority
+        PathOrPattern::from_relative(&cwd, "!js/sub_dir/").unwrap(),
+        // this wins because it's higher priority
+        PathOrPattern::from_relative(&cwd, "js/").unwrap(),
+      ]),
+    };
+    let run_test =
+      |path: &Path, kind: PathKind, expected: FilePatternsMatch| {
+        run_file_patterns_match_test(&file_patterns, path, kind, expected);
+      };
+    run_test(
+      &cwd.join("js/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
+    );
+    run_test(
+      &cwd.join("js/sub_dir/test.txt"),
+      PathKind::File,
+      FilePatternsMatch::Excluded,
     );
   }
 

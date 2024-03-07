@@ -70,12 +70,15 @@ impl SerializedFilesConfig {
       base: config_dir.clone(),
       include: match self.include {
         Some(i) => Some(
-          PathOrPatternSet::from_relative_path_or_patterns(&config_dir, &i)
-            .context("Invalid config file include.")?,
+          PathOrPatternSet::from_include_relative_path_or_patterns(
+            &config_dir,
+            &i,
+          )
+          .context("Invalid config file include.")?,
         ),
         None => None,
       },
-      exclude: PathOrPatternSet::from_relative_path_or_patterns(
+      exclude: PathOrPatternSet::from_exclude_relative_path_or_patterns(
         &config_dir,
         &self.exclude,
       )
@@ -1721,6 +1724,46 @@ mod tests {
       bench_exclude,
       PathOrPatternSet::from_absolute_paths(&["/deno/dist/".to_string()])
         .unwrap()
+    );
+  }
+
+  #[test]
+  fn test_parse_config_include_negations() {
+    let config_text = r#"{
+      "fmt": {
+        "include": ["src/", "!src/testdata/"]
+      }
+    }"#;
+    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let err = config_file.to_fmt_config().err().unwrap();
+    assert_eq!(
+      format!("{:?}", err),
+      r#"Invalid config file include.
+
+Caused by:
+    Negated entry '!src/testdata/' not supported in "include". Move to "exclude" instead."#
+    );
+  }
+
+  #[test]
+  fn test_parse_config_exclude_lower_priority() {
+    let config_text = r#"{
+      "fmt": {
+        "exclude": ["!dist/data", "dist/"]
+      }
+    }"#;
+    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+
+    let err = config_file.to_fmt_config().err().unwrap();
+    assert_eq!(
+      format!("{:?}", err),
+      r#"Invalid config file exclude.
+
+Caused by:
+    Invalid config file exclude. The negation of '!dist/data' is never reached due to the higher priority 'dist/' entry. Move '!dist/data' after 'dist/'."#
     );
   }
 
