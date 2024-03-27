@@ -514,13 +514,22 @@ fn decorate_tasks_json(
   // previous token and the comment in question
 
   let task_tokens_start = tokens
-    .iter()
-    .position(|t| t.range.start >= tasks.range.start)
-    .unwrap_or(new_tasks.len());
-  let task_tokens = tokens[task_tokens_start..]
+    .binary_search_by(|t| {
+      // we want the greatest token that is less than or equal to the start of the tasks
+      if t.range.end <= tasks.range.start {
+        std::cmp::Ordering::Less
+      } else {
+        std::cmp::Ordering::Greater
+      }
+    })
+    .unwrap_err();
+  let task_tokens_end = tokens[task_tokens_start..]
     .iter()
     .take_while(|t| t.range.end <= tasks.range.end)
-    .collect::<Vec<_>>();
+    .count()
+    + task_tokens_start;
+
+  let task_tokens = &tokens[task_tokens_start..task_tokens_end];
 
   for prop in &tasks.properties {
     let prop_comments =
@@ -528,29 +537,36 @@ fn decorate_tasks_json(
 
     let mut comment_texts = Vec::with_capacity(prop_comments.len());
 
-    for (idx, comment) in prop_comments.iter().enumerate() {
-      // after the first comment they're all on their own lines
-      if idx == 0 {
-        if let Some(prev_token) = task_tokens
-          .iter()
-          .rev()
-          .find(|t| t.range.end < comment.range().start)
-        {
-          let text_before_comment =
-            &text[prev_token.range.end..comment.range().start];
-          if !text_before_comment.contains('\n') {
-            // the comment is not on its own line
+    for comment in prop_comments.iter() {
+      let token_pos = task_tokens
+        .binary_search_by(|t| {
+          // we want to find the greatest token that is less than the start of comment
+          // (we can't search for token end == comment start because the
+          // preceding range might be a comment)
+          if t.range.end <= comment.range().start {
+            std::cmp::Ordering::Less
+          } else {
+            std::cmp::Ordering::Greater
+          }
+        })
+        .unwrap_err();
+      // the previous and next tokens
+      match (task_tokens.get(token_pos - 1), task_tokens.get(token_pos)) {
+        (Some(prev), Some(next)) => {
+          // on a different line than the previous and next tokens
+          if text[prev.range.end..comment.range().start].contains('\n')
+            && text[comment.range().end..next.range.start].contains('\n')
+          {
+            let comment_lines = comment.text().trim().split('\n').map(|s| {
+              s.trim().trim_start_matches('*').trim_start().to_string()
+            });
+            comment_texts.extend(comment_lines);
+          } else {
             continue;
           }
         }
-      }
-
-      let comment_lines = comment
-        .text()
-        .trim()
-        .split('\n')
-        .map(|s| s.trim().trim_start_matches('*').trim_start().to_string());
-      comment_texts.extend(comment_lines);
+        _ => continue,
+      };
     }
 
     new_tasks.insert(
@@ -2810,7 +2826,9 @@ Caused by:
          * with multi-line comments
          */
         "test": "deno test",
+        /* we should */ /* ignore these */ "fmt": "deno fmt",
         "lint": "deno lint"
+        // trailing comments
       },
     }"#;
 
@@ -2851,6 +2869,13 @@ Caused by:
               "".into(),
               "with multi-line comments".into()
             ]
+          }
+        ),
+        (
+          "fmt".into(),
+          Task::Commented {
+            definition: "deno fmt".into(),
+            comments: vec![]
           }
         ),
         (
