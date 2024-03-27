@@ -481,6 +481,21 @@ pub struct ConfigFile {
   pub json: ConfigFileJson,
 }
 
+/// collects comments attached to tasks and
+/// returns a new object where each task
+/// has a list of the comments that accompanied it.
+/// i.e. it will be the following form
+/// 
+/// ```json
+/// {
+///   "tasks": {
+///     "task1": {
+///       "comments": ["first comment line", "second comment line"],
+///       "definition": "deno run ..."
+///     }
+///   }
+/// }
+/// ```
 fn decorate_tasks_json(
   text: &str,
   tokens: &[jsonc_parser::tokens::TokenAndRange<'_>],
@@ -530,7 +545,7 @@ fn decorate_tasks_json(
         .text()
         .split('\n')
         .map(|s| s.trim().trim_start_matches('*').trim_start().to_string())
-        .filter(|s| s.len() > 0);
+        .filter(|s| !s.is_empty());
       comment_texts.extend(comment_lines);
     }
 
@@ -690,7 +705,6 @@ impl ConfigFile {
       &CollectOptions {
         comments: true,
         tokens: true,
-        ..Default::default()
       },
       &Default::default(),
     ) {
@@ -703,8 +717,9 @@ impl ConfigFile {
         let value_obj = value.as_object().unwrap();
         let mut value_json = Value::from(value.clone());
         if let Some(tasks) = value_obj.get_object("tasks") {
-          let new_tasks = decorate_tasks_json(text, &tokens, &comments, tasks);
-          value_json["tasks"] = new_tasks.into();
+          let decorated_tasks =
+            decorate_tasks_json(text, &tokens, &comments, tasks);
+          value_json["tasks"] = decorated_tasks
         }
         value_json
       }
