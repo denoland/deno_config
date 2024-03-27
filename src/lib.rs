@@ -547,9 +547,9 @@ fn decorate_tasks_json(
 
       let comment_lines = comment
         .text()
+        .trim()
         .split('\n')
-        .map(|s| s.trim().trim_start_matches('*').trim_start().to_string())
-        .filter(|s| !s.is_empty());
+        .map(|s| s.trim().trim_start_matches('*').trim_start().to_string());
       comment_texts.extend(comment_lines);
     }
 
@@ -2806,6 +2806,7 @@ Caused by:
         "run": "deno run -A mod.ts", // comments not supported here
         /*
          * test task
+         * 
          * with multi-line comments
          */
         "test": "deno test",
@@ -2847,6 +2848,7 @@ Caused by:
             definition: "deno test".into(),
             comments: vec![
               "test task".into(),
+              "".into(),
               "with multi-line comments".into()
             ]
           }
