@@ -485,7 +485,7 @@ pub struct ConfigFile {
 /// returns a new object where each task
 /// has a list of the comments that accompanied it.
 /// i.e. it will be the following form
-/// 
+///
 /// ```json
 /// {
 ///   "tasks": {
