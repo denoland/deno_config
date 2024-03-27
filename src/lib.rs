@@ -6,6 +6,9 @@ use anyhow::Context;
 use anyhow::Error as AnyError;
 use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
+use jsonc_parser::common::Ranged;
+use jsonc_parser::CollectOptions;
+use jsonc_parser::ParseResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
@@ -440,6 +443,16 @@ pub enum LockConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Task {
+  Definition(String),
+  Commented {
+    definition: String,
+    comments: Vec<String>,
+  },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
   pub compiler_options: Option<Value>,
@@ -472,12 +485,114 @@ pub struct ConfigFile {
   pub json: ConfigFileJson,
 }
 
+/// collects comments attached to tasks and
+/// returns a new object where each task
+/// has a list of the comments that accompanied it.
+/// i.e. it will be the following form
+///
+/// ```json
+/// {
+///   "tasks": {
+///     "task1": {
+///       "comments": ["first comment line", "second comment line"],
+///       "definition": "deno run ..."
+///     }
+///   }
+/// }
+/// ```
+fn decorate_tasks_json(
+  text: &str,
+  tokens: &[jsonc_parser::tokens::TokenAndRange<'_>],
+  comments: &HashMap<usize, std::rc::Rc<Vec<jsonc_parser::ast::Comment<'_>>>>,
+  tasks: &jsonc_parser::ast::Object,
+) -> Value {
+  let mut new_tasks = serde_json::Map::new();
+
+  // we want to exclude comments that aren't on their own line
+  // so the roundabout method here is to
+  // figure out whether there's a newline between the
+  // previous token and the comment in question
+
+  let task_tokens_start = tokens
+    .binary_search_by(|t| {
+      // we want the greatest token that is less than or equal to the start of the tasks
+      if t.range.end <= tasks.range.start {
+        std::cmp::Ordering::Less
+      } else {
+        std::cmp::Ordering::Greater
+      }
+    })
+    .unwrap_err();
+  let task_tokens_end = tokens[task_tokens_start..]
+    .iter()
+    .take_while(|t| t.range.end <= tasks.range.end)
+    .count()
+    + task_tokens_start;
+
+  let task_tokens = &tokens[task_tokens_start..task_tokens_end];
+
+  for prop in &tasks.properties {
+    let prop_comments =
+      comments.get(&prop.range.start).cloned().unwrap_or_default();
+
+    let mut comment_texts = Vec::with_capacity(prop_comments.len());
+
+    for comment in prop_comments.iter() {
+      let token_pos = task_tokens
+        .binary_search_by(|t| {
+          // we want to find the greatest token that is less than the start of comment
+          // (we can't search for token end == comment start because the
+          // preceding range might be a comment)
+          if t.range.end <= comment.range().start {
+            std::cmp::Ordering::Less
+          } else {
+            std::cmp::Ordering::Greater
+          }
+        })
+        .unwrap_err();
+      // the previous and next tokens
+      match (task_tokens.get(token_pos - 1), task_tokens.get(token_pos)) {
+        (Some(prev), Some(next)) => {
+          // on a different line than the previous and next tokens
+          if text[prev.range.end..comment.range().start].contains('\n')
+            && text[comment.range().end..next.range.start].contains('\n')
+          {
+            let comment_lines = comment.text().trim().split('\n').map(|s| {
+              s.trim().trim_start_matches('*').trim_start().to_string()
+            });
+            comment_texts.extend(comment_lines);
+          } else {
+            continue;
+          }
+        }
+        _ => continue,
+      };
+    }
+
+    new_tasks.insert(
+      prop.name.as_str().to_string(),
+      json!({
+        "comments": comment_texts,
+        "definition": Value::from(prop.value.clone()),
+      }),
+    );
+  }
+
+  Value::Object(new_tasks)
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ParseOptions {
+  pub include_task_comments: bool,
+}
+
 impl ConfigFile {
   pub fn discover(
     config_flag: &ConfigFlag,
     maybe_config_path_args: Option<Vec<PathBuf>>,
     cwd: &Path,
     additional_config_file_names: Option<Vec<&str>>,
+    parse_options: &ParseOptions,
   ) -> Result<Option<ConfigFile>, AnyError> {
     match config_flag {
       ConfigFlag::Disabled => Ok(None),
@@ -488,7 +603,7 @@ impl ConfigFile {
         } else {
           cwd.join(config_path)
         };
-        Ok(Some(ConfigFile::read(&config_path)?))
+        Ok(Some(ConfigFile::read(&config_path, parse_options)?))
       }
       ConfigFlag::Discover => {
         if let Some(config_path_args) = maybe_config_path_args {
@@ -498,6 +613,7 @@ impl ConfigFile {
               &f,
               &mut checked,
               additional_config_file_names.as_ref(),
+              parse_options,
             )? {
               return Ok(Some(cf));
             }
@@ -507,6 +623,7 @@ impl ConfigFile {
             cwd,
             &mut checked,
             additional_config_file_names.as_ref(),
+            parse_options,
           )
         } else {
           Ok(None)
@@ -519,6 +636,7 @@ impl ConfigFile {
     start: &Path,
     checked: &mut HashSet<PathBuf>,
     additional_config_file_names: Option<&Vec<&str>>,
+    parse_options: &ParseOptions,
   ) -> Result<Option<ConfigFile>, AnyError> {
     fn is_skippable_err(e: &AnyError) -> bool {
       if let Some(ioerr) = e.downcast_ref::<std::io::Error>() {
@@ -562,7 +680,7 @@ impl ConfigFile {
       if checked.insert(ancestor.to_path_buf()) {
         for config_filename in &config_file_names {
           let f = ancestor.join(config_filename);
-          match ConfigFile::read(&f) {
+          match ConfigFile::read(&f, parse_options) {
             Ok(cf) => {
               log::debug!("Config file found at '{}'", f.display());
               return Ok(Some(cf));
@@ -581,7 +699,10 @@ impl ConfigFile {
     Ok(None)
   }
 
-  pub fn read(config_path: &Path) -> Result<Self, AnyError> {
+  pub fn read(
+    config_path: &Path,
+    parse_options: &ParseOptions,
+  ) -> Result<Self, AnyError> {
     debug_assert!(config_path.is_absolute());
 
     let specifier = Url::from_file_path(config_path).map_err(|_| {
@@ -590,45 +711,82 @@ impl ConfigFile {
         config_path.display()
       )
     })?;
-    Self::from_specifier_and_path(specifier, config_path)
+    Self::from_specifier_and_path(specifier, config_path, parse_options)
   }
 
-  pub fn from_specifier(specifier: Url) -> Result<Self, AnyError> {
+  pub fn from_specifier(
+    specifier: Url,
+    parse_options: &ParseOptions,
+  ) -> Result<Self, AnyError> {
     let config_path =
       util::specifier_to_file_path(&specifier).with_context(|| {
         format!("Invalid config file path for '{}'.", specifier)
       })?;
-    Self::from_specifier_and_path(specifier, &config_path)
+    Self::from_specifier_and_path(specifier, &config_path, parse_options)
   }
 
   fn from_specifier_and_path(
     specifier: Url,
     config_path: &Path,
+    parse_options: &ParseOptions,
   ) -> Result<Self, AnyError> {
     let text = std::fs::read_to_string(config_path)
       .with_context(|| format!("Error reading config file '{}'.", specifier))?;
-    Self::new(&text, specifier)
+    Self::new(&text, specifier, parse_options)
   }
 
-  pub fn new(text: &str, specifier: Url) -> Result<Self, AnyError> {
-    let jsonc =
-      match jsonc_parser::parse_to_serde_value(text, &Default::default()) {
-        Ok(None) => json!({}),
-        Ok(Some(value)) if value.is_object() => value,
-        Ok(Some(_)) => {
-          return Err(anyhow!(
-            "config file JSON {} should be an object",
-            specifier,
-          ))
+  pub fn new(
+    text: &str,
+    specifier: Url,
+    parse_options: &ParseOptions,
+  ) -> Result<Self, AnyError> {
+    let need_comments_tokens = parse_options.include_task_comments;
+    let jsonc = match jsonc_parser::parse_to_ast(
+      text,
+      &CollectOptions {
+        comments: need_comments_tokens,
+        tokens: need_comments_tokens,
+      },
+      &Default::default(),
+    ) {
+      Ok(ParseResult {
+        comments: Some(comments),
+        value: Some(jsonc_parser::ast::Value::Object(value)),
+        tokens: Some(tokens),
+        ..
+      }) => {
+        let mut value_json =
+          Value::from(jsonc_parser::ast::Value::Object(value.clone()));
+        if let Some(tasks) = value.get_object("tasks") {
+          let decorated_tasks =
+            decorate_tasks_json(text, &tokens, &comments, tasks);
+          value_json["tasks"] = decorated_tasks
         }
-        Err(e) => {
-          return Err(anyhow!(
-            "Unable to parse config file JSON {} because of {}",
-            specifier,
-            e.to_string()
-          ))
-        }
-      };
+        value_json
+      }
+      Ok(ParseResult {
+        comments: None,
+        value: Some(value @ jsonc_parser::ast::Value::Object(_)),
+        tokens: None,
+        ..
+      }) => Value::from(value),
+      Ok(ParseResult { value: None, .. }) => {
+        json!({})
+      }
+      Err(e) => {
+        return Err(anyhow!(
+          "Unable to parse config file JSON {} because of {}",
+          specifier,
+          e.to_string()
+        ))
+      }
+      _ => {
+        return Err(anyhow!(
+          "config file JSON {} should be an object",
+          specifier,
+        ))
+      }
+    };
     let json: ConfigFileJson = serde_json::from_value(jsonc)?;
 
     Ok(Self { specifier, json })
@@ -1137,6 +1295,7 @@ impl ConfigFile {
       let member_config_file = ConfigFile::from_specifier_and_path(
         Url::from_file_path(&member_deno_json).unwrap(),
         &member_deno_json,
+        &ParseOptions::default(),
       )?;
       let Some(package_name) = &member_config_file.json.name else {
         bail!("Missing 'name' for workspace member {}", member);
@@ -1220,11 +1379,10 @@ impl ConfigFile {
 
   pub fn to_tasks_config(
     &self,
-  ) -> Result<Option<IndexMap<String, String>>, AnyError> {
+  ) -> Result<Option<IndexMap<String, Task>>, AnyError> {
     if let Some(config) = self.json.tasks.clone() {
-      let tasks_config: IndexMap<String, String> =
-        serde_json::from_value(config)
-          .context("Failed to parse \"tasks\" configuration")?;
+      let tasks_config: IndexMap<String, Task> = serde_json::from_value(config)
+        .context("Failed to parse \"tasks\" configuration")?;
       Ok(Some(tasks_config))
     } else {
       Ok(None)
@@ -1294,7 +1452,7 @@ impl ConfigFile {
 
   pub fn resolve_tasks_config(
     &self,
-  ) -> Result<IndexMap<String, String>, AnyError> {
+  ) -> Result<IndexMap<String, Task>, AnyError> {
     let maybe_tasks_config = self.to_tasks_config()?;
     let tasks_config = maybe_tasks_config.unwrap_or_default();
     for key in tasks_config.keys() {
@@ -1468,6 +1626,12 @@ mod tests {
   use pretty_assertions::assert_eq;
   use std::path::PathBuf;
 
+  impl Task {
+    fn new(s: impl AsRef<str>) -> Self {
+      Self::Definition(s.as_ref().to_string())
+    }
+  }
+
   #[macro_export]
   macro_rules! assert_contains {
     ($string:expr, $($test:expr),+ $(,)?) => {
@@ -1491,14 +1655,17 @@ mod tests {
   #[test]
   fn read_config_file_absolute() {
     let path = testdata_path().join("module_graph/tsconfig.json");
-    let config_file = ConfigFile::read(path.as_path()).unwrap();
+    let config_file =
+      ConfigFile::read(path.as_path(), &ParseOptions::default()).unwrap();
     assert!(config_file.json.compiler_options.is_some());
   }
 
   #[test]
   fn include_config_path_on_error() {
     let path = testdata_path().join("404.json");
-    let error = ConfigFile::read(path.as_path()).err().unwrap();
+    let error = ConfigFile::read(path.as_path(), &ParseOptions::default())
+      .err()
+      .unwrap();
     assert!(error.to_string().contains("404.json"));
   }
 
@@ -1535,8 +1702,12 @@ mod tests {
     }"#;
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier.clone()).unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier.clone(),
+      &ParseOptions::default(),
+    )
+    .unwrap();
     let (options_value, ignored) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
     let options = options_value.as_object().unwrap();
@@ -1597,11 +1768,11 @@ mod tests {
     let tasks_config = config_file.to_tasks_config().unwrap().unwrap();
     assert_eq!(
       tasks_config["build"],
-      "deno run --allow-read --allow-write build.ts",
+      Task::new("deno run --allow-read --allow-write build.ts"),
     );
     assert_eq!(
       tasks_config["server"],
-      "deno run --allow-net --allow-read server.ts"
+      Task::new("deno run --allow-net --allow-read server.ts"),
     );
 
     assert_eq!(
@@ -1633,7 +1804,9 @@ mod tests {
     }"#;
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let config_dir_path = specifier_to_file_path(&config_dir).unwrap();
 
     let lint_files = unpack_object(config_file.to_lint_config(), "lint").files;
@@ -1701,7 +1874,9 @@ mod tests {
     }"#;
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let lint_include = unpack_object(config_file.to_lint_config(), "lint")
       .files
@@ -1752,7 +1927,9 @@ mod tests {
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let err = config_file.to_fmt_config().err().unwrap();
     assert_eq!(
@@ -1773,7 +1950,9 @@ Caused by:
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let err = config_file.to_lint_config().err().unwrap();
     assert_eq!(
@@ -1804,10 +1983,18 @@ Caused by:
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file_both =
-      ConfigFile::new(config_text_both, config_specifier.clone()).unwrap();
-    let config_file_deprecated =
-      ConfigFile::new(config_text_deprecated, config_specifier).unwrap();
+    let config_file_both = ConfigFile::new(
+      config_text_both,
+      config_specifier.clone(),
+      &ParseOptions::default(),
+    )
+    .unwrap();
+    let config_file_deprecated = ConfigFile::new(
+      config_text_deprecated,
+      config_specifier,
+      &ParseOptions::default(),
+    )
+    .unwrap();
 
     fn unpack_options(config_file: ConfigFile) -> FmtOptionsConfig {
       unpack_object(config_file.to_fmt_config(), "fmt").options
@@ -1824,7 +2011,9 @@ Caused by:
   fn test_parse_config_with_empty_file() {
     let config_text = "";
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
   }
@@ -1833,7 +2022,9 @@ Caused by:
   fn test_parse_config_with_commented_file() {
     let config_text = r#"//{"foo":"bar"}"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
   }
@@ -1848,7 +2039,9 @@ Caused by:
       "bench": {}
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
@@ -1881,7 +2074,9 @@ Caused by:
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
@@ -1904,7 +2099,9 @@ Caused by:
       "exclude": ["npm/"]
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
@@ -1939,7 +2136,12 @@ Caused by:
     let config_text = "{foo:bar}";
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
     // Emit error: Unable to parse config file JSON "<config_path>" because of Unexpected token on line 1 column 6.
-    assert!(ConfigFile::new(config_text, config_specifier).is_err());
+    assert!(ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ParseOptions::default()
+    )
+    .is_err());
   }
 
   #[test]
@@ -1947,14 +2149,21 @@ Caused by:
     let config_text = "[]";
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
     // Emit error: config file JSON "<config_path>" should be an object
-    assert!(ConfigFile::new(config_text, config_specifier).is_err());
+    assert!(ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ParseOptions::default()
+    )
+    .is_err());
   }
 
   #[test]
   fn test_jsx_invalid_setting() {
     let config_text = r#"{ "compilerOptions": { "jsx": "preserve" } }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     assert_eq!(
       config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
       concat!(
@@ -1970,8 +2179,12 @@ Caused by:
     {
       let config_text =
         r#"{ "compilerOptions": { "jsxImportSource": "test" } }"#;
-      let config =
-        ConfigFile::new(config_text, config_specifier.clone()).unwrap();
+      let config = ConfigFile::new(
+        config_text,
+        config_specifier.clone(),
+        &ParseOptions::default(),
+      )
+      .unwrap();
       assert_eq!(
         config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
         concat!(
@@ -1982,7 +2195,12 @@ Caused by:
     }
     {
       let config_text = r#"{ "compilerOptions": { "jsx": "react", "jsxImportSource": "test" } }"#;
-      let config = ConfigFile::new(config_text, config_specifier).unwrap();
+      let config = ConfigFile::new(
+        config_text,
+        config_specifier,
+        &ParseOptions::default(),
+      )
+      .unwrap();
       assert_eq!(
         config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
         concat!(
@@ -1997,7 +2215,12 @@ Caused by:
   fn test_jsx_import_source_valid() {
     let config_text = r#"{ "compilerOptions": { "jsx": "react" } }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    assert!(ConfigFile::new(config_text, config_specifier).is_ok());
+    assert!(ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ParseOptions::default()
+    )
+    .is_ok());
   }
 
   #[test]
@@ -2006,9 +2229,14 @@ Caused by:
     let testdata = testdata_path();
     let c_md = testdata.join("fmt/with_config/subdir/c.md");
     let mut checked = HashSet::new();
-    let config_file = ConfigFile::discover_from(&c_md, &mut checked, None)
-      .unwrap()
-      .unwrap();
+    let config_file = ConfigFile::discover_from(
+      &c_md,
+      &mut checked,
+      None,
+      &ParseOptions::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert!(checked.contains(c_md.parent().unwrap()));
     assert!(!checked.contains(testdata.as_path()));
     let fmt_config = config_file.to_fmt_config().unwrap().unwrap();
@@ -2028,11 +2256,14 @@ Caused by:
     }
 
     // If we call discover_from again starting at testdata, we ought to get None.
-    assert!(
-      ConfigFile::discover_from(testdata.as_path(), &mut checked, None)
-        .unwrap()
-        .is_none()
-    );
+    assert!(ConfigFile::discover_from(
+      testdata.as_path(),
+      &mut checked,
+      None,
+      &ParseOptions::default()
+    )
+    .unwrap()
+    .is_none());
   }
 
   #[test]
@@ -2040,10 +2271,14 @@ Caused by:
     let testdata = testdata_path();
     let dir = testdata.join("additional_files/");
     let mut checked = HashSet::new();
-    let config_file =
-      ConfigFile::discover_from(&dir, &mut checked, Some(&vec!["jsr.json"]))
-        .unwrap()
-        .unwrap();
+    let config_file = ConfigFile::discover_from(
+      &dir,
+      &mut checked,
+      Some(&vec!["jsr.json"]),
+      &ParseOptions::default(),
+    )
+    .unwrap()
+    .unwrap();
     assert!(checked.contains(&dir));
     assert!(!checked.contains(testdata.as_path()));
     assert_eq!(config_file.json.name.unwrap(), "@foo/bar");
@@ -2054,8 +2289,13 @@ Caused by:
     let testdata = testdata_path();
     let d = testdata.join("malformed_config/");
     let mut checked = HashSet::new();
-    let err =
-      ConfigFile::discover_from(d.as_path(), &mut checked, None).unwrap_err();
+    let err = ConfigFile::discover_from(
+      d.as_path(),
+      &mut checked,
+      None,
+      &ParseOptions::default(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("Unable to parse config file"));
   }
 
@@ -2108,7 +2348,9 @@ Caused by:
   fn run_task_error_test(config_text: &str, expected_error: &str) {
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     assert_eq!(
       config_file.resolve_tasks_config().unwrap_err().to_string(),
       expected_error,
@@ -2123,9 +2365,12 @@ Caused by:
 
   #[test]
   fn resolve_lockfile_path_from_unix_path() {
-    let config_file =
-      ConfigFile::new("{}", Url::parse("file:///root/deno.json").unwrap())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      "{}",
+      Url::parse("file:///root/deno.json").unwrap(),
+      &ParseOptions::default(),
+    )
+    .unwrap();
     let lockfile_path = config_file.resolve_lockfile_path().unwrap();
     let lockfile_path = lockfile_path.unwrap();
     assert_eq!(lockfile_path, PathBuf::from("/root/deno.lock"));
@@ -2136,7 +2381,12 @@ Caused by:
     fn get_exports(config_text: &str) -> ExportsConfig {
       let config_dir = Url::parse("file:///deno/").unwrap();
       let config_specifier = config_dir.join("tsconfig.json").unwrap();
-      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+      let config_file = ConfigFile::new(
+        config_text,
+        config_specifier,
+        &ParseOptions::default(),
+      )
+      .unwrap();
       config_file.to_exports_config().unwrap()
     }
 
@@ -2174,7 +2424,12 @@ Caused by:
     fn run_test(config_text: &str, expected_error: &str) {
       let config_dir = Url::parse("file:///deno/").unwrap();
       let config_specifier = config_dir.join("tsconfig.json").unwrap();
-      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+      let config_file = ConfigFile::new(
+        config_text,
+        config_specifier,
+        &ParseOptions::default(),
+      )
+      .unwrap();
       assert_eq!(
         config_file.to_exports_config().unwrap_err().to_string(),
         expected_error,
@@ -2274,7 +2529,12 @@ Caused by:
     fn get_exports(config_text: &str) -> Vec<String> {
       let config_dir = Url::parse("file:///deno/").unwrap();
       let config_specifier = config_dir.join("tsconfig.json").unwrap();
-      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+      let config_file = ConfigFile::new(
+        config_text,
+        config_specifier,
+        &ParseOptions::default(),
+      )
+      .unwrap();
       config_file
         .resolve_export_value_urls()
         .unwrap()
@@ -2313,7 +2573,9 @@ Caused by:
       "workspaces": [],
     }"#;
     let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let workspace_config = config_file.to_workspace_config().unwrap();
     assert!(workspace_config.is_none());
@@ -2325,7 +2587,9 @@ Caused by:
       "workspaces": ["../a"],
     }"#;
     let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let workspace_config_err = config_file.to_workspace_config().unwrap_err();
     assert_contains!(
@@ -2340,7 +2604,9 @@ Caused by:
       "version": "1.0.0"
     }"#;
     let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let err = config_file.to_workspace_members().err().unwrap();
     assert!(err.to_string().ends_with("is missing 'name' field"));
@@ -2352,7 +2618,9 @@ Caused by:
       "name": "@pkg/pkg"
     }"#;
     let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let err = config_file.to_workspace_members().err().unwrap();
     assert!(err.to_string().ends_with("is missing 'version' field"));
@@ -2365,7 +2633,9 @@ Caused by:
       "version": "1.0.0",
     }"#;
     let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
 
     let members = config_file.to_workspace_members().unwrap();
     assert_eq!(members.len(), 1);
@@ -2375,7 +2645,12 @@ Caused by:
   fn test_is_package() {
     fn get_for_config(config_text: &str) -> bool {
       let config_specifier = root_url().join("tsconfig.json").unwrap();
-      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+      let config_file = ConfigFile::new(
+        config_text,
+        config_specifier,
+        &ParseOptions::default(),
+      )
+      .unwrap();
       config_file.is_package()
     }
 
@@ -2420,7 +2695,9 @@ Caused by:
       }
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let result = config_file.to_import_map_from_imports().unwrap();
 
     assert_eq!(
@@ -2441,7 +2718,9 @@ Caused by:
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let result = config_file
       .to_import_map(|_url| async { unreachable!() })
       .await
@@ -2470,7 +2749,9 @@ Caused by:
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let result = config_file
       .to_import_map(|_url| async { unreachable!() })
       .await
@@ -2502,7 +2783,9 @@ Caused by:
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let result = config_file
       .to_import_map(|url| {
         assert_eq!(url, &root_url().join("import_map.json").unwrap());
@@ -2536,7 +2819,9 @@ Caused by:
       "importMap": "https://deno.land/import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let result = config_file
       .to_import_map(|url| {
         assert_eq!(url.as_str(), "https://deno.land/import_map.json");
@@ -2571,7 +2856,9 @@ Caused by:
     }"#;
     let config_specifier =
       Url::parse("https://deno.land/import_map.json").unwrap();
-    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
     let result = config_file
       .to_import_map(|url| {
         assert_eq!(url.as_str(), "https://deno.land/import_map.json");
@@ -2605,5 +2892,83 @@ Caused by:
     } else {
       Url::parse("file:///deno/").unwrap()
     }
+  }
+
+  #[test]
+  fn task_comments() {
+    let config_text = r#"{
+      "tasks": {
+        // dev task
+        "dev": "deno run -A --watch mod.ts",
+        // run task
+        // with multiple line comments
+        "run": "deno run -A mod.ts", // comments not supported here
+        /*
+         * test task
+         * 
+         * with multi-line comments
+         */
+        "test": "deno test",
+        /* we should */ /* ignore these */ "fmt": "deno fmt",
+        "lint": "deno lint"
+        // trailing comments
+      },
+    }"#;
+
+    let config = ConfigFile::new(
+      config_text,
+      root_url().join("deno.jsonc").unwrap(),
+      &ParseOptions {
+        include_task_comments: true,
+      },
+    )
+    .unwrap();
+    assert_eq!(
+      config.resolve_tasks_config().unwrap(),
+      IndexMap::from([
+        (
+          "dev".into(),
+          Task::Commented {
+            definition: "deno run -A --watch mod.ts".into(),
+            comments: vec!["dev task".into()]
+          }
+        ),
+        (
+          "run".into(),
+          Task::Commented {
+            definition: "deno run -A mod.ts".into(),
+            comments: vec![
+              "run task".into(),
+              "with multiple line comments".into()
+            ]
+          }
+        ),
+        (
+          "test".into(),
+          Task::Commented {
+            definition: "deno test".into(),
+            comments: vec![
+              "test task".into(),
+              "".into(),
+              "with multi-line comments".into()
+            ]
+          }
+        ),
+        (
+          "fmt".into(),
+          Task::Commented {
+            definition: "deno fmt".into(),
+            comments: vec![]
+          }
+        ),
+        (
+          "lint".into(),
+          Task::Commented {
+            definition: "deno lint".into(),
+            comments: vec![]
+          }
+        )
+      ])
+    );
   }
 }
