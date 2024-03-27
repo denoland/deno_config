@@ -6,6 +6,9 @@ use anyhow::Context;
 use anyhow::Error as AnyError;
 use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
+use jsonc_parser::common::Ranged;
+use jsonc_parser::CollectOptions;
+use jsonc_parser::ParseResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
@@ -439,6 +442,12 @@ pub enum LockConfig {
   PathBuf(PathBuf),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+pub struct Task {
+  pub comments: Vec<String>,
+  pub definition: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
@@ -470,6 +479,71 @@ pub struct ConfigFileJson {
 pub struct ConfigFile {
   pub specifier: Url,
   pub json: ConfigFileJson,
+}
+
+fn decorate_tasks_json(
+  text: &str,
+  tokens: &[jsonc_parser::tokens::TokenAndRange<'_>],
+  comments: &HashMap<usize, std::rc::Rc<Vec<jsonc_parser::ast::Comment<'_>>>>,
+  tasks: &jsonc_parser::ast::Object,
+) -> Value {
+  let mut new_tasks = serde_json::Map::new();
+
+  // we want to exclude comments that aren't on their own line
+  // so the roundabout method here is to
+  // figure out whether there's a newline between the
+  // previous token and the comment in question
+
+  let task_tokens_start = tokens
+    .iter()
+    .position(|t| t.range.start >= tasks.range.start)
+    .unwrap_or(new_tasks.len());
+  let task_tokens = tokens[task_tokens_start..]
+    .iter()
+    .take_while(|t| t.range.end <= tasks.range.end)
+    .collect::<Vec<_>>();
+
+  for prop in &tasks.properties {
+    let prop_comments =
+      comments.get(&prop.range.start).cloned().unwrap_or_default();
+
+    let mut comment_texts = Vec::with_capacity(prop_comments.len());
+
+    for (idx, comment) in prop_comments.iter().enumerate() {
+      // after the first comment they're all on their own lines
+      if idx == 0 {
+        if let Some(prev_token) = task_tokens
+          .iter()
+          .rev()
+          .find(|t| t.range.end < comment.range().start)
+        {
+          let text_before_comment =
+            &text[prev_token.range.end..comment.range().start];
+          if !text_before_comment.contains('\n') {
+            // the comment is not on its own line
+            continue;
+          }
+        }
+      }
+
+      let comment_lines = comment
+        .text()
+        .split('\n')
+        .map(|s| s.trim().trim_start_matches('*').trim_start().to_string())
+        .filter(|s| s.len() > 0);
+      comment_texts.extend(comment_lines);
+    }
+
+    new_tasks.insert(
+      prop.name.as_str().to_string(),
+      json!({
+        "comments": comment_texts,
+        "definition": Value::from(prop.value.clone()),
+      }),
+    );
+  }
+
+  Value::Object(new_tasks)
 }
 
 impl ConfigFile {
@@ -611,24 +685,46 @@ impl ConfigFile {
   }
 
   pub fn new(text: &str, specifier: Url) -> Result<Self, AnyError> {
-    let jsonc =
-      match jsonc_parser::parse_to_serde_value(text, &Default::default()) {
-        Ok(None) => json!({}),
-        Ok(Some(value)) if value.is_object() => value,
-        Ok(Some(_)) => {
-          return Err(anyhow!(
-            "config file JSON {} should be an object",
-            specifier,
-          ))
+    let jsonc = match jsonc_parser::parse_to_ast(
+      text,
+      &CollectOptions {
+        comments: true,
+        tokens: true,
+        ..Default::default()
+      },
+      &Default::default(),
+    ) {
+      Ok(ParseResult {
+        comments: Some(comments),
+        value: Some(value),
+        tokens: Some(tokens),
+        ..
+      }) if value.as_object().is_some() => {
+        let value_obj = value.as_object().unwrap();
+        let mut value_json = Value::from(value.clone());
+        if let Some(tasks) = value_obj.get_object("tasks") {
+          let new_tasks = decorate_tasks_json(text, &tokens, &comments, tasks);
+          value_json["tasks"] = new_tasks.into();
         }
-        Err(e) => {
-          return Err(anyhow!(
-            "Unable to parse config file JSON {} because of {}",
-            specifier,
-            e.to_string()
-          ))
-        }
-      };
+        value_json
+      }
+      Ok(ParseResult { value: None, .. }) => {
+        json!({})
+      }
+      Err(e) => {
+        return Err(anyhow!(
+          "Unable to parse config file JSON {} because of {}",
+          specifier,
+          e.to_string()
+        ))
+      }
+      _ => {
+        return Err(anyhow!(
+          "config file JSON {} should be an object",
+          specifier,
+        ))
+      }
+    };
     let json: ConfigFileJson = serde_json::from_value(jsonc)?;
 
     Ok(Self { specifier, json })
@@ -1220,11 +1316,10 @@ impl ConfigFile {
 
   pub fn to_tasks_config(
     &self,
-  ) -> Result<Option<IndexMap<String, String>>, AnyError> {
+  ) -> Result<Option<IndexMap<String, Task>>, AnyError> {
     if let Some(config) = self.json.tasks.clone() {
-      let tasks_config: IndexMap<String, String> =
-        serde_json::from_value(config)
-          .context("Failed to parse \"tasks\" configuration")?;
+      let tasks_config: IndexMap<String, Task> = serde_json::from_value(config)
+        .context("Failed to parse \"tasks\" configuration")?;
       Ok(Some(tasks_config))
     } else {
       Ok(None)
@@ -1294,7 +1389,7 @@ impl ConfigFile {
 
   pub fn resolve_tasks_config(
     &self,
-  ) -> Result<IndexMap<String, String>, AnyError> {
+  ) -> Result<IndexMap<String, Task>, AnyError> {
     let maybe_tasks_config = self.to_tasks_config()?;
     let tasks_config = maybe_tasks_config.unwrap_or_default();
     for key in tasks_config.keys() {
@@ -1468,6 +1563,15 @@ mod tests {
   use pretty_assertions::assert_eq;
   use std::path::PathBuf;
 
+  impl Task {
+    fn new(s: impl AsRef<str>) -> Self {
+      Self {
+        definition: s.as_ref().to_string(),
+        ..Default::default()
+      }
+    }
+  }
+
   #[macro_export]
   macro_rules! assert_contains {
     ($string:expr, $($test:expr),+ $(,)?) => {
@@ -1597,11 +1701,11 @@ mod tests {
     let tasks_config = config_file.to_tasks_config().unwrap().unwrap();
     assert_eq!(
       tasks_config["build"],
-      "deno run --allow-read --allow-write build.ts",
+      Task::new("deno run --allow-read --allow-write build.ts"),
     );
     assert_eq!(
       tasks_config["server"],
-      "deno run --allow-net --allow-read server.ts"
+      Task::new("deno run --allow-net --allow-read server.ts"),
     );
 
     assert_eq!(
@@ -2605,5 +2709,67 @@ Caused by:
     } else {
       Url::parse("file:///deno/").unwrap()
     }
+  }
+
+  #[test]
+  fn task_comments() {
+    let config_text = r#"{
+      "tasks": {
+        // dev task
+        "dev": "deno run -A --watch mod.ts",
+        // run task
+        // with multiple line comments
+        "run": "deno run -A mod.ts", // comments not supported here
+        /*
+         * test task
+         * with multi-line comments
+         */
+        "test": "deno test",
+        "lint": "deno lint"
+      },
+    }"#;
+
+    let config =
+      ConfigFile::new(config_text, root_url().join("deno.jsonc").unwrap())
+        .unwrap();
+    assert_eq!(
+      config.resolve_tasks_config().unwrap(),
+      IndexMap::from([
+        (
+          "dev".into(),
+          Task {
+            definition: "deno run -A --watch mod.ts".into(),
+            comments: vec!["dev task".into()]
+          }
+        ),
+        (
+          "run".into(),
+          Task {
+            definition: "deno run -A mod.ts".into(),
+            comments: vec![
+              "run task".into(),
+              "with multiple line comments".into()
+            ]
+          }
+        ),
+        (
+          "test".into(),
+          Task {
+            definition: "deno test".into(),
+            comments: vec![
+              "test task".into(),
+              "with multi-line comments".into()
+            ]
+          }
+        ),
+        (
+          "lint".into(),
+          Task {
+            definition: "deno lint".into(),
+            comments: vec![]
+          }
+        )
+      ])
+    );
   }
 }
