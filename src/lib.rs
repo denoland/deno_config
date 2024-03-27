@@ -710,13 +710,13 @@ impl ConfigFile {
     ) {
       Ok(ParseResult {
         comments: Some(comments),
-        value: Some(value),
+        value: Some(jsonc_parser::ast::Value::Object(value)),
         tokens: Some(tokens),
         ..
-      }) if value.as_object().is_some() => {
-        let value_obj = value.as_object().unwrap();
-        let mut value_json = Value::from(value.clone());
-        if let Some(tasks) = value_obj.get_object("tasks") {
+      }) => {
+        let mut value_json =
+          Value::from(jsonc_parser::ast::Value::Object(value.clone()));
+        if let Some(tasks) = value.get_object("tasks") {
           let decorated_tasks =
             decorate_tasks_json(text, &tokens, &comments, tasks);
           value_json["tasks"] = decorated_tasks
