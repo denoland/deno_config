@@ -14,6 +14,7 @@ use url::Url;
 #[derive(Debug, Clone, Hash)]
 pub struct JsxImportSourceConfig {
   pub default_specifier: Option<String>,
+  pub default_types_specifier: Option<String>,
   pub module: String,
   pub base_url: Url,
 }
@@ -24,6 +25,15 @@ impl JsxImportSourceConfig {
       .default_specifier
       .as_ref()
       .map(|default_specifier| format!("{}/{}", default_specifier, self.module))
+  }
+
+  pub fn maybe_types_specifier_text(&self) -> Option<String> {
+    self
+      .default_types_specifier
+      .as_ref()
+      .map(|default_types_specifier| {
+        format!("{}/{}", default_types_specifier, self.module)
+      })
   }
 }
 
@@ -52,6 +62,7 @@ pub struct EmitConfigOptions {
 pub struct CompilerOptions {
   pub jsx: Option<String>,
   pub jsx_import_source: Option<String>,
+  pub jsx_import_source_types: Option<String>,
   pub types: Option<Vec<String>>,
 }
 
@@ -168,7 +179,10 @@ pub fn parse_compiler_options(
     // options and instead provide those to tsc as "roots". This is
     // because our "types" behavior is at odds with how TypeScript's
     // "types" works.
-    if key != "types" {
+    // We also don't pass "jsxImportSourceTypes" to TypeScript as it doesn't
+    // know about this option. It will still take this option into account
+    // because the graph resolves the JSX import source to the types for TSC.
+    if key != "types" && key != "jsxImportSourceTypes" {
       if IGNORED_COMPILER_OPTIONS.contains(&key) {
         items.push(key.to_string());
       } else {
