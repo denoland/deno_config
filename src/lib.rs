@@ -2224,6 +2224,18 @@ Caused by:
   }
 
   #[test]
+  fn test_jsx_precompile_skip_setting() {
+    let config_text = r#"{ "compilerOptions": { "jsx": "precompile", "jsxPrecompileSkipElements": ["a", "p"] } }"#;
+    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    assert!(ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ParseOptions::default()
+    )
+    .is_ok());
+  }
+
+  #[test]
   fn discover_from_success() {
     // testdata/fmt/deno.jsonc exists
     let testdata = testdata_path();

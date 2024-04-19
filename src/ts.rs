@@ -43,6 +43,7 @@ pub struct EmitConfigOptions {
   pub jsx_factory: String,
   pub jsx_fragment_factory: String,
   pub jsx_import_source: Option<String>,
+  pub jsx_precompile_skip_elements: Option<Vec<String>>,
 }
 
 /// There are certain compiler options that can impact what modules are part of
