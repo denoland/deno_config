@@ -2614,6 +2614,42 @@ Caused by:
   }
 
   #[test]
+  fn test_workspaces_json_jsonc() {
+    let temp_dir = tempfile::TempDir::new().unwrap(); 
+    let config_text = r#"{
+      "workspaces": [
+        "./a",
+        "./b",
+      ],
+    }"#;
+    let config_text_a = r#"{
+      "name": "a",
+      "version": "0.1.0"
+    }"#;
+    let config_text_b = r#"{
+      "name": "b",
+      "version": "0.2.0"
+    }"#;
+
+    let temp_dir_path = temp_dir.path();
+    std::fs::write(temp_dir_path.join("deno.json"), config_text).unwrap();
+    std::fs::create_dir(temp_dir_path.join("a")).unwrap();
+    std::fs::write(temp_dir_path.join("a/deno.json"), config_text_a).unwrap();
+    std::fs::create_dir(temp_dir_path.join("b")).unwrap();
+    std::fs::write(temp_dir_path.join("b/deno.jsonc"), config_text_b).unwrap();
+
+    let config_specifier = Url::from_file_path(temp_dir_path.join("deno.json")).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
+
+    let workspace_config = config_file.to_workspace_config().unwrap().unwrap();
+    assert_eq!(workspace_config.members.len(), 2);
+    assert_eq!(workspace_config.members[0].package_version, "0.1.0");
+    assert_eq!(workspace_config.members[1].package_version, "0.2.0");
+  }
+
+  #[test]
   fn test_to_workspace_members_no_name() {
     let config_text = r#"{
       "version": "1.0.0"
