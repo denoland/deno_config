@@ -2615,7 +2615,7 @@ Caused by:
 
   #[test]
   fn test_workspaces_json_jsonc() {
-    let temp_dir = tempfile::TempDir::new().unwrap(); 
+    let temp_dir = tempfile::TempDir::new().unwrap();
     let config_text = r#"{
       "workspaces": [
         "./a",
@@ -2638,7 +2638,8 @@ Caused by:
     std::fs::create_dir(temp_dir_path.join("b")).unwrap();
     std::fs::write(temp_dir_path.join("b/deno.jsonc"), config_text_b).unwrap();
 
-    let config_specifier = Url::from_file_path(temp_dir_path.join("deno.json")).unwrap();
+    let config_specifier =
+      Url::from_file_path(temp_dir_path.join("deno.json")).unwrap();
     let config_file =
       ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
         .unwrap();
