@@ -1284,13 +1284,16 @@ impl ConfigFile {
         );
       }
       all_member_paths_and_names.push((member_path.clone(), member.clone()));
-      let member_deno_json = member_path.as_path().join("deno.json");
+      let mut member_deno_json = member_path.as_path().join("deno.json");
       if !member_deno_json.exists() {
-        bail!(
-          "Workspace member '{}' has no deno.json file ('{}')",
-          member,
-          member_deno_json.display()
-        );
+        member_deno_json = member_path.as_path().join("deno.jsonc");
+        if !member_deno_json.exists() {
+          bail!(
+            "Workspace member '{}' has no deno.json or deno.jsonc ('{}')",
+            member,
+            member_path.display()
+          );
+        }
       }
       let member_config_file = ConfigFile::from_specifier_and_path(
         Url::from_file_path(&member_deno_json).unwrap(),
