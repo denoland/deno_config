@@ -1284,13 +1284,16 @@ impl ConfigFile {
         );
       }
       all_member_paths_and_names.push((member_path.clone(), member.clone()));
-      let member_deno_json = member_path.as_path().join("deno.json");
+      let mut member_deno_json = member_path.as_path().join("deno.json");
       if !member_deno_json.exists() {
-        bail!(
-          "Workspace member '{}' has no deno.json file ('{}')",
-          member,
-          member_deno_json.display()
-        );
+        member_deno_json = member_path.as_path().join("deno.jsonc");
+        if !member_deno_json.exists() {
+          bail!(
+            "Workspace member '{}' has no deno.json or deno.jsonc ('{}')",
+            member,
+            member_path.display()
+          );
+        }
       }
       let member_config_file = ConfigFile::from_specifier_and_path(
         Url::from_file_path(&member_deno_json).unwrap(),
@@ -2608,6 +2611,43 @@ Caused by:
       workspace_config_err.to_string(),
       "Workspace member '../a' is outside root configuration directory"
     );
+  }
+
+  #[test]
+  fn test_workspaces_json_jsonc() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let config_text = r#"{
+      "workspaces": [
+        "./a",
+        "./b",
+      ],
+    }"#;
+    let config_text_a = r#"{
+      "name": "a",
+      "version": "0.1.0"
+    }"#;
+    let config_text_b = r#"{
+      "name": "b",
+      "version": "0.2.0"
+    }"#;
+
+    let temp_dir_path = temp_dir.path();
+    std::fs::write(temp_dir_path.join("deno.json"), config_text).unwrap();
+    std::fs::create_dir(temp_dir_path.join("a")).unwrap();
+    std::fs::write(temp_dir_path.join("a/deno.json"), config_text_a).unwrap();
+    std::fs::create_dir(temp_dir_path.join("b")).unwrap();
+    std::fs::write(temp_dir_path.join("b/deno.jsonc"), config_text_b).unwrap();
+
+    let config_specifier =
+      Url::from_file_path(temp_dir_path.join("deno.json")).unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
+
+    let workspace_config = config_file.to_workspace_config().unwrap().unwrap();
+    assert_eq!(workspace_config.members.len(), 2);
+    assert_eq!(workspace_config.members[0].package_version, "0.1.0");
+    assert_eq!(workspace_config.members[1].package_version, "0.2.0");
   }
 
   #[test]
