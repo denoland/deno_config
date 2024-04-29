@@ -22,6 +22,7 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use url::Url;
+use util::normalize_path;
 use util::specifier_to_file_path;
 
 pub mod glob;
@@ -598,11 +599,11 @@ impl ConfigFile {
       ConfigFlag::Disabled => Ok(None),
       ConfigFlag::Path(config_path) => {
         let config_path = PathBuf::from(config_path);
-        let config_path = if config_path.is_absolute() {
+        let config_path = normalize_path(if config_path.is_absolute() {
           config_path
         } else {
           cwd.join(config_path)
-        };
+        });
         Ok(Some(ConfigFile::read(&config_path, parse_options)?))
       }
       ConfigFlag::Discover => {
@@ -839,7 +840,7 @@ impl ConfigFile {
       // people may specify a file path without a leading `./` so
       // this handles that
       let path = config_file_path.parent().unwrap().join(value);
-      Url::from_file_path(&path)
+      Url::from_file_path(normalize_path(&path))
         .map_err(|()| {
           anyhow::anyhow!("Failed converting {} to url.", path.display())
         })
@@ -3021,6 +3022,23 @@ Caused by:
           }
         )
       ])
+    );
+  }
+
+  #[test]
+  fn resolve_import_map_specifier_parent() {
+    let config_text = r#"{ "importMap": "../import_map.json" }"#;
+    let config_specifier = Url::parse("file:///deno/sub/deno.json").unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
+        .unwrap();
+    assert_eq!(
+      config_file
+        .to_import_map_specifier()
+        .unwrap()
+        .unwrap()
+        .as_str(),
+      "file:///deno/import_map.json"
     );
   }
 }
