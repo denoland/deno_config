@@ -1438,6 +1438,12 @@ impl ConfigFile {
             self.specifier,
           );
         }
+        if compiler_options.jsx_import_source_types.is_some() {
+          bail!(
+            "'jsxImportSourceTypes' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n  at {}",
+            self.specifier,
+          )
+        }
         return Ok(None);
       }
       Some("precompile") => "jsx-runtime".to_string(),
@@ -1449,6 +1455,7 @@ impl ConfigFile {
     };
     Ok(Some(JsxImportSourceConfig {
       default_specifier: compiler_options.jsx_import_source,
+      default_types_specifier: compiler_options.jsx_import_source_types,
       module,
       base_url: self.specifier.clone(),
     }))
@@ -2209,6 +2216,44 @@ Caused by:
         config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
         concat!(
           "'jsxImportSource' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n",
+          "  at file:///deno/tsconfig.json",
+        ),
+      );
+    }
+  }
+
+  #[test]
+  fn test_jsx_import_source_types_only() {
+    let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
+    {
+      let config_text =
+        r#"{ "compilerOptions": { "jsxImportSourceTypes": "test" } }"#;
+      let config = ConfigFile::new(
+        config_text,
+        config_specifier.clone(),
+        &ParseOptions::default(),
+      )
+      .unwrap();
+      assert_eq!(
+        config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
+        concat!(
+          "'jsxImportSourceTypes' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n",
+          "  at file:///deno/tsconfig.json",
+        ),
+      );
+    }
+    {
+      let config_text = r#"{ "compilerOptions": { "jsx": "react", "jsxImportSourceTypes": "test" } }"#;
+      let config = ConfigFile::new(
+        config_text,
+        config_specifier,
+        &ParseOptions::default(),
+      )
+      .unwrap();
+      assert_eq!(
+        config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
+        concat!(
+          "'jsxImportSourceTypes' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n",
           "  at file:///deno/tsconfig.json",
         ),
       );
