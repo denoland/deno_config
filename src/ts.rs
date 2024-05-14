@@ -48,6 +48,7 @@ pub struct EmitConfigOptions {
   pub imports_not_used_as_values: String,
   pub inline_source_map: bool,
   pub inline_sources: bool,
+  pub remove_comments: bool,
   pub source_map: bool,
   pub jsx: String,
   pub jsx_factory: String,
