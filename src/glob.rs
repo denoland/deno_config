@@ -30,7 +30,7 @@ pub enum PathKind {
   Directory,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct FilePatterns {
   /// Default traversal base used when calling `split_by_base()` without
   /// any `include` patterns.
@@ -278,14 +278,14 @@ impl FilePatterns {
   }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum PathOrPatternsMatch {
   Matched,
   NotMatched,
   Excluded,
 }
 
-#[derive(Clone, Default, Debug, Eq, PartialEq)]
+#[derive(Clone, Default, Debug, Hash, Eq, PartialEq)]
 pub struct PathOrPatternSet(Vec<PathOrPattern>);
 
 impl PathOrPatternSet {
@@ -414,7 +414,7 @@ impl PathOrPatternSet {
   }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum PathOrPattern {
   Path(PathBuf),
   NegatedPath(PathBuf),
