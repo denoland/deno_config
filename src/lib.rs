@@ -473,8 +473,8 @@ pub struct ConfigFileJson {
 
   pub name: Option<String>,
   pub version: Option<String>,
-  #[serde(default)]
-  pub workspaces: Vec<String>,
+  #[serde(alias = "workspaces")]
+  pub workspace: Option<Vec<String>>,
   pub exports: Option<Value>,
   #[serde(default)]
   pub unstable: Vec<String>,
@@ -1260,18 +1260,22 @@ impl ConfigFile {
       return Ok(None);
     };
 
-    if self.json.workspaces.is_empty() {
+    let Some(workspace) = &self.json.workspace else {
       return Ok(None);
+    };
+
+    if workspace.is_empty() {
+      bail!("Workspace members cannot be empty");
     }
 
     let config_file_directory = config_file_path.parent().unwrap();
     let config_file_directory_url =
       Url::from_directory_path(config_file_directory).unwrap();
-    let mut members = Vec::with_capacity(self.json.workspaces.len());
+    let mut members = Vec::with_capacity(workspace.len());
 
     let mut all_member_paths_and_names: Vec<(PathBuf, String)> = vec![];
 
-    for member in self.json.workspaces.iter() {
+    for member in workspace.iter() {
       let member_path_url = config_file_directory_url.join(member)?;
       let member_path = member_path_url.to_file_path().unwrap();
       if !member_path_url
@@ -2638,8 +2642,11 @@ Caused by:
       ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
         .unwrap();
 
-    let workspace_config = config_file.to_workspace_config().unwrap();
-    assert!(workspace_config.is_none());
+    let workspace_config_err = config_file.to_workspace_config().unwrap_err();
+    assert_eq!(
+      workspace_config_err.to_string(),
+      "Workspace members cannot be empty"
+    );
   }
 
   #[test]
@@ -3003,7 +3010,7 @@ Caused by:
         "run": "deno run -A mod.ts", // comments not supported here
         /*
          * test task
-         * 
+         *
          * with multi-line comments
          */
         "test": "deno test",
