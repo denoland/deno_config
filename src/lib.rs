@@ -2769,7 +2769,7 @@ Caused by:
         "version": "1.0.0"
       }"#
     ));
-    assert!(!get_for_config(
+    assert!(get_for_config(
       r#"{
         "name": "test",
         "exports": "./mod.ts"
