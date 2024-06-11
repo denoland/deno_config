@@ -939,9 +939,7 @@ impl ConfigFile {
   }
 
   pub fn is_package(&self) -> bool {
-    self.json.name.is_some()
-      && self.json.version.is_some()
-      && self.json.exports.is_some()
+    self.json.name.is_some() && self.json.exports.is_some()
   }
 
   pub fn has_unstable(&self, name: &str) -> bool {
@@ -2771,7 +2769,7 @@ Caused by:
         "version": "1.0.0"
       }"#
     ));
-    assert!(!get_for_config(
+    assert!(get_for_config(
       r#"{
         "name": "test",
         "exports": "./mod.ts"
