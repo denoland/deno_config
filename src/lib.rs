@@ -939,9 +939,7 @@ impl ConfigFile {
   }
 
   pub fn is_package(&self) -> bool {
-    self.json.name.is_some()
-      && self.json.version.is_some()
-      && self.json.exports.is_some()
+    self.json.name.is_some() && self.json.exports.is_some()
   }
 
   pub fn has_unstable(&self, name: &str) -> bool {
