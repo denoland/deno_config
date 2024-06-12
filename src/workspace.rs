@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use thiserror::Error;
 use url::Url;
 
@@ -60,13 +61,177 @@ pub struct WorkspaceDiscoverOptions<'a> {
   pub discover_pkg_json: bool,
 }
 
-pub struct Workspace {}
+#[derive(Debug, Default, Clone)]
+pub struct FolderConfigs {
+  pub config: Option<Arc<ConfigFile>>,
+  pub pkg_json: Option<Arc<PackageJson>>,
+}
+
+#[derive(Debug)]
+pub struct Workspace {
+  root_dir: Url,
+  config_folders: IndexMap<Url, FolderConfigs>,
+}
 
 impl Workspace {
   pub fn discover(
-    opts: WorkspaceDiscoverOptions,
+    opts: &WorkspaceDiscoverOptions,
   ) -> Result<Self, WorkspaceDiscoverError> {
-    Ok(Self {})
+    let config_file_discovery = discover_workspace_config_files(opts)?;
+    let maybe_npm_discovery = if opts.discover_pkg_json {
+      discover_with_npm(&config_file_discovery, opts)?
+    } else {
+      PackageJsonDiscovery::None
+    };
+
+    // todo(THIS PR): REMOVE
+    // let root_dir = match &config_file_discovery {
+    //   ConfigFileDiscovery::None => {
+    //     //
+    //     match &maybe_npm_discovery {
+    //       PackageJsonDiscovery::None => {
+    //         Url::from_directory_path(opts.start).unwrap()
+    //       }
+    //       PackageJsonDiscovery::Single(pkg_json)
+    //       | PackageJsonDiscovery::Workspace { root: pkg_json, .. } => {
+    //         Url::from_directory_path(&pkg_json.path.parent().unwrap()).unwrap()
+    //       }
+    //     }
+    //   }
+    //   ConfigFileDiscovery::Workspace { root: config, .. }
+    //   | ConfigFileDiscovery::Single(config) => {
+    //     // the npm lookup won't look further than this directory
+    //     let config_file_path = specifier_to_file_path(&config.specifier)?;
+    //     Url::from_directory_path(&config_file_path.parent().unwrap()).unwrap()
+    //   }
+    // };
+
+    let mut workspace = match config_file_discovery {
+      ConfigFileDiscovery::None => {
+        let root_dir = Url::from_directory_path(opts.start).unwrap();
+        Workspace {
+          config_folders: IndexMap::from([(
+            root_dir.clone(),
+            FolderConfigs::default(),
+          )]),
+          root_dir,
+        }
+      }
+      ConfigFileDiscovery::Single(config) => {
+        let config_file_path = specifier_to_file_path(&config.specifier)?;
+        let root_dir = config_file_path.parent().unwrap();
+        let root_dir = Url::from_directory_path(&root_dir).unwrap();
+        Workspace {
+          config_folders: IndexMap::from([(
+            root_dir.clone(),
+            FolderConfigs {
+              config: Some(config),
+              pkg_json: None,
+            },
+          )]),
+          root_dir,
+        }
+      }
+      ConfigFileDiscovery::Workspace { root, members } => {
+        let root_config_file_path = specifier_to_file_path(&root.specifier)?;
+        let root_dir = root_config_file_path.parent().unwrap();
+        let root_dir = Url::from_directory_path(&root_dir).unwrap();
+        let mut config_folders = members
+          .into_iter()
+          .map(|(folder_url, config)| {
+            (
+              folder_url,
+              match config {
+                DenoOrPkgJson::Deno(config_file) => FolderConfigs {
+                  config: Some(config_file),
+                  pkg_json: None,
+                },
+                DenoOrPkgJson::PkgJson(pkg_json) => FolderConfigs {
+                  config: None,
+                  pkg_json: Some(pkg_json),
+                },
+              },
+            )
+          })
+          .collect::<IndexMap<_, _>>();
+        config_folders.entry(root_dir.clone()).or_default().config = Some(root);
+        Workspace {
+          root_dir,
+          config_folders,
+        }
+      }
+    };
+    match maybe_npm_discovery {
+      PackageJsonDiscovery::Single(pkg_json) => {
+        let pkg_json_dir =
+          Url::from_directory_path(&pkg_json.path.parent().unwrap()).unwrap();
+        if workspace
+          .root_dir
+          .as_str()
+          .starts_with(pkg_json_dir.as_str())
+        {
+          // the package.json was in a higher up directory
+          workspace.root_dir = pkg_json_dir.clone();
+        }
+
+        workspace
+          .config_folders
+          .entry(pkg_json_dir)
+          .or_default()
+          .pkg_json = Some(pkg_json);
+      }
+      PackageJsonDiscovery::Workspace { root, members } => {
+        let pkg_json_dir =
+          Url::from_directory_path(&root.path.parent().unwrap()).unwrap();
+        if workspace
+          .root_dir
+          .as_str()
+          .starts_with(pkg_json_dir.as_str())
+        {
+          // the package.json was in a higher up directory
+          workspace.root_dir = pkg_json_dir;
+        }
+
+        for (member_dir, pkg_json) in members {
+          workspace
+            .config_folders
+            .entry(member_dir)
+            .or_default()
+            .pkg_json = Some(pkg_json);
+        }
+      }
+      PackageJsonDiscovery::None => {
+        // do nothing
+      }
+    }
+
+    Ok(workspace)
+  }
+
+  pub fn root_folder(&self) -> (&Url, &FolderConfigs) {
+    (
+      &self.root_dir,
+      self.config_folders.get(&self.root_dir).unwrap(),
+    )
+  }
+
+  pub fn resolve_folder(
+    &self,
+    specifier: &Url,
+  ) -> Option<(&Url, &FolderConfigs)> {
+    let mut best_match: Option<(&Url, &FolderConfigs)> = None;
+    // it would be nice if we could store this config_folders relative to
+    // the root, but the members might appear outside the root folder
+    for (dir_url, config) in &self.config_folders {
+      if specifier.as_str().starts_with(dir_url.as_str()) {
+        if best_match.is_none()
+          || dir_url.as_str().len() > best_match.unwrap().0.as_str().len()
+        {
+          best_match = Some((dir_url, config));
+        }
+      }
+    }
+    best_match
   }
 }
 
@@ -86,7 +251,7 @@ enum ConfigFileDiscovery {
 }
 
 fn discover_workspace_config_files(
-  opts: WorkspaceDiscoverOptions,
+  opts: &WorkspaceDiscoverOptions,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
   // todo(dsherret): we can remove this checked hashset
   let mut checked = HashSet::new();
@@ -236,7 +401,7 @@ enum PackageJsonDiscovery {
 
 fn discover_with_npm(
   config_file_discovery: &ConfigFileDiscovery,
-  opts: WorkspaceDiscoverOptions,
+  opts: &WorkspaceDiscoverOptions,
 ) -> Result<PackageJsonDiscovery, WorkspaceDiscoverError> {
   let mut found_configs: HashMap<_, PackageJson> = HashMap::new();
   let mut first_config_file = None;
@@ -320,6 +485,14 @@ fn discover_with_npm(
           Arc::new(pkg_json),
         );
       }
+
+      // just include any remaining found configs as workspace members
+      // instead of erroring for now
+      for (path, config) in found_configs {
+        let url = Url::from_file_path(&path).unwrap();
+        final_members.insert(url, Arc::new(config));
+      }
+
       return Ok(PackageJsonDiscovery::Workspace {
         root: Arc::new(pkg_json),
         members: final_members,
