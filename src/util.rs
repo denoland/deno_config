@@ -1,11 +1,9 @@
-// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::bail;
-use anyhow::Error as AnyError;
-use serde_json::Value;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use thiserror::Error;
 use url::Url;
 
 /// Gets the parent of this module specifier.
@@ -27,10 +25,16 @@ pub fn specifier_parent(specifier: &Url) -> Url {
   specifier
 }
 
+#[derive(Debug, Error)]
+#[error("Could not convert specifier to file path.\n  Specifier: {0}")]
+pub struct SpecifierToFilePathError(Url);
+
 /// Attempts to convert a specifier to a file path. By default, uses the Url
 /// crate's `to_file_path()` method, but falls back to try and resolve unix-style
 /// paths on Windows.
-pub fn specifier_to_file_path(specifier: &Url) -> Result<PathBuf, AnyError> {
+pub fn specifier_to_file_path(
+  specifier: &Url,
+) -> Result<PathBuf, SpecifierToFilePathError> {
   let result = if specifier.scheme() != "file" {
     Err(())
   } else if cfg!(windows) {
@@ -62,7 +66,7 @@ pub fn specifier_to_file_path(specifier: &Url) -> Result<PathBuf, AnyError> {
   };
   match result {
     Ok(path) => Ok(path),
-    Err(()) => bail!("Invalid file path.\n  Specifier: {specifier}"),
+    Err(()) => Err(SpecifierToFilePathError(specifier.clone())),
   }
 }
 
@@ -104,45 +108,9 @@ pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
   inner(path.as_ref())
 }
 
-/// A function that works like JavaScript's `Object.assign()`.
-pub fn json_merge(a: &mut Value, b: &Value) {
-  match (a, b) {
-    (&mut Value::Object(ref mut a), Value::Object(b)) => {
-      for (k, v) in b {
-        json_merge(a.entry(k.clone()).or_insert(Value::Null), v);
-      }
-    }
-    (a, b) => {
-      *a = b.clone();
-    }
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
-  use serde_json::json;
-
-  #[test]
-  fn test_json_merge() {
-    let mut value_a = json!({
-      "a": true,
-      "b": "c"
-    });
-    let value_b = json!({
-      "b": "d",
-      "e": false,
-    });
-    json_merge(&mut value_a, &value_b);
-    assert_eq!(
-      value_a,
-      json!({
-        "a": true,
-        "b": "d",
-        "e": false,
-      })
-    );
-  }
 
   #[test]
   fn test_specifier_parent() {

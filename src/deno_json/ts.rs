@@ -1,4 +1,4 @@
-// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
 use anyhow::Error as AnyError;
 use serde::Deserialize;
@@ -241,7 +241,7 @@ impl TsConfig {
 
   /// Merge a serde_json value into the configuration.
   pub fn merge(&mut self, value: &Value) {
-    super::util::json_merge(&mut self.0, value);
+    json_merge(&mut self.0, value);
   }
 
   /// Take an optional user provided config file
@@ -250,7 +250,7 @@ impl TsConfig {
   /// compiler options that were ignored.
   pub fn merge_tsconfig_from_config_file(
     &mut self,
-    maybe_config_file: Option<&super::ConfigFile>,
+    maybe_config_file: Option<&crate::deno_json::ConfigFile>,
   ) -> Result<Option<IgnoredCompilerOptions>, AnyError> {
     if let Some(config_file) = maybe_config_file {
       let (value, maybe_ignored_options) = config_file.to_compiler_options()?;
@@ -269,6 +269,20 @@ impl Serialize for TsConfig {
     S: Serializer,
   {
     Serialize::serialize(&self.0, serializer)
+  }
+}
+
+/// A function that works like JavaScript's `Object.assign()`.
+fn json_merge(a: &mut Value, b: &Value) {
+  match (a, b) {
+    (&mut Value::Object(ref mut a), Value::Object(b)) => {
+      for (k, v) in b {
+        json_merge(a.entry(k.clone()).or_insert(Value::Null), v);
+      }
+    }
+    (a, b) => {
+      *a = b.clone();
+    }
   }
 }
 
@@ -295,5 +309,26 @@ mod tests {
       "target": "es5",
     }));
     assert_eq!(tsconfig1.as_bytes(), tsconfig2.as_bytes());
+  }
+
+  #[test]
+  fn test_json_merge() {
+    let mut value_a = json!({
+      "a": true,
+      "b": "c"
+    });
+    let value_b = json!({
+      "b": "d",
+      "e": false,
+    });
+    json_merge(&mut value_a, &value_b);
+    assert_eq!(
+      value_a,
+      json!({
+        "a": true,
+        "b": "d",
+        "e": false,
+      })
+    );
   }
 }
