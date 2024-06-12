@@ -431,8 +431,7 @@ impl PathOrPattern {
       let url =
         Url::parse(path).with_context(|| format!("Invalid URL '{}'", path))?;
       if url.scheme() == "file" {
-        let path = url
-          .to_file_path()
+        let path = specifier_to_file_path(&url)
           .map_err(|_| anyhow::anyhow!("Invalid file URL '{}'", path))?;
         return Ok(Self::Path(path));
       } else {

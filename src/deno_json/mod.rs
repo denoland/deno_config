@@ -28,6 +28,7 @@ use crate::fs::DenoConfigFs;
 use crate::fs::RealDenoConfigFs;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPatternSet;
+use crate::util::is_skippable_io_error;
 use crate::util::normalize_path;
 use crate::util::specifier_parent;
 use crate::util::specifier_to_file_path;
@@ -694,8 +695,8 @@ impl ConfigFile {
 
   /// Filenames that Deno will recognize when discovering config.
   pub(crate) fn resolve_config_file_names<'a>(
-    additional_config_file_names: &'a [&'a str],
-  ) -> Cow<'static, [&'a str]> {
+    additional_config_file_names: &[&'a str],
+  ) -> Cow<'a, [&'a str]> {
     const CONFIG_FILE_NAMES: [&str; 2] = ["deno.json", "deno.jsonc"];
     if additional_config_file_names.is_empty() {
       Cow::Borrowed(&CONFIG_FILE_NAMES)
@@ -719,17 +720,7 @@ impl ConfigFile {
   ) -> Result<Option<ConfigFile>, ConfigFileReadError> {
     fn is_skippable_err(e: &ConfigFileReadError) -> bool {
       if let ConfigFileReadError::FailedReading { source: ioerr, .. } = e {
-        use std::io::ErrorKind::*;
-        match ioerr.kind() {
-          InvalidInput | PermissionDenied | NotFound => {
-            // ok keep going
-            true
-          }
-          _ => {
-            const NOT_A_DIRECTORY: i32 = 20;
-            cfg!(unix) && ioerr.raw_os_error() == Some(NOT_A_DIRECTORY)
-          }
-        }
+        is_skippable_io_error(ioerr)
       } else {
         false
       }

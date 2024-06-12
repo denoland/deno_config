@@ -6,6 +6,20 @@ use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
 
+pub fn is_skippable_io_error(e: &std::io::Error) -> bool {
+  use std::io::ErrorKind::*;
+  match e.kind() {
+    InvalidInput | PermissionDenied | NotFound => {
+      // ok keep going
+      true
+    }
+    _ => {
+      const NOT_A_DIRECTORY: i32 = 20;
+      cfg!(unix) && e.raw_os_error() == Some(NOT_A_DIRECTORY)
+    }
+  }
+}
+
 /// Gets the parent of this module specifier.
 pub fn specifier_parent(specifier: &Url) -> Url {
   let mut specifier = specifier.clone();
@@ -62,6 +76,8 @@ pub fn specifier_to_file_path(
       }
     }
   } else {
+    // allowed because the custom clippy rule says to use this code
+    #[allow(clippy::disallowed_methods)]
     specifier.to_file_path()
   };
   match result {
