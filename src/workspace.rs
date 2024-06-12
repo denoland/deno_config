@@ -15,10 +15,14 @@ use url::Url;
 use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::ConfigParseOptions;
+use crate::glob::FilePatterns;
+use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonReadError;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_to_file_path;
+use crate::LintConfig;
+use crate::LintRulesConfig;
 use crate::SpecifierToFilePathError;
 
 #[derive(Debug, Error)]
@@ -209,6 +213,81 @@ impl Workspace {
     Ok(workspace)
   }
 
+  /// Resolves a workspace member's context, which can be used for deriving
+  /// configuration specific to a member.
+  pub fn resolve_member_ctxt(
+    &self,
+    specifier: &Url,
+  ) -> WorkspaceMemberContext<'_> {
+    let maybe_folder = self.resolve_folder(specifier);
+    match maybe_folder {
+      Some((member_url, folder)) => {
+        if member_url == &self.root_dir {
+          WorkspaceMemberContext::create_from_root_folder(folder)
+        } else {
+          let maybe_deno_json = folder
+            .config
+            .as_ref()
+            .map(|c| (member_url, c))
+            .or_else(|| {
+              let parent = parent_specifier_str(member_url.as_str())?;
+              self.resolve_deno_json_str(parent)
+            })
+            .or_else(|| {
+              let root = self.config_folders.get(&self.root_dir).unwrap();
+              root.config.as_ref().map(|c| (&self.root_dir, c))
+            });
+          WorkspaceMemberContext {
+            pkg_json: folder.pkg_json.as_ref(),
+            deno_json: maybe_deno_json.map(|(member_url, config)| {
+              DenoJsonWorkspaceMemberContext {
+                root: if self.root_dir == *member_url {
+                  None
+                } else {
+                  self
+                    .config_folders
+                    .get(&self.root_dir)
+                    .unwrap()
+                    .config
+                    .as_ref()
+                },
+                member: config,
+              }
+            }),
+          }
+        }
+      }
+      None => {
+        let root = self.config_folders.get(&self.root_dir).unwrap();
+        WorkspaceMemberContext::create_from_root_folder(root)
+      }
+    }
+  }
+
+  pub fn resolve_deno_json(
+    &self,
+    specifier: &Url,
+  ) -> Option<(&Url, &Arc<ConfigFile>)> {
+    self.resolve_deno_json_str(specifier.as_str())
+  }
+
+  fn resolve_deno_json_str<'a>(
+    &self,
+    specifier: &str,
+  ) -> Option<(&Url, &Arc<ConfigFile>)> {
+    let mut specifier = specifier;
+    if !specifier.ends_with('/') {
+      specifier = parent_specifier_str(specifier)?;
+    }
+    loop {
+      let (folder_url, config) = self.resolve_folder_str(specifier)?;
+      if let Some(config) = config.config.as_ref() {
+        return Some((folder_url, config));
+      }
+      specifier = parent_specifier_str(folder_url.as_str())?;
+    }
+  }
+
   pub fn root_folder(&self) -> (&Url, &FolderConfigs) {
     (
       &self.root_dir,
@@ -220,11 +299,18 @@ impl Workspace {
     &self,
     specifier: &Url,
   ) -> Option<(&Url, &FolderConfigs)> {
+    self.resolve_folder_str(specifier.as_str())
+  }
+
+  fn resolve_folder_str(
+    &self,
+    specifier: &str,
+  ) -> Option<(&Url, &FolderConfigs)> {
     let mut best_match: Option<(&Url, &FolderConfigs)> = None;
     // it would be nice if we could store this config_folders relative to
     // the root, but the members might appear outside the root folder
     for (dir_url, config) in &self.config_folders {
-      if specifier.as_str().starts_with(dir_url.as_str()) {
+      if specifier.starts_with(dir_url.as_str()) {
         if best_match.is_none()
           || dir_url.as_str().len() > best_match.unwrap().0.as_str().len()
         {
@@ -274,6 +360,118 @@ impl Workspace {
       }
     }
     maybe_result
+  }
+}
+
+struct DenoJsonWorkspaceMemberContext<'a> {
+  member: &'a Arc<ConfigFile>,
+  // will be None when it doesn't exist or the member deno.json
+  // is the root deno.json
+  root: Option<&'a Arc<ConfigFile>>,
+}
+
+pub struct WorkspaceMemberContext<'a> {
+  pkg_json: Option<&'a Arc<PackageJson>>,
+  deno_json: Option<DenoJsonWorkspaceMemberContext<'a>>,
+}
+
+impl<'a> WorkspaceMemberContext<'a> {
+  fn create_from_root_folder(root_folder: &'a FolderConfigs) -> Self {
+    WorkspaceMemberContext {
+      pkg_json: root_folder.pkg_json.as_ref(),
+      deno_json: root_folder.config.as_ref().map(|config| {
+        DenoJsonWorkspaceMemberContext {
+          member: config,
+          root: None,
+        }
+      }),
+    }
+  }
+
+  pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
+    let Some(deno_json) = self.deno_json.as_ref() else {
+      return Ok(None);
+    };
+    let mut maybe_member_config = deno_json.member.to_lint_config()?;
+    let mut maybe_root_config = match &deno_json.root {
+      Some(root) => root.to_lint_config()?,
+      None => None,
+    };
+    let Some(member_config) = maybe_member_config else {
+      return Ok(maybe_root_config);
+    };
+    let Some(root_config) = maybe_root_config else {
+      return Ok(Some(member_config));
+    };
+    // combine the configs
+    Ok(Some(LintConfig {
+      rules: LintRulesConfig {
+        tags: combine_option_vecs(
+          root_config.rules.tags,
+          member_config.rules.tags,
+        ),
+        include: combine_option_vecs(
+          root_config.rules.include,
+          member_config.rules.include,
+        ),
+        exclude: combine_option_vecs(
+          root_config.rules.exclude,
+          member_config.rules.exclude,
+        ),
+      },
+      files: combine_patterns(root_config.files, member_config.files),
+      report: member_config.report.or(root_config.report),
+    }))
+  }
+}
+
+fn combine_patterns(
+  root_patterns: FilePatterns,
+  member_patterns: FilePatterns,
+) -> FilePatterns {
+  FilePatterns {
+    include: {
+      match root_patterns.include {
+        Some(root) => {
+          let filtered_root =
+            root.into_path_or_patterns().into_iter().filter(|p| {
+              match p.base_path() {
+                Some(base) => base.starts_with(&member_patterns.base),
+                None => true,
+              }
+            });
+          Some(PathOrPatternSet::new(match member_patterns.include {
+            Some(member) => filtered_root
+              .chain(member.into_path_or_patterns())
+              .collect(),
+            None => filtered_root.collect(),
+          }))
+        }
+        None => member_patterns.include,
+      }
+    },
+    exclude: {
+      // have the root excludes at the front because they're lower priority
+      let mut root_excludes = root_patterns.exclude.into_path_or_patterns();
+      let member_excludes = member_patterns.exclude.into_path_or_patterns();
+      root_excludes.extend(member_excludes);
+      PathOrPatternSet::new(root_excludes)
+    },
+    base: member_patterns.base,
+  }
+}
+
+fn combine_option_vecs<T>(
+  root_option: Option<Vec<T>>,
+  member_option: Option<Vec<T>>,
+) -> Option<Vec<T>> {
+  match (root_option, member_option) {
+    (Some(root), Some(member)) => {
+      Some(root.into_iter().chain(member).collect())
+    }
+    (Some(root), None) => Some(root),
+    (None, Some(member)) => Some(member),
+    (None, None) => None,
   }
 }
 
@@ -552,5 +750,14 @@ fn discover_with_npm(
     Ok(PackageJsonDiscovery::Single(Arc::new(config)))
   } else {
     Ok(PackageJsonDiscovery::None)
+  }
+}
+
+fn parent_specifier_str(specifier: &str) -> Option<&str> {
+  let specifier = specifier.strip_suffix('/').unwrap_or(specifier);
+  if let Some(index) = specifier.rfind('/') {
+    Some(&specifier[..index + 1])
+  } else {
+    None
   }
 }
