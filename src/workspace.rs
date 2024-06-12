@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::Error as AnyError;
 use indexmap::IndexMap;
 use thiserror::Error;
 use url::Url;
@@ -232,6 +233,47 @@ impl Workspace {
       }
     }
     best_match
+  }
+
+  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
+    // only allowed workspace and not in any package
+    self
+      .with_root_config_only(|found_config| {
+        found_config.to_import_map_specifier()
+      }, |other_config| {
+        if other_config.json.import_map.is_some() {
+          log::warn!(
+            "{}",
+            deno_terminal::colors::yellow(
+              format!(
+                "The 'importMap' option can only be specified in the root workspace deno.json file.\n    at {}",
+                other_config.specifier
+              )
+            )
+          );
+        }
+      })
+      .unwrap_or(Ok(None))
+  }
+
+  fn with_root_config_only<R>(
+    &self,
+    on_found: impl Fn(&ConfigFile) -> R,
+    on_other: impl Fn(&ConfigFile) -> (),
+  ) -> Option<R> {
+    let mut maybe_result = None;
+    let mut found_result = false;
+    for (dir_url, config) in &self.config_folders {
+      if !found_result && dir_url == &self.root_dir {
+        maybe_result = config.config.as_ref().map(|c| on_found(c));
+        found_result = true;
+      } else {
+        if let Some(config) = &config.config {
+          on_other(config);
+        }
+      }
+    }
+    maybe_result
   }
 }
 
