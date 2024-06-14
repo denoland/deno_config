@@ -4,7 +4,9 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::hash::Hasher;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Error as AnyError;
@@ -21,9 +23,29 @@ use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonReadError;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_to_file_path;
+use crate::BenchConfig;
+use crate::FmtConfig;
+use crate::FmtOptionsConfig;
 use crate::LintConfig;
 use crate::LintRulesConfig;
+use crate::LockConfig;
+use crate::PublishConfig;
 use crate::SpecifierToFilePathError;
+use crate::TestConfig;
+
+#[derive(Debug, Clone, Error)]
+pub enum WorkspaceDiagnosticKind {
+  #[error("The '{0}' option can only be specified in the root workspace deno.json file.")]
+  RootOnlyOption(&'static str),
+  #[error("The '{0}' option can only be specified in a workspace member deno.json file and not the root workspace file.")]
+  MemberOnlyOption(&'static str),
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceDiagnostic {
+  pub kind: WorkspaceDiagnosticKind,
+  pub config_url: Url,
+}
 
 #[derive(Debug, Error)]
 pub enum ResolveWorkspaceMemberError {
@@ -213,6 +235,110 @@ impl Workspace {
     Ok(workspace)
   }
 
+  pub fn diagnostics(&self) -> Vec<WorkspaceDiagnostic> {
+    fn check_root_diagnostics(
+      root_config: &ConfigFile,
+      diagnostics: &mut Vec<WorkspaceDiagnostic>,
+    ) {
+      if root_config.json.name.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: root_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::MemberOnlyOption("name"),
+        });
+      }
+      if root_config.json.version.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: root_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::MemberOnlyOption("version"),
+        });
+      }
+      if root_config.json.exports.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: root_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::MemberOnlyOption("exports"),
+        });
+      }
+    }
+
+    fn check_member_diagnostics(
+      member_config: &ConfigFile,
+      diagnostics: &mut Vec<WorkspaceDiagnostic>,
+    ) {
+      if member_config.json.compiler_options.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
+        });
+      }
+      if member_config.json.node_modules_dir.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
+        });
+      }
+      if member_config.json.import_map.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("importMap"),
+        });
+      }
+      if member_config.json.lock.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("lock"),
+        });
+      }
+      if member_config.json.scopes.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("scopes"),
+        });
+      }
+      if member_config.json.vendor.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("vendor"),
+        });
+      }
+      if let Some(value) = &member_config.json.lint {
+        if value.get("report").is_some() {
+          diagnostics.push(WorkspaceDiagnostic {
+            config_url: member_config.specifier.clone(),
+            kind: WorkspaceDiagnosticKind::RootOnlyOption("lint.report"),
+          });
+        }
+      }
+      if !member_config.json.unstable.is_empty() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("unstable"),
+        });
+      }
+      if member_config.json.workspace.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("workspace"),
+        });
+      }
+    }
+
+    let mut diagnostics = Vec::new();
+    if self.config_folders.len() == 1 {
+      // no diagnostics to surface because the root is the only config
+      return diagnostics;
+    }
+    for (url, folder) in &self.config_folders {
+      if let Some(config) = &folder.config {
+        if url == &self.root_dir {
+          check_root_diagnostics(config, &mut diagnostics);
+        } else {
+          check_member_diagnostics(config, &mut diagnostics);
+        }
+      }
+    }
+    diagnostics
+  }
+
   /// Resolves a workspace member's context, which can be used for deriving
   /// configuration specific to a member.
   pub fn resolve_member_ctxt(
@@ -321,45 +447,48 @@ impl Workspace {
     best_match
   }
 
-  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
-    // only allowed workspace and not in any package
+  pub fn node_modules_dir(&self) -> Option<bool> {
     self
-      .with_root_config_only(|found_config| {
-        found_config.to_import_map_specifier()
-      }, |other_config| {
-        if other_config.json.import_map.is_some() {
-          log::warn!(
-            "{}",
-            deno_terminal::colors::yellow(
-              format!(
-                "The 'importMap' option can only be specified in the root workspace deno.json file.\n    at {}",
-                other_config.specifier
-              )
-            )
-          );
-        }
+      .with_root_config_only(|root_config| root_config.json.node_modules_dir)
+      .unwrap_or(None)
+  }
+
+  pub fn vendor_dir_path(&self) -> Option<PathBuf> {
+    self
+      .with_root_config_only(|root_config| root_config.vendor_dir_path())
+      .unwrap_or(None)
+  }
+
+  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
+    self
+      .with_root_config_only(|root_config| {
+        root_config.to_import_map_specifier()
       })
       .unwrap_or(Ok(None))
   }
 
+  pub fn to_lock_config(&self) -> Result<Option<LockConfig>, AnyError> {
+    self
+      .with_root_config_only(|root_config| root_config.to_lock_config())
+      .unwrap_or(Ok(None))
+  }
+
+  pub fn has_unstable(&self, name: &str) -> bool {
+    self
+      .root_folder()
+      .1
+      .config
+      .as_ref()
+      .map(|c| c.has_unstable(name))
+      .unwrap_or(false)
+  }
+
   fn with_root_config_only<R>(
     &self,
-    on_found: impl Fn(&ConfigFile) -> R,
-    on_other: impl Fn(&ConfigFile) -> (),
+    with_root: impl Fn(&ConfigFile) -> R,
   ) -> Option<R> {
-    let mut maybe_result = None;
-    let mut found_result = false;
-    for (dir_url, config) in &self.config_folders {
-      if !found_result && dir_url == &self.root_dir {
-        maybe_result = config.config.as_ref().map(|c| on_found(c));
-        found_result = true;
-      } else {
-        if let Some(config) = &config.config {
-          on_other(config);
-        }
-      }
-    }
-    maybe_result
+    let configs = self.config_folders.get(&self.root_dir).unwrap();
+    configs.config.as_ref().map(|c| with_root(c))
   }
 }
 
@@ -392,14 +521,15 @@ impl<'a> WorkspaceMemberContext<'a> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(None);
     };
-    let mut maybe_member_config = deno_json.member.to_lint_config()?;
-    let mut maybe_root_config = match &deno_json.root {
+    let maybe_member_config = deno_json.member.to_lint_config()?;
+    let maybe_root_config = match &deno_json.root {
       Some(root) => root.to_lint_config()?,
       None => None,
     };
-    let Some(member_config) = maybe_member_config else {
+    let Some(mut member_config) = maybe_member_config else {
       return Ok(maybe_root_config);
     };
+    member_config.report = None; // this is a root only option
     let Some(root_config) = maybe_root_config else {
       return Ok(Some(member_config));
     };
@@ -410,17 +540,133 @@ impl<'a> WorkspaceMemberContext<'a> {
           root_config.rules.tags,
           member_config.rules.tags,
         ),
-        include: combine_option_vecs(
-          root_config.rules.include,
-          member_config.rules.include,
+        include: combine_option_vecs_with_override(
+          CombineOptionVecsWithOverride {
+            root: root_config.rules.include,
+            member: member_config.rules.include.as_ref().map(Cow::Borrowed),
+            member_override_root: member_config.rules.exclude.as_ref(),
+          },
         ),
-        exclude: combine_option_vecs(
-          root_config.rules.exclude,
-          member_config.rules.exclude,
+        exclude: combine_option_vecs_with_override(
+          CombineOptionVecsWithOverride {
+            root: root_config.rules.exclude,
+            member: member_config.rules.exclude.map(Cow::Owned),
+            member_override_root: member_config.rules.include.as_ref(),
+          },
         ),
       },
       files: combine_patterns(root_config.files, member_config.files),
-      report: member_config.report.or(root_config.report),
+      report: root_config.report,
+    }))
+  }
+
+  pub fn to_fmt_config(&self) -> Result<Option<FmtConfig>, AnyError> {
+    let Some(deno_json) = self.deno_json.as_ref() else {
+      return Ok(None);
+    };
+    let maybe_member_config = deno_json.member.to_fmt_config()?;
+    let maybe_root_config = match &deno_json.root {
+      Some(root) => root.to_fmt_config()?,
+      None => None,
+    };
+    let Some(member_config) = maybe_member_config else {
+      return Ok(maybe_root_config);
+    };
+    let Some(root_config) = maybe_root_config else {
+      return Ok(Some(member_config));
+    };
+
+    Ok(Some(FmtConfig {
+      options: FmtOptionsConfig {
+        use_tabs: member_config
+          .options
+          .use_tabs
+          .or(root_config.options.use_tabs),
+        line_width: member_config
+          .options
+          .line_width
+          .or(root_config.options.line_width),
+        indent_width: member_config
+          .options
+          .indent_width
+          .or(root_config.options.indent_width),
+        single_quote: member_config
+          .options
+          .single_quote
+          .or(root_config.options.single_quote),
+        prose_wrap: member_config
+          .options
+          .prose_wrap
+          .or(root_config.options.prose_wrap),
+        semi_colons: member_config
+          .options
+          .semi_colons
+          .or(root_config.options.semi_colons),
+      },
+      files: combine_patterns(root_config.files, member_config.files),
+    }))
+  }
+
+  pub fn to_bench_config(&self) -> Result<Option<BenchConfig>, AnyError> {
+    let Some(deno_json) = self.deno_json.as_ref() else {
+      return Ok(None);
+    };
+    let maybe_member_config = deno_json.member.to_bench_config()?;
+    let maybe_root_config = match &deno_json.root {
+      Some(root) => root.to_bench_config()?,
+      None => None,
+    };
+    let Some(member_config) = maybe_member_config else {
+      return Ok(maybe_root_config);
+    };
+    let Some(root_config) = maybe_root_config else {
+      return Ok(Some(member_config));
+    };
+
+    Ok(Some(BenchConfig {
+      files: combine_patterns(root_config.files, member_config.files),
+    }))
+  }
+
+  pub fn to_publish_config(&self) -> Result<Option<PublishConfig>, AnyError> {
+    let Some(deno_json) = self.deno_json.as_ref() else {
+      return Ok(None);
+    };
+    let maybe_member_config = deno_json.member.to_publish_config()?;
+    let maybe_root_config = match &deno_json.root {
+      Some(root) => root.to_publish_config()?,
+      None => None,
+    };
+    let Some(member_config) = maybe_member_config else {
+      return Ok(maybe_root_config);
+    };
+    let Some(root_config) = maybe_root_config else {
+      return Ok(Some(member_config));
+    };
+
+    Ok(Some(PublishConfig {
+      files: combine_patterns(root_config.files, member_config.files),
+    }))
+  }
+
+  pub fn to_test_config(&self) -> Result<Option<TestConfig>, AnyError> {
+    let Some(deno_json) = self.deno_json.as_ref() else {
+      return Ok(None);
+    };
+    let maybe_member_config = deno_json.member.to_test_config()?;
+    let maybe_root_config = match &deno_json.root {
+      Some(root) => root.to_test_config()?,
+      None => None,
+    };
+    let Some(member_config) = maybe_member_config else {
+      return Ok(maybe_root_config);
+    };
+    let Some(root_config) = maybe_root_config else {
+      return Ok(Some(member_config));
+    };
+
+    Ok(Some(TestConfig {
+      files: combine_patterns(root_config.files, member_config.files),
     }))
   }
 }
@@ -461,18 +707,82 @@ fn combine_patterns(
   }
 }
 
-fn combine_option_vecs<T>(
+struct CombineOptionVecsWithOverride<'a, T: Clone> {
+  root: Option<Vec<T>>,
+  member: Option<Cow<'a, Vec<T>>>,
+  member_override_root: Option<&'a Vec<T>>,
+}
+
+fn combine_option_vecs_with_override<T: Eq + std::hash::Hash + Clone>(
+  opts: CombineOptionVecsWithOverride<T>,
+) -> Option<Vec<T>> {
+  let root = opts.root.map(|r| {
+    let member_override_root = opts
+      .member_override_root
+      .map(|p| p.iter().collect::<HashSet<_>>())
+      .unwrap_or_default();
+    r.into_iter()
+      .filter(|p| !member_override_root.contains(p))
+      .collect::<Vec<_>>()
+  });
+  match (root, opts.member) {
+    (Some(root), Some(member)) => {
+      let capacity = root.len() + member.len();
+      Some(match member {
+        Cow::Owned(m) => remove_duplicates_iterator(
+          root.into_iter().chain(m.into_iter()),
+          capacity,
+        ),
+        Cow::Borrowed(m) => remove_duplicates_iterator(
+          root.into_iter().chain(m.iter().map(|c| (*c).clone())),
+          capacity,
+        ),
+      })
+    }
+    (Some(root), None) => Some(root),
+    (None, Some(member)) => Some(match member {
+      Cow::Owned(m) => m,
+      Cow::Borrowed(m) => m.iter().map(|c| (*c).clone()).collect(),
+    }),
+    (None, None) => None,
+  }
+}
+
+fn combine_option_vecs<T: Eq + std::hash::Hash>(
   root_option: Option<Vec<T>>,
   member_option: Option<Vec<T>>,
 ) -> Option<Vec<T>> {
   match (root_option, member_option) {
     (Some(root), Some(member)) => {
-      Some(root.into_iter().chain(member).collect())
+      let capacity = root.len() + member.len();
+      Some(remove_duplicates_iterator(
+        root.into_iter().chain(member),
+        capacity,
+      ))
     }
     (Some(root), None) => Some(root),
     (None, Some(member)) => Some(member),
     (None, None) => None,
   }
+}
+
+fn remove_duplicates_iterator<T: Eq + std::hash::Hash>(
+  iterator: impl IntoIterator<Item = T>,
+  capacity: usize,
+) -> Vec<T> {
+  let mut seen = HashSet::with_capacity(capacity);
+  let mut result = Vec::with_capacity(capacity);
+  for item in iterator {
+    let hash = {
+      let mut hasher = std::collections::hash_map::DefaultHasher::new();
+      item.hash(&mut hasher);
+      hasher.finish()
+    };
+    if seen.insert(hash) {
+      result.push(item);
+    }
+  }
+  result
 }
 
 #[derive(Debug)]

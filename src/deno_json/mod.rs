@@ -1522,8 +1522,14 @@ impl ConfigFile {
 
   pub fn to_lock_config(&self) -> Result<Option<LockConfig>, AnyError> {
     if let Some(config) = self.json.lock.clone() {
-      let lock_config: LockConfig = serde_json::from_value(config)
+      let mut lock_config: LockConfig = serde_json::from_value(config)
         .context("Failed to parse \"lock\" configuration")?;
+      if let LockConfig::PathBuf(path) = &mut lock_config {
+        *path = specifier_to_file_path(&self.specifier)?
+          .parent()
+          .unwrap()
+          .join(&path);
+      }
       Ok(Some(lock_config))
     } else {
       Ok(None)
@@ -1533,12 +1539,7 @@ impl ConfigFile {
   pub fn resolve_lockfile_path(&self) -> Result<Option<PathBuf>, AnyError> {
     match self.to_lock_config()? {
       Some(LockConfig::Bool(lock)) if !lock => Ok(None),
-      Some(LockConfig::PathBuf(lock)) => Ok(Some(
-        specifier_to_file_path(&self.specifier)?
-          .parent()
-          .unwrap()
-          .join(lock),
-      )),
+      Some(LockConfig::PathBuf(lock)) => Ok(Some(lock)),
       _ => {
         let mut path = specifier_to_file_path(&self.specifier)?;
         path.set_file_name("deno.lock");
