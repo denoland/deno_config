@@ -26,11 +26,13 @@ use crate::util::specifier_to_file_path;
 use crate::BenchConfig;
 use crate::FmtConfig;
 use crate::FmtOptionsConfig;
+use crate::IgnoredCompilerOptions;
 use crate::LintConfig;
 use crate::LintRulesConfig;
 use crate::LockConfig;
 use crate::PublishConfig;
 use crate::SpecifierToFilePathError;
+use crate::Task;
 use crate::TestConfig;
 
 #[derive(Debug, Clone, Error)]
@@ -363,10 +365,36 @@ impl Workspace {
               let root = self.config_folders.get(&self.root_dir).unwrap();
               root.config.as_ref().map(|c| (&self.root_dir, c))
             });
+          let maybe_pkg_json = folder
+            .pkg_json
+            .as_ref()
+            .map(|pkg_json| (member_url, pkg_json))
+            .or_else(|| {
+              let parent = parent_specifier_str(member_url.as_str())?;
+              self.resolve_pkg_json_str(parent)
+            })
+            .or_else(|| {
+              let root = self.config_folders.get(&self.root_dir).unwrap();
+              root.pkg_json.as_ref().map(|c| (&self.root_dir, c))
+            });
           WorkspaceMemberContext {
-            pkg_json: folder.pkg_json.as_ref(),
+            pkg_json: maybe_pkg_json.map(|(member_url, pkg_json)| {
+              WorkspaceMemberContextConfig {
+                root: if self.root_dir == *member_url {
+                  None
+                } else {
+                  self
+                    .config_folders
+                    .get(&self.root_dir)
+                    .unwrap()
+                    .pkg_json
+                    .as_ref()
+                },
+                member: pkg_json,
+              }
+            }),
             deno_json: maybe_deno_json.map(|(member_url, config)| {
-              DenoJsonWorkspaceMemberContext {
+              WorkspaceMemberContextConfig {
                 root: if self.root_dir == *member_url {
                   None
                 } else {
@@ -406,9 +434,26 @@ impl Workspace {
       specifier = parent_specifier_str(specifier)?;
     }
     loop {
-      let (folder_url, config) = self.resolve_folder_str(specifier)?;
-      if let Some(config) = config.config.as_ref() {
+      let (folder_url, folder) = self.resolve_folder_str(specifier)?;
+      if let Some(config) = folder.config.as_ref() {
         return Some((folder_url, config));
+      }
+      specifier = parent_specifier_str(folder_url.as_str())?;
+    }
+  }
+
+  fn resolve_pkg_json_str<'a>(
+    &self,
+    specifier: &str,
+  ) -> Option<(&Url, &Arc<PackageJson>)> {
+    let mut specifier = specifier;
+    if !specifier.ends_with('/') {
+      specifier = parent_specifier_str(specifier)?;
+    }
+    loop {
+      let (folder_url, folder) = self.resolve_folder_str(specifier)?;
+      if let Some(pkg_json) = folder.pkg_json.as_ref() {
+        return Some((folder_url, pkg_json));
       }
       specifier = parent_specifier_str(folder_url.as_str())?;
     }
@@ -459,6 +504,18 @@ impl Workspace {
       .unwrap_or(None)
   }
 
+  pub fn to_compiler_options(
+    &self,
+  ) -> Result<
+    Option<(serde_json::Value, Option<IgnoredCompilerOptions>)>,
+    AnyError,
+  > {
+    self
+      .with_root_config_only(|root_config| root_config.to_compiler_options())
+      .map(|o| o.map(Some))
+      .unwrap_or(Ok(None))
+  }
+
   pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
     self
       .with_root_config_only(|root_config| {
@@ -492,24 +549,42 @@ impl Workspace {
   }
 }
 
-struct DenoJsonWorkspaceMemberContext<'a> {
-  member: &'a Arc<ConfigFile>,
-  // will be None when it doesn't exist or the member deno.json
-  // is the root deno.json
-  root: Option<&'a Arc<ConfigFile>>,
+#[derive(Debug, Clone)]
+pub struct WorkspaceMemberTasksConfig {
+  pub folder_url: Url,
+  pub deno_json: Option<IndexMap<String, Task>>,
+  pub package_json: Option<IndexMap<String, String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceTasksConfig {
+  pub root: Option<WorkspaceMemberTasksConfig>,
+  pub member: Option<WorkspaceMemberTasksConfig>,
+}
+
+struct WorkspaceMemberContextConfig<'a, T> {
+  member: &'a Arc<T>,
+  // will be None when it doesn't exist or the member config
+  // is the root config
+  root: Option<&'a Arc<T>>,
 }
 
 pub struct WorkspaceMemberContext<'a> {
-  pkg_json: Option<&'a Arc<PackageJson>>,
-  deno_json: Option<DenoJsonWorkspaceMemberContext<'a>>,
+  pkg_json: Option<WorkspaceMemberContextConfig<'a, PackageJson>>,
+  deno_json: Option<WorkspaceMemberContextConfig<'a, ConfigFile>>,
 }
 
 impl<'a> WorkspaceMemberContext<'a> {
   fn create_from_root_folder(root_folder: &'a FolderConfigs) -> Self {
     WorkspaceMemberContext {
-      pkg_json: root_folder.pkg_json.as_ref(),
+      pkg_json: root_folder.pkg_json.as_ref().map(|config| {
+        WorkspaceMemberContextConfig {
+          member: config,
+          root: None,
+        }
+      }),
       deno_json: root_folder.config.as_ref().map(|config| {
-        DenoJsonWorkspaceMemberContext {
+        WorkspaceMemberContextConfig {
           member: config,
           root: None,
         }
@@ -626,6 +701,50 @@ impl<'a> WorkspaceMemberContext<'a> {
     Ok(Some(BenchConfig {
       files: combine_patterns(root_config.files, member_config.files),
     }))
+  }
+
+  pub fn to_tasks_config(&self) -> Result<WorkspaceTasksConfig, AnyError> {
+    fn to_member_tasks_config(
+      maybe_deno_json: Option<&Arc<ConfigFile>>,
+      maybe_pkg_json: Option<&Arc<PackageJson>>,
+    ) -> Result<Option<WorkspaceMemberTasksConfig>, AnyError> {
+      Ok(Some(WorkspaceMemberTasksConfig {
+        folder_url: match maybe_deno_json {
+          Some(deno_json) => Url::from_directory_path(
+            specifier_to_file_path(&deno_json.specifier)?
+              .parent()
+              .unwrap(),
+          )
+          .unwrap(),
+          None => match maybe_pkg_json {
+            Some(pkg_json) => {
+              Url::from_directory_path(&pkg_json.path.parent().unwrap())
+                .unwrap()
+            }
+            None => return Ok(None),
+          },
+        },
+        deno_json: match maybe_deno_json {
+          Some(deno_json) => deno_json.to_tasks_config()?,
+          None => None,
+        },
+        package_json: match maybe_pkg_json {
+          Some(pkg_json) => pkg_json.scripts.clone(),
+          None => None,
+        },
+      }))
+    }
+
+    Ok(WorkspaceTasksConfig {
+      root: to_member_tasks_config(
+        self.deno_json.as_ref().and_then(|d| d.root),
+        self.pkg_json.as_ref().and_then(|d| d.root),
+      )?,
+      member: to_member_tasks_config(
+        self.deno_json.as_ref().map(|d| d.member),
+        self.pkg_json.as_ref().map(|d| d.member),
+      )?,
+    })
   }
 
   pub fn to_publish_config(&self) -> Result<Option<PublishConfig>, AnyError> {

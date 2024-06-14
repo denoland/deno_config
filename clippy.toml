@@ -36,6 +36,5 @@ disallowed-methods = [
   { path = "std::fs::rename", reason = "File system operations should be done using DenoConfigFs trait" },
   { path = "std::fs::set_permissions", reason = "File system operations should be done using DenoConfigFs trait" },
   { path = "std::fs::symlink_metadata", reason = "File system operations should be done using DenoConfigFs trait" },
-  { path = "std::fs::write", reason = "File system operations should be done using DenoConfigFs trait" },
-  { path = "url::Url::to_file_path", reason = "Use util::specifier_to_file_path" },
+  { path = "std::fs::write", reason = "File system operations should be done using DenoConfigFs trait" }
 ]
