@@ -23,6 +23,7 @@ use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonReadError;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_to_file_path;
+use crate::util::CheckedSet;
 use crate::BenchConfig;
 use crate::FmtConfig;
 use crate::FmtOptionsConfig;
@@ -889,15 +890,10 @@ fn remove_duplicates_iterator<T: Eq + std::hash::Hash>(
   iterator: impl IntoIterator<Item = T>,
   capacity: usize,
 ) -> Vec<T> {
-  let mut seen = HashSet::with_capacity(capacity);
+  let mut seen = CheckedSet::with_capacity(capacity);
   let mut result = Vec::with_capacity(capacity);
   for item in iterator {
-    let hash = {
-      let mut hasher = std::collections::hash_map::DefaultHasher::new();
-      item.hash(&mut hasher);
-      hasher.finish()
-    };
-    if seen.insert(hash) {
+    if seen.insert(&item) {
       result.push(item);
     }
   }
