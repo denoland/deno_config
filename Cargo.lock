@@ -67,6 +67,7 @@ name = "deno_config"
 version = "0.16.4"
 dependencies = [
  "anyhow",
+ "deno_semver",
  "glob",
  "import_map",
  "indexmap",
@@ -80,6 +81,19 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "url",
+]
+
+[[package]]
+name = "deno_semver"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "389b5a8c2dd48cc1aad25396c92d7461ddb0fcfae1faf8e00205837c53e34d3e"
+dependencies = [
+ "monch",
+ "once_cell",
+ "serde",
+ "thiserror",
  "url",
 ]
 
@@ -226,6 +240,12 @@ checksum = "9d811f3e15f28568be3407c8e7fdb6514c1cda3cb30683f15b6a1a1dc4ea14a7"
 dependencies = [
  "adler",
 ]
+
+[[package]]
+name = "monch"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b52c1b33ff98142aecea13138bd399b68aa7ab5d9546c300988c345004001eea"
 
 [[package]]
 name = "num_cpus"

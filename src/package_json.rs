@@ -2,11 +2,25 @@
 
 use std::path::PathBuf;
 
+use deno_semver::npm::NpmVersionReqParseError;
+use deno_semver::package::PackageReq;
+use deno_semver::VersionReq;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 use thiserror::Error;
+
+#[derive(Debug, Error, Clone)]
+pub enum PackageJsonDepValueParseError {
+  #[error(transparent)]
+  VersionReq(#[from] NpmVersionReqParseError),
+  #[error("Not implemented scheme '{scheme}'")]
+  Unsupported { scheme: String },
+}
+
+pub type PackageJsonDeps =
+  IndexMap<String, Result<PackageReq, PackageJsonDepValueParseError>>;
 
 #[derive(Debug, Error)]
 pub enum PackageJsonReadError {
@@ -188,6 +202,80 @@ impl PackageJson {
       self.main.as_ref()
     };
     main.map(|m| m.trim()).filter(|m| !m.is_empty())
+  }
+
+  /// Gets an application level package.json's npm package requirements.
+  pub fn resolve_local_package_json_version_reqs(&self) -> PackageJsonDeps {
+    /// Gets the name and raw version constraint for a registry info or
+    /// package.json dependency entry taking into account npm package aliases.
+    fn parse_dep_entry_name_and_raw_version<'a>(
+      key: &'a str,
+      value: &'a str,
+    ) -> (&'a str, &'a str) {
+      if let Some(package_and_version) = value.strip_prefix("npm:") {
+        if let Some((name, version)) = package_and_version.rsplit_once('@') {
+          // if empty, then the name was scoped and there's no version
+          if name.is_empty() {
+            (package_and_version, "*")
+          } else {
+            (name, version)
+          }
+        } else {
+          (package_and_version, "*")
+        }
+      } else {
+        (key, value)
+      }
+    }
+
+    fn parse_entry(
+      key: &str,
+      value: &str,
+    ) -> Result<PackageReq, PackageJsonDepValueParseError> {
+      if value.starts_with("workspace:")
+        || value.starts_with("file:")
+        || value.starts_with("git:")
+        || value.starts_with("http:")
+        || value.starts_with("https:")
+      {
+        return Err(PackageJsonDepValueParseError::Unsupported {
+          scheme: value.split(':').next().unwrap().to_string(),
+        });
+      }
+      let (name, version_req) =
+        parse_dep_entry_name_and_raw_version(key, value);
+      let result = VersionReq::parse_from_npm(version_req);
+      match result {
+        Ok(version_req) => Ok(PackageReq {
+          name: name.to_string(),
+          version_req,
+        }),
+        Err(err) => Err(PackageJsonDepValueParseError::VersionReq(err)),
+      }
+    }
+
+    fn insert_deps(
+      deps: Option<&IndexMap<String, String>>,
+      result: &mut PackageJsonDeps,
+    ) {
+      if let Some(deps) = deps {
+        for (key, value) in deps {
+          result
+            .entry(key.to_string())
+            .or_insert_with(|| parse_entry(key, value));
+        }
+      }
+    }
+
+    let deps = self.dependencies.as_ref();
+    let dev_deps = self.dev_dependencies.as_ref();
+    let mut result = IndexMap::new();
+
+    // favors the deps over dev_deps
+    insert_deps(deps, &mut result);
+    insert_deps(dev_deps, &mut result);
+
+    result
   }
 }
 

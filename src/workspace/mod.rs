@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::hash::Hasher;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +21,7 @@ use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonReadError;
 use crate::util::is_skippable_io_error;
+use crate::util::normalize_path;
 use crate::util::specifier_to_file_path;
 use crate::util::CheckedSet;
 use crate::BenchConfig;
@@ -35,6 +35,11 @@ use crate::PublishConfig;
 use crate::SpecifierToFilePathError;
 use crate::Task;
 use crate::TestConfig;
+
+mod resolver;
+
+pub use resolver::WorkspaceResolver;
+pub use resolver::WorkspaceResolverCreateError;
 
 #[derive(Debug, Clone, Error)]
 pub enum WorkspaceDiagnosticKind {
@@ -58,6 +63,8 @@ pub enum ResolveWorkspaceMemberError {
   ConfigReadError(#[from] ConfigFileReadError),
   #[error(transparent)]
   PackageJsonReadError(#[from] PackageJsonReadError),
+  #[error("Workspace member must be nested in a directory under the workspace.\n  Member: {member_url}\n  Workspace: {workspace_url}")]
+  NonDescendant { workspace_url: Url, member_url: Url },
 }
 
 #[derive(Debug, Error)]
@@ -465,6 +472,10 @@ impl Workspace {
       &self.root_dir,
       self.config_folders.get(&self.root_dir).unwrap(),
     )
+  }
+
+  pub fn config_folders(&self) -> &IndexMap<Url, FolderConfigs> {
+    &self.config_folders
   }
 
   pub fn resolve_folder(
@@ -940,9 +951,9 @@ fn discover_workspace_config_files(
         }
         let config_file_path =
           specifier_to_file_path(&workspace_config_file.specifier).unwrap();
-        let config_file_directory = config_file_path.parent().unwrap();
-        let config_file_directory_url =
-          Url::from_directory_path(config_file_directory).unwrap();
+        let root_config_file_directory = config_file_path.parent().unwrap();
+        let root_config_file_directory_url =
+          Url::from_directory_path(root_config_file_directory).unwrap();
         let mut final_members = BTreeMap::new();
         for raw_member in members {
           let mut find_config = |member_dir_url: &Url| {
@@ -1009,13 +1020,25 @@ fn discover_workspace_config_files(
           } else {
             Cow::Borrowed(raw_member)
           };
-          let member_dir_url = config_file_directory_url
+          let member_dir_url = root_config_file_directory_url
             .join(&member)
             .map_err(|err| WorkspaceDiscoverError::InvalidMember {
               base: workspace_config_file.specifier.clone(),
               member: raw_member.clone(),
               source: err,
             })?;
+          if !member_dir_url
+            .as_str()
+            .starts_with(root_config_file_directory_url.as_str())
+          {
+            return Err(
+              ResolveWorkspaceMemberError::NonDescendant {
+                workspace_url: root_config_file_directory_url.clone(),
+                member_url: member_dir_url,
+              }
+              .into(),
+            );
+          }
           let config = find_config(&member_dir_url)?;
           final_members.insert(member_dir_url, config);
         }
@@ -1118,7 +1141,17 @@ fn discover_with_npm(
         }
 
         let mut find_config = || {
-          let pkg_json_path = ancestor.join(member).join("package.json");
+          let pkg_json_path =
+            normalize_path(ancestor.join(member).join("package.json"));
+          if !pkg_json_path.starts_with(&ancestor) {
+            return Err(ResolveWorkspaceMemberError::NonDescendant {
+              workspace_url: Url::from_directory_path(&ancestor).unwrap(),
+              member_url: Url::from_directory_path(
+                &pkg_json_path.parent().unwrap(),
+              )
+              .unwrap(),
+            });
+          }
           // try to find the package.json in memory from what we already
           // found on the file system
           if let Some(pkg_json) = found_configs.remove(&pkg_json_path) {
@@ -1129,13 +1162,17 @@ fn discover_with_npm(
           let text = match opts.fs.read_to_string(&pkg_json_path) {
             Ok(text) => text,
             Err(err) => {
-              return Err(PackageJsonReadError::Io {
-                path: pkg_json_path,
-                source: err,
-              });
+              return Err(
+                PackageJsonReadError::Io {
+                  path: pkg_json_path,
+                  source: err,
+                }
+                .into(),
+              );
             }
           };
           PackageJson::load_from_string(pkg_json_path, text)
+            .map_err(|e| e.into())
         };
 
         let pkg_json = match find_config() {
