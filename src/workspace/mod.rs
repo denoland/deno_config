@@ -19,7 +19,7 @@ use crate::deno_json::ConfigParseOptions;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
-use crate::package_json::PackageJsonReadError;
+use crate::package_json::PackageJsonLoadError;
 use crate::util::is_skippable_io_error;
 use crate::util::normalize_path;
 use crate::util::specifier_to_file_path;
@@ -62,7 +62,7 @@ pub enum ResolveWorkspaceMemberError {
   #[error(transparent)]
   ConfigReadError(#[from] ConfigFileReadError),
   #[error(transparent)]
-  PackageJsonReadError(#[from] PackageJsonReadError),
+  PackageJsonReadError(#[from] PackageJsonLoadError),
   #[error("Workspace member must be nested in a directory under the workspace.\n  Member: {member_url}\n  Workspace: {workspace_url}")]
   NonDescendant { workspace_url: Url, member_url: Url },
 }
@@ -72,7 +72,7 @@ pub enum WorkspaceDiscoverError {
   #[error(transparent)]
   ConfigRead(#[from] ConfigFileReadError),
   #[error(transparent)]
-  PackageJsonReadError(#[from] PackageJsonReadError),
+  PackageJsonReadError(#[from] PackageJsonLoadError),
   #[error("Workspace members cannot be empty.\n  Workspace: {0}")]
   MembersEmpty(Url),
   #[error(transparent)]
@@ -90,10 +90,25 @@ pub enum WorkspaceDiscoverError {
   ConfigNotWorkspaceMember { workspace_url: Url, config_url: Url },
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum WorkspaceDiscoverStart<'a> {
+  Dir(&'a Path),
+  ConfigFile(&'a Path),
+}
+
+impl<'a> WorkspaceDiscoverStart<'a> {
+  pub fn dir_path(&self) -> &Path {
+    match self {
+      Self::Dir(dir) => dir,
+      Self::ConfigFile(file) => file.parent().unwrap(),
+    }
+  }
+}
+
 pub struct WorkspaceDiscoverOptions<'a> {
   pub fs: &'a dyn crate::fs::DenoConfigFs,
   pub pkg_json_cache: Option<&'a dyn crate::package_json::PackageJsonCache>,
-  pub start: &'a Path,
+  pub start: WorkspaceDiscoverStart<'a>,
   pub config_parse_options: &'a ConfigParseOptions,
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
@@ -112,6 +127,16 @@ pub struct Workspace {
 }
 
 impl Workspace {
+  pub fn empty(root_dir: Url) -> Self {
+    Workspace {
+      config_folders: IndexMap::from([(
+        root_dir.clone(),
+        FolderConfigs::default(),
+      )]),
+      root_dir,
+    }
+  }
+
   pub fn discover(
     opts: &WorkspaceDiscoverOptions,
   ) -> Result<Self, WorkspaceDiscoverError> {
@@ -146,7 +171,7 @@ impl Workspace {
 
     let mut workspace = match config_file_discovery {
       ConfigFileDiscovery::None => {
-        let root_dir = Url::from_directory_path(opts.start).unwrap();
+        let root_dir = Url::from_directory_path(opts.start.dir_path()).unwrap();
         Workspace {
           config_folders: IndexMap::from([(
             root_dir.clone(),
@@ -932,141 +957,158 @@ fn discover_workspace_config_files(
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
   // todo(dsherret): we can remove this checked hashset
   let mut checked = HashSet::new();
-  let mut start = Some(Cow::Borrowed(opts.start));
+  let mut next_start_dir: Option<Cow<Path>>;
   let mut first_config_file: Option<Url> = None;
   let mut found_configs: HashMap<_, ConfigFile> = HashMap::new();
-  loop {
+  match opts.start {
+    WorkspaceDiscoverStart::Dir(dir) => {
+      next_start_dir = Some(Cow::Borrowed(dir));
+    }
+    WorkspaceDiscoverStart::ConfigFile(file) => {
+      next_start_dir =
+        file.parent().and_then(|p| p.parent()).map(Cow::Borrowed);
+      let specifier = Url::from_file_path(file).unwrap();
+      let config_file = ConfigFile::from_specifier(
+        opts.fs,
+        specifier.clone(),
+        opts.config_parse_options,
+      )?;
+      found_configs.insert(specifier.clone(), config_file);
+      first_config_file = Some(specifier);
+    }
+  }
+  while let Some(start_dir) = next_start_dir.take() {
     let config_file = ConfigFile::discover_from(
       opts.fs,
-      start.as_ref().unwrap(),
+      &start_dir,
       &mut checked,
       opts.additional_config_file_names,
       opts.config_parse_options,
     )?;
-    if let Some(workspace_config_file) = config_file {
-      if let Some(members) = &workspace_config_file.json.workspace {
-        if members.is_empty() {
-          return Err(WorkspaceDiscoverError::MembersEmpty(
-            workspace_config_file.specifier.clone(),
-          ));
-        }
-        let config_file_path =
-          specifier_to_file_path(&workspace_config_file.specifier).unwrap();
-        let root_config_file_directory = config_file_path.parent().unwrap();
-        let root_config_file_directory_url =
-          Url::from_directory_path(root_config_file_directory).unwrap();
-        let mut final_members = BTreeMap::new();
-        for raw_member in members {
-          let mut find_config = |member_dir_url: &Url| {
-            let config_file_names = ConfigFile::resolve_config_file_names(
-              opts.additional_config_file_names,
-            );
-            let config_file_urls = config_file_names
-              .iter()
-              .map(|name| member_dir_url.join(name).unwrap())
-              .collect::<Vec<_>>();
-            // try to find the config in memory from the configs we already
-            // found on the file system
-            if !found_configs.is_empty() {
-              for url in &config_file_urls {
-                if let Some(config_file) = found_configs.remove(url) {
-                  return Ok(DenoOrPkgJson::Deno(Arc::new(config_file)));
-                }
+    let Some(workspace_config_file) = config_file else {
+      break;
+    };
+    if let Some(members) = &workspace_config_file.json.workspace {
+      if members.is_empty() {
+        return Err(WorkspaceDiscoverError::MembersEmpty(
+          workspace_config_file.specifier.clone(),
+        ));
+      }
+      let config_file_path =
+        specifier_to_file_path(&workspace_config_file.specifier).unwrap();
+      let root_config_file_directory = config_file_path.parent().unwrap();
+      let root_config_file_directory_url =
+        Url::from_directory_path(root_config_file_directory).unwrap();
+      let mut final_members = BTreeMap::new();
+      for raw_member in members {
+        let mut find_config = |member_dir_url: &Url| {
+          let config_file_names = ConfigFile::resolve_config_file_names(
+            opts.additional_config_file_names,
+          );
+          let config_file_urls = config_file_names
+            .iter()
+            .map(|name| member_dir_url.join(name).unwrap())
+            .collect::<Vec<_>>();
+          // try to find the config in memory from the configs we already
+          // found on the file system
+          if !found_configs.is_empty() {
+            for url in &config_file_urls {
+              if let Some(config_file) = found_configs.remove(url) {
+                return Ok(DenoOrPkgJson::Deno(Arc::new(config_file)));
               }
             }
+          }
 
-            // now search the file system
-            for url in config_file_urls {
-              let result = ConfigFile::from_specifier(
-                opts.fs,
-                url,
-                opts.config_parse_options,
-              );
-              match result {
-                Ok(config_file) => {
-                  return Ok(DenoOrPkgJson::Deno(Arc::new(config_file)));
-                }
-                Err(err) if err.is_not_found() => {
-                  // keep searching
-                }
-                Err(err) => return Err(err.into()),
-              }
-            }
-
-            // now check for a package.json
-            let package_json_url = member_dir_url.join("package.json").unwrap();
-            let package_json_path =
-              specifier_to_file_path(&package_json_url).unwrap();
-            let pkg_json_result = PackageJson::load_from_path(
-              &package_json_path,
+          // now search the file system
+          for url in config_file_urls {
+            let result = ConfigFile::from_specifier(
               opts.fs,
-              opts.pkg_json_cache,
+              url,
+              opts.config_parse_options,
             );
-            match pkg_json_result {
-              Ok(pkg_json) => Ok(DenoOrPkgJson::PkgJson(pkg_json)),
-              Err(PackageJsonReadError::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-              {
-                Err(ResolveWorkspaceMemberError::NotFound {
-                  dir_url: member_dir_url.clone(),
-                })
+            match result {
+              Ok(config_file) => {
+                return Ok(DenoOrPkgJson::Deno(Arc::new(config_file)));
+              }
+              Err(err) if err.is_not_found() => {
+                // keep searching
               }
               Err(err) => return Err(err.into()),
             }
-          };
-
-          let member = if !raw_member.ends_with('/') {
-            Cow::Owned(format!("{}/", raw_member))
-          } else {
-            Cow::Borrowed(raw_member)
-          };
-          let member_dir_url = root_config_file_directory_url
-            .join(&member)
-            .map_err(|err| WorkspaceDiscoverError::InvalidMember {
-              base: workspace_config_file.specifier.clone(),
-              member: raw_member.clone(),
-              source: err,
-            })?;
-          if !member_dir_url
-            .as_str()
-            .starts_with(root_config_file_directory_url.as_str())
-          {
-            return Err(
-              ResolveWorkspaceMemberError::NonDescendant {
-                workspace_url: root_config_file_directory_url.clone(),
-                member_url: member_dir_url,
-              }
-              .into(),
-            );
           }
-          let config = find_config(&member_dir_url)?;
-          final_members.insert(member_dir_url, config);
+
+          // now check for a package.json
+          let package_json_url = member_dir_url.join("package.json").unwrap();
+          let package_json_path =
+            specifier_to_file_path(&package_json_url).unwrap();
+          let pkg_json_result = PackageJson::load_from_path(
+            &package_json_path,
+            opts.fs,
+            opts.pkg_json_cache,
+          );
+          match pkg_json_result {
+            Ok(pkg_json) => Ok(DenoOrPkgJson::PkgJson(pkg_json)),
+            Err(PackageJsonLoadError::Io { source, .. })
+              if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+              Err(ResolveWorkspaceMemberError::NotFound {
+                dir_url: member_dir_url.clone(),
+              })
+            }
+            Err(err) => return Err(err.into()),
+          }
+        };
+
+        let member = if !raw_member.ends_with('/') {
+          Cow::Owned(format!("{}/", raw_member))
+        } else {
+          Cow::Borrowed(raw_member)
+        };
+        let member_dir_url = root_config_file_directory_url
+          .join(&member)
+          .map_err(|err| WorkspaceDiscoverError::InvalidMember {
+            base: workspace_config_file.specifier.clone(),
+            member: raw_member.clone(),
+            source: err,
+          })?;
+        if !member_dir_url
+          .as_str()
+          .starts_with(root_config_file_directory_url.as_str())
+        {
+          return Err(
+            ResolveWorkspaceMemberError::NonDescendant {
+              workspace_url: root_config_file_directory_url.clone(),
+              member_url: member_dir_url,
+            }
+            .into(),
+          );
         }
-        if let Some(config_url) = found_configs.into_keys().next() {
-          return Err(WorkspaceDiscoverError::ConfigNotWorkspaceMember {
-            workspace_url: workspace_config_file.specifier.clone(),
-            config_url,
-          });
-        }
-        return Ok(ConfigFileDiscovery::Workspace {
-          root: Arc::new(workspace_config_file),
-          members: final_members,
+        let config = find_config(&member_dir_url)?;
+        final_members.insert(member_dir_url, config);
+      }
+      if let Some(config_url) = found_configs.into_keys().next() {
+        return Err(WorkspaceDiscoverError::ConfigNotWorkspaceMember {
+          workspace_url: workspace_config_file.specifier.clone(),
+          config_url,
         });
-      } else {
-        if first_config_file.is_none() {
-          first_config_file = Some(workspace_config_file.specifier.clone());
-        }
-        start = specifier_to_file_path(&workspace_config_file.specifier)?
+      }
+      return Ok(ConfigFileDiscovery::Workspace {
+        root: Arc::new(workspace_config_file),
+        members: final_members,
+      });
+    } else {
+      if first_config_file.is_none() {
+        first_config_file = Some(workspace_config_file.specifier.clone());
+      }
+      next_start_dir =
+        specifier_to_file_path(&workspace_config_file.specifier)?
           .parent()
           .and_then(|p| p.parent())
           .map(|p| Cow::Owned(p.to_owned()));
-        found_configs.insert(
-          workspace_config_file.specifier.clone(),
-          workspace_config_file,
-        );
-      }
-    } else {
-      break;
+      found_configs.insert(
+        workspace_config_file.specifier.clone(),
+        workspace_config_file,
+      );
     }
   }
 
@@ -1105,7 +1147,7 @@ fn discover_with_npm(
   let maybe_stop_dir = maybe_stop_config_file_path
     .as_ref()
     .and_then(|p| p.parent());
-  for ancestor in opts.start.ancestors() {
+  for ancestor in opts.start.dir_path().ancestors() {
     if Some(ancestor) == maybe_stop_dir {
       break;
     }
@@ -1116,7 +1158,7 @@ fn discover_with_npm(
       opts.pkg_json_cache,
     ) {
       Ok(pkg_json) => pkg_json,
-      Err(PackageJsonReadError::Io { source, .. })
+      Err(PackageJsonLoadError::Io { source, .. })
         if is_skippable_io_error(&source) =>
       {
         continue; // keep going

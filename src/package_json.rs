@@ -14,8 +14,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub trait PackageJsonCache {
-  fn get(&self, specifier: &Path) -> Option<&Arc<PackageJson>>;
-  fn insert(&self, specifier: PathBuf, package_json: Arc<PackageJson>);
+  fn get(&self, path: &Path) -> Option<Arc<PackageJson>>;
+  fn insert(&self, path: PathBuf, package_json: Arc<PackageJson>);
 }
 
 #[derive(Debug, Error, Clone)]
@@ -30,7 +30,7 @@ pub type PackageJsonDeps =
   IndexMap<String, Result<PackageReq, PackageJsonDepValueParseError>>;
 
 #[derive(Debug, Error)]
-pub enum PackageJsonReadError {
+pub enum PackageJsonLoadError {
   #[error("Failed reading '{}'.", .path.display())]
   Io {
     path: PathBuf,
@@ -74,9 +74,9 @@ impl PackageJson {
     path: &Path,
     fs: &dyn crate::fs::DenoConfigFs,
     maybe_cache: Option<&dyn PackageJsonCache>,
-  ) -> Result<Arc<Self>, PackageJsonReadError> {
+  ) -> Result<Arc<Self>, PackageJsonLoadError> {
     if let Some(item) = maybe_cache.and_then(|c| c.get(path)) {
-      Ok(item.clone())
+      Ok(item)
     } else {
       match fs.read_to_string(&path) {
         Ok(file_text) => {
@@ -89,7 +89,7 @@ impl PackageJson {
           }
           Ok(pkg_json)
         }
-        Err(err) => Err(PackageJsonReadError::Io {
+        Err(err) => Err(PackageJsonLoadError::Io {
           path: path.to_path_buf(),
           source: err,
         }),
@@ -100,7 +100,7 @@ impl PackageJson {
   pub fn load_from_string(
     path: PathBuf,
     source: String,
-  ) -> Result<PackageJson, PackageJsonReadError> {
+  ) -> Result<PackageJson, PackageJsonLoadError> {
     if source.trim().is_empty() {
       return Ok(PackageJson {
         path,
@@ -121,7 +121,7 @@ impl PackageJson {
     }
 
     let package_json: Value = serde_json::from_str(&source).map_err(|err| {
-      PackageJsonReadError::Deserialize {
+      PackageJsonLoadError::Deserialize {
         path: path.clone(),
         source: err,
       }
@@ -338,4 +338,20 @@ fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
   }
 
   is_conditional_sugar
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  #[test]
+  fn null_exports_should_not_crash() {
+    let package_json = PackageJson::load_from_string(
+      PathBuf::from("/package.json"),
+      r#"{ "exports": null }"#.to_string(),
+    )
+    .unwrap();
+
+    assert!(package_json.exports.is_none());
+  }
 }
