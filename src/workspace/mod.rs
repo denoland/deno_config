@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -269,6 +270,15 @@ impl Workspace {
     }
 
     Ok(workspace)
+  }
+
+  pub async fn create_resolver<
+    TReturn: Future<Output = Result<String, AnyError>>,
+  >(
+    workspace: &Workspace,
+    fetch_text: impl Fn(&Url) -> TReturn,
+  ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
+    WorkspaceResolver::from_workspace(workspace, fetch_text).await
   }
 
   pub fn diagnostics(&self) -> Vec<WorkspaceDiagnostic> {

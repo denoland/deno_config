@@ -1,7 +1,9 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::future::Future;
 use std::sync::Arc;
 
+use anyhow::Error as AnyError;
 use import_map::ImportMap;
 use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
@@ -31,6 +33,12 @@ struct ResolverFolderConfigs {
 
 #[derive(Debug, Error)]
 pub enum WorkspaceResolverCreateError {
+  #[error("Failed loading import map specified in '{referrer}'")]
+  ImportMapFetch {
+    referrer: Url,
+    #[source]
+    source: AnyError,
+  },
   #[error(transparent)]
   ImportMap(#[from] import_map::ImportMapError),
 }
@@ -41,8 +49,11 @@ pub struct WorkspaceResolver {
 }
 
 impl WorkspaceResolver {
-  pub(crate) fn from_workspace(
+  pub(crate) async fn from_workspace<
+    TReturn: Future<Output = Result<String, AnyError>>,
+  >(
     workspace: &Workspace,
+    fetch_text: impl Fn(&Url) -> TReturn,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     let (root_dir, root_folder) = workspace.root_folder();
     let deno_jsons = workspace
@@ -55,13 +66,27 @@ impl WorkspaceResolver {
       .as_ref()
       .map(|c| c.specifier.clone())
       .unwrap_or_else(|| root_dir.join("deno.json").unwrap());
-    let base_import_map_config = import_map::ext::ImportMapConfig {
-      base_url,
-      import_map_value: root_folder
-        .config
-        .as_ref()
-        .map(|c| c.to_import_map_value_from_imports())
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default())),
+    let specified_import_map = match root_folder.config.as_ref() {
+      Some(config) => {
+        config
+          .to_import_map_value(fetch_text)
+          .await
+          .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
+            referrer: config.specifier.clone(),
+            source,
+          })?
+      }
+      None => None,
+    };
+    let base_import_map_config = match specified_import_map {
+      Some((base_url, import_map_value)) => import_map::ext::ImportMapConfig {
+        base_url: base_url.into_owned(),
+        import_map_value,
+      },
+      None => import_map::ext::ImportMapConfig {
+        base_url,
+        import_map_value: serde_json::Value::Object(Default::default()),
+      },
     };
     let child_import_map_configs = deno_jsons
       .iter()
