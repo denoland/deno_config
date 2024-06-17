@@ -92,6 +92,7 @@ pub enum WorkspaceDiscoverError {
 
 pub struct WorkspaceDiscoverOptions<'a> {
   pub fs: &'a dyn crate::fs::DenoConfigFs,
+  pub pkg_json_cache: Option<&'a dyn crate::package_json::PackageJsonCache>,
   pub start: &'a Path,
   pub config_parse_options: &'a ConfigParseOptions,
   pub additional_config_file_names: &'a [&'a str],
@@ -996,22 +997,21 @@ fn discover_workspace_config_files(
             let package_json_url = member_dir_url.join("package.json").unwrap();
             let package_json_path =
               specifier_to_file_path(&package_json_url).unwrap();
-            match opts.fs.read_to_string(&package_json_path) {
-              Ok(file_text) => Ok(DenoOrPkgJson::PkgJson(Arc::new(
-                PackageJson::load_from_string(package_json_path, file_text)?,
-              ))),
-              Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let pkg_json_result = PackageJson::load_from_path(
+              &package_json_path,
+              opts.fs,
+              opts.pkg_json_cache,
+            );
+            match pkg_json_result {
+              Ok(pkg_json) => Ok(DenoOrPkgJson::PkgJson(pkg_json)),
+              Err(PackageJsonReadError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+              {
                 Err(ResolveWorkspaceMemberError::NotFound {
                   dir_url: member_dir_url.clone(),
                 })
               }
-              Err(err) => Err(
-                PackageJsonReadError::Io {
-                  path: package_json_path,
-                  source: err,
-                }
-                .into(),
-              ),
+              Err(err) => return Err(err.into()),
             }
           };
 
@@ -1091,7 +1091,7 @@ fn discover_with_npm(
   config_file_discovery: &ConfigFileDiscovery,
   opts: &WorkspaceDiscoverOptions,
 ) -> Result<PackageJsonDiscovery, WorkspaceDiscoverError> {
-  let mut found_configs: HashMap<_, PackageJson> = HashMap::new();
+  let mut found_configs: HashMap<_, Arc<PackageJson>> = HashMap::new();
   let mut first_config_file = None;
   let maybe_stop_config_file_path = match &config_file_discovery {
     ConfigFileDiscovery::None => None,
@@ -1110,22 +1110,19 @@ fn discover_with_npm(
       break;
     }
     let pkg_json_path = ancestor.join("package.json");
-    let text = match opts.fs.read_to_string(&pkg_json_path) {
-      Ok(text) => text,
-      Err(err) if is_skippable_io_error(&err) => {
+    let pkg_json = match PackageJson::load_from_path(
+      &pkg_json_path,
+      opts.fs,
+      opts.pkg_json_cache,
+    ) {
+      Ok(pkg_json) => pkg_json,
+      Err(PackageJsonReadError::Io { source, .. })
+        if is_skippable_io_error(&source) =>
+      {
         continue; // keep going
       }
-      Err(err) => {
-        return Err(
-          PackageJsonReadError::Io {
-            path: pkg_json_path,
-            source: err,
-          }
-          .into(),
-        );
-      }
+      Err(err) => return Err(err.into()),
     };
-    let pkg_json = PackageJson::load_from_string(pkg_json_path, text)?;
     if let Some(members) = &pkg_json.workspaces {
       let mut has_warned = false;
       let mut final_members = BTreeMap::new();
@@ -1159,20 +1156,12 @@ fn discover_with_npm(
           }
 
           // now search the file system
-          let text = match opts.fs.read_to_string(&pkg_json_path) {
-            Ok(text) => text,
-            Err(err) => {
-              return Err(
-                PackageJsonReadError::Io {
-                  path: pkg_json_path,
-                  source: err,
-                }
-                .into(),
-              );
-            }
-          };
-          PackageJson::load_from_string(pkg_json_path, text)
-            .map_err(|e| e.into())
+          PackageJson::load_from_path(
+            &pkg_json_path,
+            opts.fs,
+            opts.pkg_json_cache,
+          )
+          .map_err(|e| e.into())
         };
 
         let pkg_json = match find_config() {
@@ -1182,21 +1171,19 @@ fn discover_with_npm(
             continue;
           }
         };
-        final_members.insert(
-          Url::from_file_path(&pkg_json.path).unwrap(),
-          Arc::new(pkg_json),
-        );
+        final_members
+          .insert(Url::from_file_path(&pkg_json.path).unwrap(), pkg_json);
       }
 
       // just include any remaining found configs as workspace members
       // instead of erroring for now
       for (path, config) in found_configs {
         let url = Url::from_file_path(&path).unwrap();
-        final_members.insert(url, Arc::new(config));
+        final_members.insert(url, config);
       }
 
       return Ok(PackageJsonDiscovery::Workspace {
-        root: Arc::new(pkg_json),
+        root: pkg_json,
         members: final_members,
       });
     } else {
@@ -1209,7 +1196,7 @@ fn discover_with_npm(
 
   if let Some(first_config_file) = first_config_file {
     let config = found_configs.remove(&first_config_file).unwrap();
-    Ok(PackageJsonDiscovery::Single(Arc::new(config)))
+    Ok(PackageJsonDiscovery::Single(config))
   } else {
     Ok(PackageJsonDiscovery::None)
   }

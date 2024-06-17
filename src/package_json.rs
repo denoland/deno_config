@@ -1,6 +1,8 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
@@ -10,6 +12,11 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 use thiserror::Error;
+
+pub trait PackageJsonCache {
+  fn get(&self, specifier: &Path) -> Option<&Arc<PackageJson>>;
+  fn insert(&self, specifier: PathBuf, package_json: Arc<PackageJson>);
+}
 
 #[derive(Debug, Error, Clone)]
 pub enum PackageJsonDepValueParseError {
@@ -63,6 +70,33 @@ pub struct PackageJson {
 }
 
 impl PackageJson {
+  pub fn load_from_path(
+    path: &Path,
+    fs: &dyn crate::fs::DenoConfigFs,
+    maybe_cache: Option<&dyn PackageJsonCache>,
+  ) -> Result<Arc<Self>, PackageJsonReadError> {
+    if let Some(item) = maybe_cache.and_then(|c| c.get(path)) {
+      Ok(item.clone())
+    } else {
+      match fs.read_to_string(&path) {
+        Ok(file_text) => {
+          let pkg_json = Arc::new(PackageJson::load_from_string(
+            path.to_path_buf(),
+            file_text,
+          )?);
+          if let Some(cache) = maybe_cache {
+            cache.insert(path.to_path_buf(), pkg_json.clone());
+          }
+          Ok(pkg_json)
+        }
+        Err(err) => Err(PackageJsonReadError::Io {
+          path: path.to_path_buf(),
+          source: err,
+        }),
+      }
+    }
+  }
+
   pub fn load_from_string(
     path: PathBuf,
     source: String,
