@@ -9,15 +9,16 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::Context;
 use anyhow::Error as AnyError;
 use indexmap::IndexMap;
-use resolver::SpecifiedImportMap;
 use thiserror::Error;
 use url::Url;
 
 use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::ConfigParseOptions;
+use crate::get_ts_config_for_emit;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
@@ -30,6 +31,7 @@ use crate::BenchConfig;
 use crate::FmtConfig;
 use crate::FmtOptionsConfig;
 use crate::IgnoredCompilerOptions;
+use crate::JsxImportSourceConfig;
 use crate::LintConfig;
 use crate::LintRulesConfig;
 use crate::LockConfig;
@@ -37,9 +39,13 @@ use crate::PublishConfig;
 use crate::SpecifierToFilePathError;
 use crate::Task;
 use crate::TestConfig;
+use crate::TsConfigForEmit;
+use crate::TsConfigType;
 
 mod resolver;
 
+pub use resolver::MappedResolution;
+pub use resolver::SpecifiedImportMap;
 pub use resolver::WorkspaceResolver;
 pub use resolver::WorkspaceResolverCreateError;
 
@@ -124,13 +130,15 @@ pub struct WorkspaceDiscoverOptions<'a> {
 
 #[derive(Debug, Default, Clone)]
 pub struct FolderConfigs {
-  pub config: Option<Arc<ConfigFile>>,
+  pub deno_json: Option<Arc<ConfigFile>>,
   pub pkg_json: Option<Arc<PackageJson>>,
 }
 
 #[derive(Debug)]
 pub struct Workspace {
   root_dir: Url,
+  /// The directory the user started the discovery from.
+  start_dir: Url,
   config_folders: IndexMap<Url, FolderConfigs>,
 }
 
@@ -141,6 +149,7 @@ impl Workspace {
         root_dir.clone(),
         FolderConfigs::default(),
       )]),
+      start_dir: root_dir.clone(),
       root_dir,
     }
   }
@@ -148,6 +157,7 @@ impl Workspace {
   pub fn discover(
     opts: &WorkspaceDiscoverOptions,
   ) -> Result<Self, WorkspaceDiscoverError> {
+    let start_dir = Url::from_directory_path(opts.start.dir_path()).unwrap();
     let config_file_discovery = discover_workspace_config_files(opts)?;
     let maybe_npm_discovery = if opts.discover_pkg_json {
       discover_with_npm(&config_file_discovery, opts)?
@@ -178,16 +188,14 @@ impl Workspace {
     // };
 
     let mut workspace = match config_file_discovery {
-      ConfigFileDiscovery::None => {
-        let root_dir = Url::from_directory_path(opts.start.dir_path()).unwrap();
-        Workspace {
-          config_folders: IndexMap::from([(
-            root_dir.clone(),
-            FolderConfigs::default(),
-          )]),
-          root_dir,
-        }
-      }
+      ConfigFileDiscovery::None => Workspace {
+        config_folders: IndexMap::from([(
+          start_dir.clone(),
+          FolderConfigs::default(),
+        )]),
+        root_dir: start_dir.clone(),
+        start_dir,
+      },
       ConfigFileDiscovery::Single(config) => {
         let config_file_path = specifier_to_file_path(&config.specifier)?;
         let root_dir = config_file_path.parent().unwrap();
@@ -196,10 +204,11 @@ impl Workspace {
           config_folders: IndexMap::from([(
             root_dir.clone(),
             FolderConfigs {
-              config: Some(config),
+              deno_json: Some(config),
               pkg_json: None,
             },
           )]),
+          start_dir,
           root_dir,
         }
       }
@@ -214,20 +223,24 @@ impl Workspace {
               folder_url,
               match config {
                 DenoOrPkgJson::Deno(config_file) => FolderConfigs {
-                  config: Some(config_file),
+                  deno_json: Some(config_file),
                   pkg_json: None,
                 },
                 DenoOrPkgJson::PkgJson(pkg_json) => FolderConfigs {
-                  config: None,
+                  deno_json: None,
                   pkg_json: Some(pkg_json),
                 },
               },
             )
           })
           .collect::<IndexMap<_, _>>();
-        config_folders.entry(root_dir.clone()).or_default().config = Some(root);
+        config_folders
+          .entry(root_dir.clone())
+          .or_default()
+          .deno_json = Some(root);
         Workspace {
           root_dir,
+          start_dir,
           config_folders,
         }
       }
@@ -383,7 +396,7 @@ impl Workspace {
       return diagnostics;
     }
     for (url, folder) in &self.config_folders {
-      if let Some(config) = &folder.config {
+      if let Some(config) = &folder.deno_json {
         if url == &self.root_dir {
           check_root_diagnostics(config, &mut diagnostics);
         } else {
@@ -394,9 +407,15 @@ impl Workspace {
     diagnostics
   }
 
+  /// Resolves the member context from the directory that workspace discovery
+  /// started from.
+  pub fn resolve_start_ctx(&self) -> WorkspaceMemberContext<'_> {
+    self.resolve_member_ctx(&self.start_dir)
+  }
+
   /// Resolves a workspace member's context, which can be used for deriving
   /// configuration specific to a member.
-  pub fn resolve_member_ctxt(
+  pub fn resolve_member_ctx(
     &self,
     specifier: &Url,
   ) -> WorkspaceMemberContext<'_> {
@@ -407,7 +426,7 @@ impl Workspace {
           WorkspaceMemberContext::create_from_root_folder(folder)
         } else {
           let maybe_deno_json = folder
-            .config
+            .deno_json
             .as_ref()
             .map(|c| (member_url, c))
             .or_else(|| {
@@ -416,7 +435,7 @@ impl Workspace {
             })
             .or_else(|| {
               let root = self.config_folders.get(&self.root_dir).unwrap();
-              root.config.as_ref().map(|c| (&self.root_dir, c))
+              root.deno_json.as_ref().map(|c| (&self.root_dir, c))
             });
           let maybe_pkg_json = folder
             .pkg_json
@@ -455,7 +474,7 @@ impl Workspace {
                     .config_folders
                     .get(&self.root_dir)
                     .unwrap()
-                    .config
+                    .deno_json
                     .as_ref()
                 },
                 member: config,
@@ -488,7 +507,7 @@ impl Workspace {
     }
     loop {
       let (folder_url, folder) = self.resolve_folder_str(specifier)?;
-      if let Some(config) = folder.config.as_ref() {
+      if let Some(config) = folder.deno_json.as_ref() {
         return Some((folder_url, config));
       }
       specifier = parent_specifier_str(folder_url.as_str())?;
@@ -573,6 +592,16 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
+  pub fn resolve_ts_config_for_emit(
+    &self,
+    config_type: TsConfigType,
+  ) -> Result<TsConfigForEmit, AnyError> {
+    get_ts_config_for_emit(
+      config_type,
+      self.root_folder().1.deno_json.as_deref(),
+    )
+  }
+
   pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
     self
       .with_root_config_only(|root_config| {
@@ -587,11 +616,27 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
+  pub fn to_maybe_imports(&self) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
+    self
+      .with_root_config_only(|root_config| root_config.to_maybe_imports())
+      .unwrap_or(Ok(Vec::new()))
+  }
+
+  pub fn to_maybe_jsx_import_source_config(
+    &self,
+  ) -> Result<Option<JsxImportSourceConfig>, AnyError> {
+    self
+      .with_root_config_only(|root_config| {
+        root_config.to_maybe_jsx_import_source_config()
+      })
+      .unwrap_or(Ok(None))
+  }
+
   pub fn has_unstable(&self, name: &str) -> bool {
     self
       .root_folder()
       .1
-      .config
+      .deno_json
       .as_ref()
       .map(|c| c.has_unstable(name))
       .unwrap_or(false)
@@ -602,7 +647,7 @@ impl Workspace {
     with_root: impl Fn(&ConfigFile) -> R,
   ) -> Option<R> {
     let configs = self.config_folders.get(&self.root_dir).unwrap();
-    configs.config.as_ref().map(|c| with_root(c))
+    configs.deno_json.as_ref().map(|c| with_root(c))
   }
 }
 
@@ -613,10 +658,42 @@ pub struct WorkspaceMemberTasksConfig {
   pub package_json: Option<IndexMap<String, String>>,
 }
 
+impl WorkspaceMemberTasksConfig {
+  pub fn is_empty(&self) -> bool {
+    self
+      .deno_json
+      .as_ref()
+      .map(|d| d.is_empty())
+      .unwrap_or(true)
+      && self
+        .package_json
+        .as_ref()
+        .map(|d| d.is_empty())
+        .unwrap_or(true)
+  }
+
+  pub fn tasks_count(&self) -> usize {
+    self.deno_json.as_ref().map(|d| d.len()).unwrap_or(0)
+      + self.package_json.as_ref().map(|d| d.len()).unwrap_or(0)
+  }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceTasksConfig {
   pub root: Option<WorkspaceMemberTasksConfig>,
   pub member: Option<WorkspaceMemberTasksConfig>,
+}
+
+impl WorkspaceTasksConfig {
+  pub fn is_empty(&self) -> bool {
+    self.root.as_ref().map(|r| r.is_empty()).unwrap_or(true)
+      && self.member.as_ref().map(|r| r.is_empty()).unwrap_or(true)
+  }
+
+  pub fn tasks_count(&self) -> usize {
+    self.root.as_ref().map(|r| r.tasks_count()).unwrap_or(0)
+      + self.member.as_ref().map(|r| r.tasks_count()).unwrap_or(0)
+  }
 }
 
 struct WorkspaceMemberContextConfig<'a, T> {
@@ -640,13 +717,17 @@ impl<'a> WorkspaceMemberContext<'a> {
           root: None,
         }
       }),
-      deno_json: root_folder.config.as_ref().map(|config| {
+      deno_json: root_folder.deno_json.as_ref().map(|config| {
         WorkspaceMemberContextConfig {
           member: config,
           root: None,
         }
       }),
     }
+  }
+
+  pub fn has_deno_or_pkg_json(&self) -> bool {
+    self.pkg_json.is_some() || self.deno_json.is_some()
   }
 
   pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
@@ -782,7 +863,11 @@ impl<'a> WorkspaceMemberContext<'a> {
           },
         },
         deno_json: match maybe_deno_json {
-          Some(deno_json) => deno_json.to_tasks_config()?,
+          Some(deno_json) => {
+            deno_json.to_tasks_config().with_context(|| {
+              format!("Failed parsing '{}'.", deno_json.specifier)
+            })?
+          }
           None => None,
         },
         package_json: match maybe_pkg_json {

@@ -1,16 +1,21 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Error as AnyError;
+use deno_semver::npm::NpmPackageReqReference;
+use deno_semver::package::PackageReqReference;
 use import_map::ImportMap;
+use import_map::ImportMapError;
 use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
 use thiserror::Error;
 use url::Url;
 
 use crate::package_json::PackageJson;
+use crate::package_json::PackageJsonDepValueParseError;
 use crate::package_json::PackageJsonDeps;
 use crate::ConfigFile;
 
@@ -21,6 +26,7 @@ struct DenoJsonResolverFolderConfig {
   config: Arc<ConfigFile>,
 }
 
+#[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
   deps: PackageJsonDeps,
   pkg_json: Arc<PackageJson>,
@@ -45,12 +51,30 @@ pub enum WorkspaceResolverCreateError {
 
 pub struct SpecifiedImportMap {
   pub base_url: Url,
-  pub import_map: serde_json::Value,
+  pub value: serde_json::Value,
 }
 
+pub enum MappedResolution<'a> {
+  PackageJson {
+    pkg_json: &'a Arc<PackageJson>,
+    alias: &'a str,
+    req_ref: NpmPackageReqReference,
+  },
+  ImportMap(Url),
+}
+
+#[derive(Debug, Error)]
+pub enum MappedResolutionError {
+  #[error(transparent)]
+  ImportMap(#[from] ImportMapError),
+  #[error(transparent)]
+  PkgJsonDep(#[from] PackageJsonDepValueParseError),
+}
+
+#[derive(Debug)]
 pub struct WorkspaceResolver {
   import_map: ImportMapWithDiagnostics,
-  pkg_jsons: IndexMap<Url, PkgJsonResolverFolderConfig>,
+  pkg_jsons: BTreeMap<Url, PkgJsonResolverFolderConfig>,
 }
 
 impl WorkspaceResolver {
@@ -65,10 +89,10 @@ impl WorkspaceResolver {
     let deno_jsons = workspace
       .config_folders()
       .iter()
-      .filter_map(|(_, f)| f.config.as_ref())
+      .filter_map(|(_, f)| f.deno_json.as_ref())
       .collect::<Vec<_>>();
     let base_url = root_folder
-      .config
+      .deno_json
       .as_ref()
       .map(|c| c.specifier.clone())
       .unwrap_or_else(|| root_dir.join("deno.json").unwrap());
@@ -78,10 +102,10 @@ impl WorkspaceResolver {
       // overwrites the entire workspace import map?
       Some(SpecifiedImportMap {
         base_url,
-        import_map,
+        value: import_map,
       }) => (base_url, import_map),
       None => {
-        let config_specified_import_map = match root_folder.config.as_ref() {
+        let config_specified_import_map = match root_folder.deno_json.as_ref() {
           Some(config) => config
             .to_import_map_value(fetch_text)
             .await
@@ -109,7 +133,7 @@ impl WorkspaceResolver {
           .iter()
           .filter(|f| {
             Some(&f.specifier)
-              != root_folder.config.as_ref().map(|c| &c.specifier)
+              != root_folder.deno_json.as_ref().map(|c| &c.specifier)
           })
           .map(|config| import_map::ext::ImportMapConfig {
             base_url: config.specifier.clone(),
@@ -142,11 +166,61 @@ impl WorkspaceResolver {
           PkgJsonResolverFolderConfig { deps, pkg_json },
         ))
       })
-      .collect::<IndexMap<_, _>>();
+      .collect::<BTreeMap<_, _>>();
     Ok(Self {
       import_map,
       pkg_jsons,
     })
+  }
+
+  pub fn resolve<'a>(
+    &'a self,
+    specifier: &str,
+    referrer: &Url,
+  ) -> Result<MappedResolution<'a>, MappedResolutionError> {
+    // attempt to resolve with the import map first
+    let import_map_err =
+      match self.import_map.import_map.resolve(specifier, referrer) {
+        Ok(value) => return Ok(MappedResolution::ImportMap(value)),
+        Err(err) => err,
+      };
+
+    // then using the package.json
+    let mut previously_found_dir = false;
+    for (dir_url, pkg_json_folder) in self.pkg_jsons.iter().rev() {
+      if !referrer.as_str().starts_with(dir_url.as_str()) {
+        if previously_found_dir {
+          break;
+        } else {
+          continue;
+        }
+      }
+      previously_found_dir = true;
+
+      for (bare_specifier, req_result) in &pkg_json_folder.deps {
+        if let Some(path) = specifier.strip_prefix(bare_specifier) {
+          if path.is_empty() || path.starts_with('/') {
+            let sub_path = path.strip_prefix('/').unwrap_or(path);
+            let req = req_result.as_ref().map_err(|e| e.clone())?;
+            return Ok(MappedResolution::PackageJson {
+              pkg_json: &pkg_json_folder.pkg_json,
+              alias: &bare_specifier,
+              req_ref: NpmPackageReqReference::new(PackageReqReference {
+                req: req.clone(),
+                sub_path: if sub_path.is_empty() {
+                  None
+                } else {
+                  Some(sub_path.to_string())
+                },
+              }),
+            });
+          }
+        }
+      }
+    }
+
+    // wasn't found, so maybe surface the import map error
+    Err(import_map_err.into())
   }
 }
 
