@@ -8,6 +8,7 @@ use anyhow::Error as AnyError;
 use deno_semver::npm::NpmPackageReqReference;
 use deno_semver::package::PackageReqReference;
 use import_map::ImportMap;
+use import_map::ImportMapDiagnostic;
 use import_map::ImportMapError;
 use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
@@ -61,6 +62,15 @@ pub enum MappedResolution<'a> {
     req_ref: NpmPackageReqReference,
   },
   ImportMap(Url),
+}
+
+impl<'a> MappedResolution<'a> {
+  pub fn into_url(self) -> Result<Url, url::ParseError> {
+    match self {
+      Self::PackageJson { req_ref, .. } => Url::parse(&req_ref.to_string()),
+      Self::ImportMap(url) => Ok(url),
+    }
+  }
 }
 
 #[derive(Debug, Error)]
@@ -171,6 +181,43 @@ impl WorkspaceResolver {
       import_map,
       pkg_jsons,
     })
+  }
+
+  /// Creates a new WorkspaceResolver specifically for deno compile.
+  pub fn new_for_deno_compile(
+    import_map: ImportMap,
+    pkg_jsons: Vec<Arc<PackageJson>>,
+  ) -> Self {
+    let import_map = ImportMapWithDiagnostics {
+      import_map,
+      diagnostics: Default::default(),
+    };
+    let pkg_jsons = pkg_jsons
+      .into_iter()
+      .map(|pkg_json| {
+        let deps = pkg_json.resolve_local_package_json_version_reqs();
+        (
+          Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
+          PkgJsonResolverFolderConfig { deps, pkg_json },
+        )
+      })
+      .collect::<BTreeMap<_, _>>();
+    Self {
+      import_map,
+      pkg_jsons,
+    }
+  }
+
+  pub fn import_map(&self) -> &ImportMap {
+    &self.import_map.import_map
+  }
+
+  pub fn package_jsons(&self) -> impl Iterator<Item = &Arc<PackageJson>> {
+    self.pkg_jsons.values().map(|c| &c.pkg_json)
+  }
+
+  pub fn diagnostics(&self) -> &[ImportMapDiagnostic] {
+    &self.import_map.diagnostics
   }
 
   pub fn resolve<'a>(

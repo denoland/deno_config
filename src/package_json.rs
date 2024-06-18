@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 use thiserror::Error;
+use url::Url;
 
 pub trait PackageJsonCache {
   fn get(&self, path: &Path) -> Option<Arc<PackageJson>>;
@@ -227,6 +228,10 @@ impl PackageJson {
       scripts,
       workspaces,
     }
+  }
+
+  pub fn specifier(&self) -> Url {
+    Url::from_file_path(&self.path).unwrap()
   }
 
   pub fn main(&self, referrer_kind: NodeModuleKind) -> Option<&str> {

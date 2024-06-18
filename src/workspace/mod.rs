@@ -568,6 +568,12 @@ impl Workspace {
     best_match
   }
 
+  pub fn check_js(&self) -> bool {
+    self
+      .with_root_config_only(|root_config| root_config.get_check_js())
+      .unwrap_or(false)
+  }
+
   pub fn node_modules_dir(&self) -> Option<bool> {
     self
       .with_root_config_only(|root_config| root_config.json.node_modules_dir)
@@ -649,6 +655,16 @@ impl Workspace {
         .extend(deno_json.to_files_config()?.exclude.into_path_or_patterns());
     }
     Ok(PathOrPatternSet::new(excludes))
+  }
+
+  pub fn unstable_features(&self) -> &[String] {
+    self
+      .root_folder()
+      .1
+      .deno_json
+      .as_ref()
+      .map(|c| (&c.json.unstable) as &[String])
+      .unwrap_or(&[])
   }
 
   pub fn has_unstable(&self, name: &str) -> bool {
@@ -747,6 +763,10 @@ impl<'a> WorkspaceMemberContext<'a> {
 
   pub fn has_deno_or_pkg_json(&self) -> bool {
     self.pkg_json.is_some() || self.deno_json.is_some()
+  }
+
+  pub fn deno_json(&self) -> Option<&Arc<ConfigFile>> {
+    self.deno_json.as_ref().map(|c| c.member)
   }
 
   pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
@@ -1288,6 +1308,7 @@ fn discover_with_npm(
       }
       Err(err) => return Err(err.into()),
     };
+    log::debug!("package.json file found at '{}'", pkg_json_path.display());
     if let Some(members) = &pkg_json.workspaces {
       let mut has_warned = false;
       let mut final_members = BTreeMap::new();
@@ -1363,6 +1384,7 @@ fn discover_with_npm(
     let config = found_configs.remove(&first_config_file).unwrap();
     Ok(PackageJsonDiscovery::Single(config))
   } else {
+    log::debug!("No package.json file found");
     Ok(PackageJsonDiscovery::None)
   }
 }
