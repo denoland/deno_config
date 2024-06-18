@@ -43,6 +43,11 @@ pub enum WorkspaceResolverCreateError {
   ImportMap(#[from] import_map::ImportMapError),
 }
 
+pub struct SpecifiedImportMap {
+  pub base_url: Url,
+  pub import_map: serde_json::Value,
+}
+
 pub struct WorkspaceResolver {
   import_map: ImportMapWithDiagnostics,
   pkg_jsons: IndexMap<Url, PkgJsonResolverFolderConfig>,
@@ -53,6 +58,7 @@ impl WorkspaceResolver {
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
     workspace: &Workspace,
+    specified_import_map: Option<SpecifiedImportMap>,
     fetch_text: impl Fn(&Url) -> TReturn,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     let (root_dir, root_folder) = workspace.root_folder();
@@ -66,48 +72,62 @@ impl WorkspaceResolver {
       .as_ref()
       .map(|c| c.specifier.clone())
       .unwrap_or_else(|| root_dir.join("deno.json").unwrap());
-    let specified_import_map = match root_folder.config.as_ref() {
-      Some(config) => {
-        config
-          .to_import_map_value(fetch_text)
-          .await
-          .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
-            referrer: config.specifier.clone(),
-            source,
-          })?
-      }
-      None => None,
-    };
-    let base_import_map_config = match specified_import_map {
-      Some((base_url, import_map_value)) => import_map::ext::ImportMapConfig {
-        base_url: base_url.into_owned(),
-        import_map_value,
-      },
-      None => import_map::ext::ImportMapConfig {
+
+    let (import_map_url, import_map) = match specified_import_map {
+      Some(SpecifiedImportMap {
         base_url,
-        import_map_value: serde_json::Value::Object(Default::default()),
-      },
+        import_map,
+      }) => (base_url, import_map),
+      None => {
+        let config_specified_import_map = match root_folder.config.as_ref() {
+          Some(config) => config
+            .to_import_map_value(fetch_text)
+            .await
+            .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
+              referrer: config.specifier.clone(),
+              source,
+            })?,
+          None => None,
+        };
+        let base_import_map_config = match config_specified_import_map {
+          Some((base_url, import_map_value)) => {
+            import_map::ext::ImportMapConfig {
+              base_url: base_url.into_owned(),
+              import_map_value: import_map::ext::expand_import_map_value(
+                import_map_value,
+              ),
+            }
+          }
+          None => import_map::ext::ImportMapConfig {
+            base_url,
+            import_map_value: serde_json::Value::Object(Default::default()),
+          },
+        };
+        let child_import_map_configs = deno_jsons
+          .iter()
+          .filter(|f| {
+            Some(&f.specifier)
+              != root_folder.config.as_ref().map(|c| &c.specifier)
+          })
+          .map(|config| import_map::ext::ImportMapConfig {
+            base_url: config.specifier.clone(),
+            import_map_value: import_map::ext::expand_import_map_value(
+              config.to_import_map_value_from_imports(),
+            ),
+          })
+          .collect::<Vec<_>>();
+        let (import_map_url, import_map) =
+          ::import_map::ext::create_synthetic_import_map(
+            base_import_map_config,
+            child_import_map_configs,
+          );
+        let import_map = enhance_import_map_value_with_workspace_members(
+          import_map,
+          deno_jsons.iter().map(|c| c.as_ref()),
+        );
+        (import_map_url, import_map)
+      }
     };
-    let child_import_map_configs = deno_jsons
-      .iter()
-      .filter(|f| {
-        Some(&f.specifier) != root_folder.config.as_ref().map(|c| &c.specifier)
-      })
-      .map(|config| import_map::ext::ImportMapConfig {
-        base_url: config.specifier.clone(),
-        import_map_value: config.to_import_map_value_from_imports(),
-      })
-      .collect::<Vec<_>>();
-    let (import_map_url, import_map) =
-      ::import_map::ext::create_synthetic_import_map(
-        base_import_map_config,
-        child_import_map_configs,
-      );
-    let import_map = enhance_import_map_value_with_workspace_members(
-      import_map,
-      deno_jsons.iter().map(|c| c.as_ref()),
-    );
-    let import_map = import_map::ext::expand_import_map_value(import_map);
     let import_map = import_map::parse_from_value(import_map_url, import_map)?;
     let pkg_jsons = workspace
       .config_folders()

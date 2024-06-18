@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use anyhow::Error as AnyError;
 use indexmap::IndexMap;
+use resolver::SpecifiedImportMap;
 use thiserror::Error;
 use url::Url;
 
@@ -54,6 +55,12 @@ pub enum WorkspaceDiagnosticKind {
 pub struct WorkspaceDiagnostic {
   pub kind: WorkspaceDiagnosticKind,
   pub config_url: Url,
+}
+
+impl std::fmt::Display for WorkspaceDiagnostic {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}\n    at {}", self.kind, self.config_url,)
+  }
 }
 
 #[derive(Debug, Error)]
@@ -275,10 +282,12 @@ impl Workspace {
   pub async fn create_resolver<
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
-    workspace: &Workspace,
+    &self,
+    specified_import_map: Option<SpecifiedImportMap>,
     fetch_text: impl Fn(&Url) -> TReturn,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(workspace, fetch_text).await
+    WorkspaceResolver::from_workspace(self, specified_import_map, fetch_text)
+      .await
   }
 
   pub fn diagnostics(&self) -> Vec<WorkspaceDiagnostic> {
