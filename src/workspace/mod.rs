@@ -632,6 +632,25 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
+  pub fn resolve_config_excludes(&self) -> Result<PathOrPatternSet, AnyError> {
+    // have the root excludes at the front because they're lower priority
+    let mut excludes = match &self.root_folder().1.deno_json {
+      Some(c) => c.to_files_config()?.exclude.into_path_or_patterns(),
+      None => Default::default(),
+    };
+    for (dir_url, folder) in self.config_folders.iter() {
+      let Some(deno_json) = folder.deno_json.as_ref() else {
+        continue;
+      };
+      if dir_url == &self.root_dir {
+        continue;
+      }
+      excludes
+        .extend(deno_json.to_files_config()?.exclude.into_path_or_patterns());
+    }
+    Ok(PathOrPatternSet::new(excludes))
+  }
+
   pub fn has_unstable(&self, name: &str) -> bool {
     self
       .root_folder()
