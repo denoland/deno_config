@@ -343,6 +343,8 @@ fn is_conditional_exports_main_sugar(exports: &Value) -> bool {
 #[cfg(test)]
 mod test {
   use super::*;
+  use pretty_assertions::assert_eq;
+  use std::path::PathBuf;
 
   #[test]
   fn null_exports_should_not_crash() {
@@ -353,5 +355,158 @@ mod test {
     .unwrap();
 
     assert!(package_json.exports.is_none());
+  }
+
+  fn get_local_package_json_version_reqs_for_tests(
+    package_json: &PackageJson,
+  ) -> IndexMap<String, Result<PackageReq, String>> {
+    package_json
+      .resolve_local_package_json_version_reqs()
+      .into_iter()
+      .map(|(k, v)| {
+        (
+          k,
+          match v {
+            Ok(v) => Ok(v),
+            Err(err) => Err(err.to_string()),
+          },
+        )
+      })
+      .collect::<IndexMap<_, _>>()
+  }
+
+  #[test]
+  fn test_get_local_package_json_version_reqs() {
+    let mut package_json = PackageJson::load_from_string(
+      PathBuf::from("/package.json"),
+      "{}".to_string(),
+    )
+    .unwrap();
+    package_json.dependencies = Some(IndexMap::from([
+      ("test".to_string(), "^1.2".to_string()),
+      ("other".to_string(), "npm:package@~1.3".to_string()),
+    ]));
+    package_json.dev_dependencies = Some(IndexMap::from([
+      ("package_b".to_string(), "~2.2".to_string()),
+      // should be ignored
+      ("other".to_string(), "^3.2".to_string()),
+    ]));
+    let deps = get_local_package_json_version_reqs_for_tests(&package_json);
+    assert_eq!(
+      deps,
+      IndexMap::from([
+        (
+          "test".to_string(),
+          Ok(PackageReq::from_str("test@^1.2").unwrap())
+        ),
+        (
+          "other".to_string(),
+          Ok(PackageReq::from_str("package@~1.3").unwrap())
+        ),
+        (
+          "package_b".to_string(),
+          Ok(PackageReq::from_str("package_b@~2.2").unwrap())
+        )
+      ])
+    );
+  }
+
+  #[test]
+  fn test_get_local_package_json_version_reqs_errors_non_npm_specifier() {
+    let mut package_json = PackageJson::load_from_string(
+      PathBuf::from("/package.json"),
+      "{}".to_string(),
+    )
+    .unwrap();
+    package_json.dependencies = Some(IndexMap::from([(
+      "test".to_string(),
+      "%*(#$%()".to_string(),
+    )]));
+    let map = get_local_package_json_version_reqs_for_tests(&package_json);
+    assert_eq!(
+      map,
+      IndexMap::from([(
+        "test".to_string(),
+        Err(
+          concat!(
+            "Invalid npm version requirement. Unexpected character.\n",
+            "  %*(#$%()\n",
+            "  ~"
+          )
+          .to_string()
+        )
+      )])
+    );
+  }
+
+  #[test]
+  fn test_get_local_package_json_version_reqs_range() {
+    let mut package_json = PackageJson::load_from_string(
+      PathBuf::from("/package.json"),
+      "{}".to_string(),
+    )
+    .unwrap();
+    package_json.dependencies = Some(IndexMap::from([(
+      "test".to_string(),
+      "1.x - 1.3".to_string(),
+    )]));
+    let map = get_local_package_json_version_reqs_for_tests(&package_json);
+    assert_eq!(
+      map,
+      IndexMap::from([(
+        "test".to_string(),
+        Ok(PackageReq {
+          name: "test".to_string(),
+          version_req: VersionReq::parse_from_npm("1.x - 1.3").unwrap()
+        })
+      )])
+    );
+  }
+
+  #[test]
+  fn test_get_local_package_json_version_reqs_skips_certain_specifiers() {
+    let mut package_json = PackageJson::load_from_string(
+      PathBuf::from("/package.json"),
+      "{}".to_string(),
+    )
+    .unwrap();
+    package_json.dependencies = Some(IndexMap::from([
+      ("test".to_string(), "1".to_string()),
+      ("work-test".to_string(), "workspace:1.1.1".to_string()),
+      ("file-test".to_string(), "file:something".to_string()),
+      ("git-test".to_string(), "git:something".to_string()),
+      ("http-test".to_string(), "http://something".to_string()),
+      ("https-test".to_string(), "https://something".to_string()),
+    ]));
+    let result = get_local_package_json_version_reqs_for_tests(&package_json);
+    assert_eq!(
+      result,
+      IndexMap::from([
+        (
+          "file-test".to_string(),
+          Err("Not implemented scheme 'file'".to_string()),
+        ),
+        (
+          "git-test".to_string(),
+          Err("Not implemented scheme 'git'".to_string()),
+        ),
+        (
+          "http-test".to_string(),
+          Err("Not implemented scheme 'http'".to_string()),
+        ),
+        (
+          "https-test".to_string(),
+          Err("Not implemented scheme 'https'".to_string()),
+        ),
+        (
+          "test".to_string(),
+          Ok(PackageReq::from_str("test@1").unwrap())
+        ),
+        (
+          "work-test".to_string(),
+          Err("Not implemented scheme 'workspace'".to_string()),
+        )
+      ])
+    );
   }
 }

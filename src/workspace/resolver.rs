@@ -74,6 +74,8 @@ impl WorkspaceResolver {
       .unwrap_or_else(|| root_dir.join("deno.json").unwrap());
 
     let (import_map_url, import_map) = match specified_import_map {
+      // todo(THIS PR): is it ok that if someone does --import-map= that it just
+      // overwrites the entire workspace import map?
       Some(SpecifiedImportMap {
         base_url,
         import_map,
