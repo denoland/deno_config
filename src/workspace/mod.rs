@@ -49,6 +49,12 @@ pub use resolver::SpecifiedImportMap;
 pub use resolver::WorkspaceResolver;
 pub use resolver::WorkspaceResolverCreateError;
 
+#[derive(Debug, Clone)]
+pub struct JsrPackageConfig {
+  pub package_name: String,
+  pub config_file: Arc<ConfigFile>,
+}
+
 #[derive(Debug, Clone, Error)]
 pub enum WorkspaceDiagnosticKind {
   #[error("The '{0}' option can only be specified in the root workspace deno.json file.")]
@@ -409,16 +415,13 @@ impl Workspace {
 
   /// Resolves the member context from the directory that workspace discovery
   /// started from.
-  pub fn resolve_start_ctx(&self) -> WorkspaceMemberContext<'_> {
+  pub fn resolve_start_ctx(&self) -> WorkspaceMemberContext {
     self.resolve_member_ctx(&self.start_dir)
   }
 
   /// Resolves a workspace member's context, which can be used for deriving
   /// configuration specific to a member.
-  pub fn resolve_member_ctx(
-    &self,
-    specifier: &Url,
-  ) -> WorkspaceMemberContext<'_> {
+  pub fn resolve_member_ctx(&self, specifier: &Url) -> WorkspaceMemberContext {
     let maybe_folder = self.resolve_folder(specifier);
     match maybe_folder {
       Some((member_url, folder)) => {
@@ -460,9 +463,9 @@ impl Workspace {
                     .get(&self.root_dir)
                     .unwrap()
                     .pkg_json
-                    .as_ref()
+                    .clone()
                 },
-                member: pkg_json,
+                member: pkg_json.clone(),
               }
             }),
             deno_json: maybe_deno_json.map(|(member_url, config)| {
@@ -475,9 +478,9 @@ impl Workspace {
                     .get(&self.root_dir)
                     .unwrap()
                     .deno_json
-                    .as_ref()
+                    .clone()
                 },
-                member: config,
+                member: config.clone(),
               }
             }),
           }
@@ -487,6 +490,48 @@ impl Workspace {
         let root = self.config_folders.get(&self.root_dir).unwrap();
         WorkspaceMemberContext::create_from_root_folder(root)
       }
+    }
+  }
+
+  pub fn deno_jsons(&self) -> impl Iterator<Item = &Arc<ConfigFile>> {
+    self
+      .config_folders
+      .values()
+      .filter_map(|f| f.deno_json.as_ref())
+  }
+
+  pub fn packages(&self) -> Vec<JsrPackageConfig> {
+    self.deno_jsons().filter_map(|c| {
+      if !c.is_package() {
+        return None;
+      }
+      Some(JsrPackageConfig {
+        package_name: c.json.name.clone()?,
+        config_file: c.clone(),
+      })
+    }).collect()
+  }
+
+  pub fn packages_for_publish(&self) -> Vec<JsrPackageConfig> {
+    let ctx = self.resolve_start_ctx();
+    let Some(config) = ctx.deno_json else {
+        return Vec::new();
+      };
+    let deno_json = config.member;
+    if deno_json.dir_path() == self.root_dir.to_file_path().unwrap() {
+      return self.packages();
+    }
+    let Some(pkg_name) = deno_json.json.name.as_ref() else {
+      return Vec::new();
+    };
+
+    if deno_json.is_package() {
+      vec![JsrPackageConfig {
+        package_name: pkg_name.clone(),
+        config_file: deno_json.clone(),
+      }]
+    } else {
+      Vec::new()
     }
   }
 
@@ -638,6 +683,35 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
+  // pub fn resolve_ctxs_from_include_exclude(
+  //   &self,
+  //   cwd: &Path,
+  //   include: Option<&[String]>,
+  //   exclude: Option<&[String]>,
+  // ) -> Vec<WorkspaceMemberContext> {
+  //   let cwd = Url::from_directory_path(cwd).unwrap();
+  //   if include.is_none() {
+  //     let context = self.resolve_member_ctx(&cwd);
+
+  //     // sub configs
+  //     let mut sub_configs = Vec::with_capacity(self.config_folders.len() - 1);
+  //     let mut exclude_paths = Vec::with_capacity(self.config_folders.len() - 1);
+  //     for (dir_url, folder) in self.config_folders.iter() {
+  //       let config = match &folder.deno_json {
+  //         Some(c) => c,
+  //         None => continue,
+  //       };
+  //       if dir_url == &cwd || !cwd.as_str().starts_with(dir_url.as_str()) {
+  //         continue;
+  //       }
+  //       let member_ctx = self.resolve_member_ctx(dir_url);
+  //       sub_configs.push((member_ctx, Default::default()));
+  //     }
+  //   }
+
+  //   vec![]
+  // }
+
   pub fn resolve_config_excludes(&self) -> Result<PathOrPatternSet, AnyError> {
     // have the root excludes at the front because they're lower priority
     let mut excludes = match &self.root_folder().1.deno_json {
@@ -777,30 +851,30 @@ impl WorkspaceTasksConfig {
   }
 }
 
-struct WorkspaceMemberContextConfig<'a, T> {
-  member: &'a Arc<T>,
+struct WorkspaceMemberContextConfig<T> {
+  member: Arc<T>,
   // will be None when it doesn't exist or the member config
   // is the root config
-  root: Option<&'a Arc<T>>,
+  root: Option<Arc<T>>,
 }
 
-pub struct WorkspaceMemberContext<'a> {
-  pkg_json: Option<WorkspaceMemberContextConfig<'a, PackageJson>>,
-  deno_json: Option<WorkspaceMemberContextConfig<'a, ConfigFile>>,
+pub struct WorkspaceMemberContext {
+  pkg_json: Option<WorkspaceMemberContextConfig<PackageJson>>,
+  deno_json: Option<WorkspaceMemberContextConfig<ConfigFile>>,
 }
 
-impl<'a> WorkspaceMemberContext<'a> {
-  fn create_from_root_folder(root_folder: &'a FolderConfigs) -> Self {
+impl WorkspaceMemberContext {
+  fn create_from_root_folder(root_folder: &FolderConfigs) -> Self {
     WorkspaceMemberContext {
       pkg_json: root_folder.pkg_json.as_ref().map(|config| {
         WorkspaceMemberContextConfig {
-          member: config,
+          member: config.clone(),
           root: None,
         }
       }),
       deno_json: root_folder.deno_json.as_ref().map(|config| {
         WorkspaceMemberContextConfig {
-          member: config,
+          member: config.clone(),
           root: None,
         }
       }),
@@ -808,15 +882,23 @@ impl<'a> WorkspaceMemberContext<'a> {
   }
 
   pub fn has_deno_or_pkg_json(&self) -> bool {
-    self.has_pkg_json() || self.deno_json.is_some()
+    self.has_pkg_json() || self.has_deno_json()
+  }
+
+  pub fn has_deno_json(&self) -> bool {
+    self.deno_json.is_some()
   }
 
   pub fn has_pkg_json(&self) -> bool {
     self.pkg_json.is_some()
   }
 
-  pub fn deno_json(&self) -> Option<&Arc<ConfigFile>> {
-    self.deno_json.as_ref().map(|c| c.member)
+  pub fn maybe_deno_json(&self) -> Option<&Arc<ConfigFile>> {
+    self.deno_json.as_ref().map(|c| &c.member)
+  }
+
+  pub fn maybe_pkg_json(&self) -> Option<&Arc<PackageJson>> {
+    self.pkg_json.as_ref().map(|c| &c.member)
   }
 
   pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
@@ -968,12 +1050,12 @@ impl<'a> WorkspaceMemberContext<'a> {
 
     Ok(WorkspaceTasksConfig {
       root: to_member_tasks_config(
-        self.deno_json.as_ref().and_then(|d| d.root),
-        self.pkg_json.as_ref().and_then(|d| d.root),
+        self.deno_json.as_ref().and_then(|d| d.root.as_ref()),
+        self.pkg_json.as_ref().and_then(|d| d.root.as_ref()),
       )?,
       member: to_member_tasks_config(
-        self.deno_json.as_ref().map(|d| d.member),
-        self.pkg_json.as_ref().map(|d| d.member),
+        self.deno_json.as_ref().map(|d| &d.member),
+        self.pkg_json.as_ref().map(|d| &d.member),
       )?,
     })
   }
