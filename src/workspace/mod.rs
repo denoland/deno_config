@@ -686,6 +686,11 @@ impl Workspace {
   }
 }
 
+pub enum TaskOrScript<'a> {
+  Task(&'a IndexMap<String, Task>, &'a str),
+  Script(&'a IndexMap<String, String>, &'a str),
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceMemberTasksConfig {
   pub folder_url: Url,
@@ -694,6 +699,14 @@ pub struct WorkspaceMemberTasksConfig {
 }
 
 impl WorkspaceMemberTasksConfig {
+  pub fn with_only_pkg_json(self) -> Self {
+    WorkspaceMemberTasksConfig {
+      folder_url: self.folder_url,
+      deno_json: None,
+      package_json: self.package_json,
+    }
+  }
+
   pub fn is_empty(&self) -> bool {
     self
       .deno_json
@@ -711,6 +724,24 @@ impl WorkspaceMemberTasksConfig {
     self.deno_json.as_ref().map(|d| d.len()).unwrap_or(0)
       + self.package_json.as_ref().map(|d| d.len()).unwrap_or(0)
   }
+
+  pub fn task(&self, name: &str) -> Option<(&Url, TaskOrScript)> {
+    self
+      .deno_json
+      .as_ref()
+      .and_then(|tasks| {
+        tasks.get(name).map(|t| {
+          (&self.folder_url, TaskOrScript::Task(tasks, t.definition()))
+        })
+      })
+      .or_else(|| {
+        self.package_json.as_ref().and_then(|scripts| {
+          scripts
+            .get(name)
+            .map(|s| (&self.folder_url, TaskOrScript::Script(scripts, s)))
+        })
+      })
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -720,6 +751,21 @@ pub struct WorkspaceTasksConfig {
 }
 
 impl WorkspaceTasksConfig {
+  pub fn with_only_pkg_json(self) -> Self {
+    WorkspaceTasksConfig {
+      root: self.root.map(|c| c.with_only_pkg_json()),
+      member: self.member.map(|c| c.with_only_pkg_json()),
+    }
+  }
+
+  pub fn task(&self, name: &str) -> Option<(&Url, TaskOrScript)> {
+    self
+      .member
+      .as_ref()
+      .and_then(|m| m.task(name))
+      .or_else(|| self.root.as_ref().and_then(|r| r.task(name)))
+  }
+
   pub fn is_empty(&self) -> bool {
     self.root.as_ref().map(|r| r.is_empty()).unwrap_or(true)
       && self.member.as_ref().map(|r| r.is_empty()).unwrap_or(true)
@@ -762,7 +808,11 @@ impl<'a> WorkspaceMemberContext<'a> {
   }
 
   pub fn has_deno_or_pkg_json(&self) -> bool {
-    self.pkg_json.is_some() || self.deno_json.is_some()
+    self.has_pkg_json() || self.deno_json.is_some()
+  }
+
+  pub fn has_pkg_json(&self) -> bool {
+    self.pkg_json.is_some()
   }
 
   pub fn deno_json(&self) -> Option<&Arc<ConfigFile>> {

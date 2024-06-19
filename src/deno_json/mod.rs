@@ -471,6 +471,15 @@ pub enum Task {
   },
 }
 
+impl Task {
+  pub fn definition(&self) -> &str {
+    match self {
+      Task::Definition(d) => d,
+      Task::Commented { definition, .. } => definition,
+    }
+  }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigFileReadError {
   #[error("Could not convert config file path to specifier. Path: {0}")]
