@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error as AnyError;
 use indexmap::IndexMap;
@@ -20,6 +21,7 @@ use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::ConfigParseOptions;
 use crate::get_ts_config_for_emit;
 use crate::glob::FilePatterns;
+use crate::glob::PathKind;
 use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonLoadError;
@@ -41,6 +43,7 @@ use crate::Task;
 use crate::TestConfig;
 use crate::TsConfigForEmit;
 use crate::TsConfigType;
+use crate::WorkspaceLintConfig;
 
 mod resolver;
 
@@ -52,6 +55,7 @@ pub use resolver::WorkspaceResolverCreateError;
 #[derive(Debug, Clone)]
 pub struct JsrPackageConfig {
   pub package_name: String,
+  pub member_ctx: WorkspaceMemberContext,
   pub config_file: Arc<ConfigFile>,
 }
 
@@ -501,37 +505,33 @@ impl Workspace {
   }
 
   pub fn packages(&self) -> Vec<JsrPackageConfig> {
-    self.deno_jsons().filter_map(|c| {
-      if !c.is_package() {
-        return None;
-      }
-      Some(JsrPackageConfig {
-        package_name: c.json.name.clone()?,
-        config_file: c.clone(),
+    self
+      .deno_jsons()
+      .filter_map(|c| {
+        if !c.is_package() {
+          return None;
+        }
+        Some(JsrPackageConfig {
+          member_ctx: self.resolve_member_ctx(&c.specifier),
+          package_name: c.json.name.clone()?,
+          config_file: c.clone(),
+        })
       })
-    }).collect()
+      .collect()
   }
 
   pub fn packages_for_publish(&self) -> Vec<JsrPackageConfig> {
     let ctx = self.resolve_start_ctx();
-    let Some(config) = ctx.deno_json else {
-        return Vec::new();
-      };
-    let deno_json = config.member;
+    let Some(config) = &ctx.deno_json else {
+      return Vec::new();
+    };
+    let deno_json = &config.member;
     if deno_json.dir_path() == self.root_dir.to_file_path().unwrap() {
       return self.packages();
     }
-    let Some(pkg_name) = deno_json.json.name.as_ref() else {
-      return Vec::new();
-    };
-
-    if deno_json.is_package() {
-      vec![JsrPackageConfig {
-        package_name: pkg_name.clone(),
-        config_file: deno_json.clone(),
-      }]
-    } else {
-      Vec::new()
+    match ctx.maybe_package_config() {
+      Some(pkg) => vec![pkg],
+      None => Vec::new(),
     }
   }
 
@@ -643,6 +643,33 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
+  pub fn to_lint_config(&self) -> Result<WorkspaceLintConfig, AnyError> {
+    self
+      .with_root_config_only(|root_config| {
+        Ok(WorkspaceLintConfig {
+          report: match root_config
+            .json
+            .lint
+            .as_ref()
+            .and_then(|l| l.get("report"))
+          {
+            Some(report) => match report {
+              serde_json::Value::String(value) => Some(value.to_string()),
+              serde_json::Value::Null => None,
+              serde_json::Value::Bool(_)
+              | serde_json::Value::Number(_)
+              | serde_json::Value::Array(_)
+              | serde_json::Value::Object(_) => {
+                bail!("lint.report must be a string")
+              }
+            },
+            None => None,
+          },
+        })
+      })
+      .unwrap_or(Ok(Default::default()))
+  }
+
   pub fn resolve_ts_config_for_emit(
     &self,
     config_type: TsConfigType,
@@ -683,34 +710,34 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
-  // pub fn resolve_ctxs_from_include_exclude(
-  //   &self,
-  //   cwd: &Path,
-  //   include: Option<&[String]>,
-  //   exclude: Option<&[String]>,
-  // ) -> Vec<WorkspaceMemberContext> {
-  //   let cwd = Url::from_directory_path(cwd).unwrap();
-  //   if include.is_none() {
-  //     let context = self.resolve_member_ctx(&cwd);
+  pub fn resolve_ctxs_from_patterns(
+    &self,
+    patterns: &FilePatterns,
+  ) -> Vec<WorkspaceMemberContext> {
+    let context = self.resolve_start_ctx();
+    let mut ctxs = Vec::with_capacity(self.config_folders.len());
+    ctxs.push(context);
 
-  //     // sub configs
-  //     let mut sub_configs = Vec::with_capacity(self.config_folders.len() - 1);
-  //     let mut exclude_paths = Vec::with_capacity(self.config_folders.len() - 1);
-  //     for (dir_url, folder) in self.config_folders.iter() {
-  //       let config = match &folder.deno_json {
-  //         Some(c) => c,
-  //         None => continue,
-  //       };
-  //       if dir_url == &cwd || !cwd.as_str().starts_with(dir_url.as_str()) {
-  //         continue;
-  //       }
-  //       let member_ctx = self.resolve_member_ctx(dir_url);
-  //       sub_configs.push((member_ctx, Default::default()));
-  //     }
-  //   }
+    // sub configs
+    for (dir_url, folder) in self.config_folders.iter() {
+      let config = match &folder.deno_json {
+        Some(c) => c,
+        None => continue,
+      };
+      if *dir_url == self.start_dir
+        || !self.start_dir.as_str().starts_with(dir_url.as_str())
+      {
+        continue;
+      }
 
-  //   vec![]
-  // }
+      if patterns.matches_path(&config.dir_path(), PathKind::Directory) {
+        let member_ctx = self.resolve_member_ctx(dir_url);
+        ctxs.push(member_ctx);
+      }
+    }
+
+    ctxs
+  }
 
   pub fn resolve_config_excludes(&self) -> Result<PathOrPatternSet, AnyError> {
     // have the root excludes at the front because they're lower priority
@@ -851,6 +878,7 @@ impl WorkspaceTasksConfig {
   }
 }
 
+#[derive(Debug, Clone)]
 struct WorkspaceMemberContextConfig<T> {
   member: Arc<T>,
   // will be None when it doesn't exist or the member config
@@ -858,6 +886,7 @@ struct WorkspaceMemberContextConfig<T> {
   root: Option<Arc<T>>,
 }
 
+#[derive(Debug, Clone)]
 pub struct WorkspaceMemberContext {
   pkg_json: Option<WorkspaceMemberContextConfig<PackageJson>>,
   deno_json: Option<WorkspaceMemberContextConfig<ConfigFile>>,
@@ -901,6 +930,19 @@ impl WorkspaceMemberContext {
     self.pkg_json.as_ref().map(|c| &c.member)
   }
 
+  pub fn maybe_package_config(&self) -> Option<JsrPackageConfig> {
+    let deno_json = self.maybe_deno_json()?;
+    let pkg_name = deno_json.json.name.as_ref()?;
+    if !deno_json.is_package() {
+      return None;
+    }
+    Some(JsrPackageConfig {
+      package_name: pkg_name.clone(),
+      config_file: deno_json.clone(),
+      member_ctx: self.clone(),
+    })
+  }
+
   pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(None);
@@ -913,7 +955,6 @@ impl WorkspaceMemberContext {
     let Some(mut member_config) = maybe_member_config else {
       return Ok(maybe_root_config);
     };
-    member_config.report = None; // this is a root only option
     let Some(root_config) = maybe_root_config else {
       return Ok(Some(member_config));
     };
@@ -940,7 +981,6 @@ impl WorkspaceMemberContext {
         ),
       },
       files: combine_patterns(root_config.files, member_config.files),
-      report: root_config.report,
     }))
   }
 
@@ -1101,6 +1141,11 @@ impl WorkspaceMemberContext {
       files: combine_patterns(root_config.files, member_config.files),
     }))
   }
+}
+
+pub struct MultiDenoJsonCtx {
+  maybe_cli_arg_patterns: Option<FilePatterns>,
+  ctxs: Vec<WorkspaceMemberContext>,
 }
 
 fn combine_patterns(

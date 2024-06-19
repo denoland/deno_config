@@ -412,6 +412,10 @@ impl PathOrPatternSet {
     }
     result
   }
+
+  pub fn append(&mut self, items: impl Iterator<Item = PathOrPattern>) {
+    self.0.extend(items)
+  }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]

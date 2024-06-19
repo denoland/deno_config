@@ -171,16 +171,19 @@ impl SerializedLintConfig {
       rules: self.rules,
       files: choose_files(files, self.deprecated_files)
         .into_resolved(config_file_specifier)?,
-      report: self.report,
     })
   }
+}
+
+#[derive(Clone, Debug, Default, Hash, PartialEq)]
+pub struct WorkspaceLintConfig {
+  pub report: Option<String>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct LintConfig {
   pub rules: LintRulesConfig,
   pub files: FilePatterns,
-  pub report: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
@@ -1286,7 +1289,9 @@ impl ConfigFile {
       .map(Some)
   }
 
-  pub fn to_publish_config(&self) -> Result<Option<PublishConfig>, AnyError> {
+  pub(crate) fn to_publish_config(
+    &self,
+  ) -> Result<Option<PublishConfig>, AnyError> {
     let mut exclude_patterns = self.resolve_exclude_patterns()?;
     let serialized = match self.json.publish.clone() {
       Some(config) => {
@@ -1807,7 +1812,6 @@ mod tests {
           exclude: None,
           tags: Some(vec!["recommended".to_string()]),
         },
-        report: None,
       }
     );
     assert_eq!(
