@@ -84,7 +84,7 @@ pub enum MappedResolutionError {
 #[derive(Debug)]
 pub struct WorkspaceResolver {
   import_map: ImportMapWithDiagnostics,
-  pkg_jsons: BTreeMap<Url, PkgJsonResolverFolderConfig>,
+  pkg_jsons: BTreeMap<Arc<Url>, PkgJsonResolverFolderConfig>,
 }
 
 impl WorkspaceResolver {
@@ -184,7 +184,7 @@ impl WorkspaceResolver {
   }
 
   /// Creates a new WorkspaceResolver from the specified import map and package.jsons.
-  /// 
+  ///
   /// Generally, create this from a Workspace instead.
   pub fn new_raw(
     import_map: ImportMap,
@@ -199,7 +199,9 @@ impl WorkspaceResolver {
       .map(|pkg_json| {
         let deps = pkg_json.resolve_local_package_json_version_reqs();
         (
-          Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
+          Arc::new(
+            Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
+          ),
           PkgJsonResolverFolderConfig { deps, pkg_json },
         )
       })

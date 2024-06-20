@@ -48,6 +48,13 @@ impl FilePatterns {
     }
   }
 
+  pub fn with_new_base(self, new_base: PathBuf) -> Self {
+    Self {
+      base: new_base,
+      ..self
+    }
+  }
+
   pub fn matches_specifier(&self, specifier: &Url) -> bool {
     self.matches_specifier_detail(specifier) != FilePatternsMatch::Excluded
   }
