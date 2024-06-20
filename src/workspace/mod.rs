@@ -952,7 +952,7 @@ impl WorkspaceMemberContext {
       Some(root) => root.to_lint_config()?,
       None => None,
     };
-    let Some(mut member_config) = maybe_member_config else {
+    let Some(member_config) = maybe_member_config else {
       return Ok(maybe_root_config);
     };
     let Some(root_config) = maybe_root_config else {
@@ -1141,11 +1141,6 @@ impl WorkspaceMemberContext {
       files: combine_patterns(root_config.files, member_config.files),
     }))
   }
-}
-
-pub struct MultiDenoJsonCtx {
-  maybe_cli_arg_patterns: Option<FilePatterns>,
-  ctxs: Vec<WorkspaceMemberContext>,
 }
 
 fn combine_patterns(

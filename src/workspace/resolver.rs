@@ -183,8 +183,10 @@ impl WorkspaceResolver {
     })
   }
 
-  /// Creates a new WorkspaceResolver specifically for deno compile.
-  pub fn new_for_deno_compile(
+  /// Creates a new WorkspaceResolver from the specified import map and package.jsons.
+  /// 
+  /// Generally, create this from a Workspace instead.
+  pub fn new_raw(
     import_map: ImportMap,
     pkg_jsons: Vec<Arc<PackageJson>>,
   ) -> Self {
