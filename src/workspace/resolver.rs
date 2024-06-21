@@ -11,7 +11,7 @@ use import_map::ImportMap;
 use import_map::ImportMapDiagnostic;
 use import_map::ImportMapError;
 use import_map::ImportMapWithDiagnostics;
-use indexmap::IndexMap;
+use import_map::ResolveImportError;
 use thiserror::Error;
 use url::Url;
 
@@ -50,31 +50,47 @@ pub enum WorkspaceResolverCreateError {
   ImportMap(#[from] import_map::ImportMapError),
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct CreateResolverOptions {
+  /// Whether to resolve dependencies by reading the dependencies list
+  /// from a package.json
+  ///
+  /// This should only be set when a node_modules folder doesn't exist
+  /// as node resolution should be used otherwise.
+  pub pkg_json_dep_resolution: bool,
+  pub specified_import_map: Option<SpecifiedImportMap>,
+}
+
+#[derive(Debug, Clone)]
 pub struct SpecifiedImportMap {
   pub base_url: Url,
   pub value: serde_json::Value,
 }
 
+#[derive(Debug, Clone)]
 pub enum MappedResolution<'a> {
+  Normal(Url),
+  ImportMap(Url),
   PackageJson {
     pkg_json: &'a Arc<PackageJson>,
     alias: &'a str,
     req_ref: NpmPackageReqReference,
   },
-  ImportMap(Url),
 }
 
 impl<'a> MappedResolution<'a> {
   pub fn into_url(self) -> Result<Url, url::ParseError> {
     match self {
+      Self::Normal(url) | Self::ImportMap(url) => Ok(url),
       Self::PackageJson { req_ref, .. } => Url::parse(&req_ref.to_string()),
-      Self::ImportMap(url) => Ok(url),
     }
   }
 }
 
 #[derive(Debug, Error)]
 pub enum MappedResolutionError {
+  #[error(transparent)]
+  Resolve(#[from] ResolveImportError),
   #[error(transparent)]
   ImportMap(#[from] ImportMapError),
   #[error(transparent)]
@@ -83,7 +99,7 @@ pub enum MappedResolutionError {
 
 #[derive(Debug)]
 pub struct WorkspaceResolver {
-  import_map: ImportMapWithDiagnostics,
+  maybe_import_map: Option<ImportMapWithDiagnostics>,
   pkg_jsons: BTreeMap<Arc<Url>, PkgJsonResolverFolderConfig>,
 }
 
@@ -92,80 +108,90 @@ impl WorkspaceResolver {
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
     workspace: &Workspace,
-    specified_import_map: Option<SpecifiedImportMap>,
+    options: CreateResolverOptions,
     fetch_text: impl Fn(&Url) -> TReturn,
   ) -> Result<Self, WorkspaceResolverCreateError> {
-    let (root_dir, root_folder) = workspace.root_folder();
-    let deno_jsons = workspace
-      .config_folders()
-      .iter()
-      .filter_map(|(_, f)| f.deno_json.as_ref())
-      .collect::<Vec<_>>();
-    let base_url = root_folder
-      .deno_json
-      .as_ref()
-      .map(|c| c.specifier.clone())
-      .unwrap_or_else(|| root_dir.join("deno.json").unwrap());
+    async fn resolve_import_map<
+      TReturn: Future<Output = Result<String, AnyError>>,
+    >(
+      workspace: &Workspace,
+      specified_import_map: Option<SpecifiedImportMap>,
+      fetch_text: impl Fn(&Url) -> TReturn,
+    ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
+    {
+      let root_folder = workspace.root_folder().1;
+      let deno_jsons = workspace
+        .config_folders()
+        .iter()
+        .filter_map(|(_, f)| f.deno_json.as_ref())
+        .collect::<Vec<_>>();
 
-    let (import_map_url, import_map) = match specified_import_map {
-      // todo(THIS PR): is it ok that if someone does --import-map= that it just
-      // overwrites the entire workspace import map?
-      Some(SpecifiedImportMap {
-        base_url,
-        value: import_map,
-      }) => (base_url, import_map),
-      None => {
-        let config_specified_import_map = match root_folder.deno_json.as_ref() {
-          Some(config) => config
-            .to_import_map_value(fetch_text)
-            .await
-            .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
-              referrer: config.specifier.clone(),
-              source,
-            })?,
-          None => None,
-        };
-        let base_import_map_config = match config_specified_import_map {
-          Some((base_url, import_map_value)) => {
-            import_map::ext::ImportMapConfig {
-              base_url: base_url.into_owned(),
-              import_map_value: import_map::ext::expand_import_map_value(
-                import_map_value,
-              ),
+      let (import_map_url, import_map) = match specified_import_map {
+        // todo(THIS PR): is it ok that if someone does --import-map= that it just
+        // overwrites the entire workspace import map?
+        Some(SpecifiedImportMap {
+          base_url,
+          value: import_map,
+        }) => (base_url, import_map),
+        None => {
+          let config_specified_import_map = match root_folder.deno_json.as_ref()
+          {
+            Some(config) => {
+              config.to_import_map_value(fetch_text).await.map_err(
+                |source| WorkspaceResolverCreateError::ImportMapFetch {
+                  referrer: config.specifier.clone(),
+                  source,
+                },
+              )?
             }
-          }
-          None => import_map::ext::ImportMapConfig {
-            base_url,
-            import_map_value: serde_json::Value::Object(Default::default()),
-          },
-        };
-        let child_import_map_configs = deno_jsons
-          .iter()
-          .filter(|f| {
-            Some(&f.specifier)
-              != root_folder.deno_json.as_ref().map(|c| &c.specifier)
-          })
-          .map(|config| import_map::ext::ImportMapConfig {
-            base_url: config.specifier.clone(),
-            import_map_value: import_map::ext::expand_import_map_value(
-              config.to_import_map_value_from_imports(),
-            ),
-          })
-          .collect::<Vec<_>>();
-        let (import_map_url, import_map) =
-          ::import_map::ext::create_synthetic_import_map(
-            base_import_map_config,
-            child_import_map_configs,
+            None => return Ok(None),
+          };
+          let base_import_map_config = match config_specified_import_map {
+            Some((base_url, import_map_value)) => {
+              import_map::ext::ImportMapConfig {
+                base_url: base_url.into_owned(),
+                import_map_value: import_map::ext::expand_import_map_value(
+                  import_map_value,
+                ),
+              }
+            }
+            None => return Ok(None),
+          };
+          let child_import_map_configs = deno_jsons
+            .iter()
+            .filter(|f| {
+              Some(&f.specifier)
+                != root_folder.deno_json.as_ref().map(|c| &c.specifier)
+            })
+            .map(|config| import_map::ext::ImportMapConfig {
+              base_url: config.specifier.clone(),
+              import_map_value: import_map::ext::expand_import_map_value(
+                config.to_import_map_value_from_imports(),
+              ),
+            })
+            .collect::<Vec<_>>();
+          let (import_map_url, import_map) =
+            ::import_map::ext::create_synthetic_import_map(
+              base_import_map_config,
+              child_import_map_configs,
+            );
+          let import_map = enhance_import_map_value_with_workspace_members(
+            import_map,
+            deno_jsons.iter().map(|c| c.as_ref()),
           );
-        let import_map = enhance_import_map_value_with_workspace_members(
-          import_map,
-          deno_jsons.iter().map(|c| c.as_ref()),
-        );
-        (import_map_url, import_map)
-      }
-    };
-    let import_map = import_map::parse_from_value(import_map_url, import_map)?;
-    let pkg_jsons = workspace
+          (import_map_url, import_map)
+        }
+      };
+      Ok(Some(import_map::parse_from_value(
+        import_map_url,
+        import_map,
+      )?))
+    }
+
+    let maybe_import_map =
+      resolve_import_map(workspace, options.specified_import_map, fetch_text).await?;
+    let pkg_jsons = if options.pkg_json_dep_resolution {
+      workspace
       .config_folders()
       .iter()
       .filter_map(|(dir_url, f)| {
@@ -176,9 +202,12 @@ impl WorkspaceResolver {
           PkgJsonResolverFolderConfig { deps, pkg_json },
         ))
       })
-      .collect::<BTreeMap<_, _>>();
+      .collect::<BTreeMap<_, _>>()
+    } else {
+      BTreeMap::default()
+    };
     Ok(Self {
-      import_map,
+      maybe_import_map,
       pkg_jsons,
     })
   }
@@ -187,13 +216,14 @@ impl WorkspaceResolver {
   ///
   /// Generally, create this from a Workspace instead.
   pub fn new_raw(
-    import_map: ImportMap,
+    maybe_import_map: Option<ImportMap>,
     pkg_jsons: Vec<Arc<PackageJson>>,
   ) -> Self {
-    let import_map = ImportMapWithDiagnostics {
-      import_map,
-      diagnostics: Default::default(),
-    };
+    let maybe_import_map =
+      maybe_import_map.map(|import_map| ImportMapWithDiagnostics {
+        import_map,
+        diagnostics: Default::default(),
+      });
     let pkg_jsons = pkg_jsons
       .into_iter()
       .map(|pkg_json| {
@@ -207,13 +237,13 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
     Self {
-      import_map,
+      maybe_import_map,
       pkg_jsons,
     }
   }
 
-  pub fn import_map(&self) -> &ImportMap {
-    &self.import_map.import_map
+  pub fn maybe_import_map(&self) -> Option<&ImportMap> {
+    self.maybe_import_map.as_ref().map(|c| &c.import_map)
   }
 
   pub fn package_jsons(&self) -> impl Iterator<Item = &Arc<PackageJson>> {
@@ -221,7 +251,11 @@ impl WorkspaceResolver {
   }
 
   pub fn diagnostics(&self) -> &[ImportMapDiagnostic] {
-    &self.import_map.diagnostics
+    self
+      .maybe_import_map
+      .as_ref()
+      .map(|c| &c.diagnostics as &[ImportMapDiagnostic])
+      .unwrap_or(&[])
   }
 
   pub fn resolve<'a>(
@@ -229,12 +263,19 @@ impl WorkspaceResolver {
     specifier: &str,
     referrer: &Url,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
-    // attempt to resolve with the import map first
-    let import_map_err =
-      match self.import_map.import_map.resolve(specifier, referrer) {
-        Ok(value) => return Ok(MappedResolution::ImportMap(value)),
-        Err(err) => err,
-      };
+    // attempt to resolve with the import map and normally first
+    let resolve_error = match &self.maybe_import_map {
+      Some(import_map) => {
+        match import_map.import_map.resolve(specifier, referrer) {
+          Ok(value) => return Ok(MappedResolution::ImportMap(value)),
+          Err(err) => MappedResolutionError::ImportMap(err),
+        }
+      }
+      None => match import_map::resolve_import(specifier, referrer) {
+        Ok(value) => return Ok(MappedResolution::Normal(value)),
+        Err(err) => MappedResolutionError::Resolve(err),
+      },
+    };
 
     // then using the package.json
     let mut previously_found_dir = false;
@@ -270,8 +311,8 @@ impl WorkspaceResolver {
       }
     }
 
-    // wasn't found, so maybe surface the import map error
-    Err(import_map_err.into())
+    // wasn't found, so surface the initial resolve error
+    Err(resolve_error)
   }
 }
 

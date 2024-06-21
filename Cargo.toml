@@ -23,7 +23,7 @@ percent-encoding = "2.3.0"
 serde = { version = "1.0.149", features = ["derive"] }
 serde_json = "1.0.85"
 url = { version = "2.3.1" }
-import_map = { version = "0.19.0", features = ["ext"], optional = true }
+import_map = { version = "0.19.1", features = ["ext"], optional = true }
 thiserror = "1.0.61"
 deno_semver = { version = "0.5.6", optional = true }
 
@@ -31,3 +31,6 @@ deno_semver = { version = "0.5.6", optional = true }
 tempfile = "3.4.0"
 pretty_assertions = "1.4.0"
 tokio = { version = "1.10.1", features = ["macros", "rt-multi-thread"] }
+
+[patch.crates-io]
+import_map = { path = "../import_map/rs-lib" }

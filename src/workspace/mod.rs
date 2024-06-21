@@ -49,6 +49,7 @@ mod resolver;
 
 pub use resolver::MappedResolution;
 pub use resolver::SpecifiedImportMap;
+pub use resolver::CreateResolverOptions;
 pub use resolver::WorkspaceResolver;
 pub use resolver::WorkspaceResolverCreateError;
 
@@ -286,8 +287,11 @@ impl Workspace {
           .starts_with(pkg_json_dir.as_str())
         {
           // the package.json was in a higher up directory
-          workspace.root_dir = pkg_json_dir;
+          workspace.root_dir = pkg_json_dir.clone();
         }
+
+        workspace.config_folders.entry(pkg_json_dir).or_default().pkg_json =
+          Some(root);
 
         for (member_dir, pkg_json) in members {
           workspace
@@ -302,6 +306,7 @@ impl Workspace {
       }
     }
 
+    debug_assert!(workspace.config_folders.contains_key(&workspace.root_dir), "root should always have a folder");
     Ok(workspace)
   }
 
@@ -309,10 +314,10 @@ impl Workspace {
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
     &self,
-    specified_import_map: Option<SpecifiedImportMap>,
+    options: CreateResolverOptions,
     fetch_text: impl Fn(&Url) -> TReturn,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(self, specified_import_map, fetch_text)
+    WorkspaceResolver::from_workspace(self, options, fetch_text)
       .await
   }
 
@@ -1293,6 +1298,7 @@ pub enum DenoOrPkgJson {
   PkgJson(Arc<crate::package_json::PackageJson>),
 }
 
+#[derive(Debug)]
 enum ConfigFileDiscovery {
   None,
   Single(Arc<ConfigFile>),
@@ -1470,6 +1476,7 @@ fn discover_workspace_config_files(
   }
 }
 
+#[derive(Debug)]
 enum PackageJsonDiscovery {
   None,
   Single(Arc<PackageJson>),
@@ -1496,6 +1503,7 @@ fn discover_with_npm(
   };
   let maybe_stop_dir = maybe_stop_config_file_path
     .as_ref()
+    .and_then(|p| p.parent())
     .and_then(|p| p.parent());
   for ancestor in opts.start.dir_path().ancestors() {
     if Some(ancestor) == maybe_stop_dir {
