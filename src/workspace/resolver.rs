@@ -7,11 +7,11 @@ use std::sync::Arc;
 use anyhow::Error as AnyError;
 use deno_semver::npm::NpmPackageReqReference;
 use deno_semver::package::PackageReqReference;
+use import_map::specifier::SpecifierError;
 use import_map::ImportMap;
 use import_map::ImportMapDiagnostic;
 use import_map::ImportMapError;
 use import_map::ImportMapWithDiagnostics;
-use import_map::ResolveImportError;
 use thiserror::Error;
 use url::Url;
 
@@ -90,7 +90,7 @@ impl<'a> MappedResolution<'a> {
 #[derive(Debug, Error)]
 pub enum MappedResolutionError {
   #[error(transparent)]
-  Resolve(#[from] ResolveImportError),
+  Specifier(#[from] SpecifierError),
   #[error(transparent)]
   ImportMap(#[from] ImportMapError),
   #[error(transparent)]
@@ -189,20 +189,21 @@ impl WorkspaceResolver {
     }
 
     let maybe_import_map =
-      resolve_import_map(workspace, options.specified_import_map, fetch_text).await?;
+      resolve_import_map(workspace, options.specified_import_map, fetch_text)
+        .await?;
     let pkg_jsons = if options.pkg_json_dep_resolution {
       workspace
-      .config_folders()
-      .iter()
-      .filter_map(|(dir_url, f)| {
-        let pkg_json = f.pkg_json.clone()?;
-        let deps = pkg_json.resolve_local_package_json_version_reqs();
-        Some((
-          dir_url.clone(),
-          PkgJsonResolverFolderConfig { deps, pkg_json },
-        ))
-      })
-      .collect::<BTreeMap<_, _>>()
+        .config_folders()
+        .iter()
+        .filter_map(|(dir_url, f)| {
+          let pkg_json = f.pkg_json.clone()?;
+          let deps = pkg_json.resolve_local_package_json_version_reqs();
+          Some((
+            dir_url.clone(),
+            PkgJsonResolverFolderConfig { deps, pkg_json },
+          ))
+        })
+        .collect::<BTreeMap<_, _>>()
     } else {
       BTreeMap::default()
     };
@@ -271,9 +272,9 @@ impl WorkspaceResolver {
           Err(err) => MappedResolutionError::ImportMap(err),
         }
       }
-      None => match import_map::resolve_import(specifier, referrer) {
+      None => match import_map::specifier::resolve_import(specifier, referrer) {
         Ok(value) => return Ok(MappedResolution::Normal(value)),
-        Err(err) => MappedResolutionError::Resolve(err),
+        Err(err) => MappedResolutionError::Specifier(err),
       },
     };
 

@@ -48,6 +48,7 @@ use crate::WorkspaceLintConfig;
 mod resolver;
 
 pub use resolver::MappedResolution;
+pub use resolver::MappedResolutionError;
 pub use resolver::SpecifiedImportMap;
 pub use resolver::CreateResolverOptions;
 pub use resolver::WorkspaceResolver;
