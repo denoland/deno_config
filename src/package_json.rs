@@ -139,13 +139,8 @@ impl PackageJson {
       if let Value::Object(map) = value {
         let mut result = IndexMap::with_capacity(map.len());
         for (k, v) in map {
-          match v {
-            Value::String(text) => {
-              result.insert(k, text);
-            },
-            _ => {
-              // ignore
-            }
+          if let Some(v) = map_string(v) {
+            result.insert(k, v);
           }
         }
         Some(result)
@@ -164,6 +159,7 @@ impl PackageJson {
     fn map_string(value: serde_json::Value) -> Option<String> {
       match value {
         Value::String(v) => Some(v),
+        Value::Number(v) => Some(v.to_string()),
         _ => None,
       }
     }
@@ -179,7 +175,7 @@ impl PackageJson {
       let value = map_array(value)?;
       let mut result = Vec::with_capacity(value.len());
       for v in value {
-        if let Value::String(v) = v {
+        if let Some(v) = map_string(v) {
           result.push(v);
         }
       }

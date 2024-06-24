@@ -47,10 +47,10 @@ use crate::WorkspaceLintConfig;
 
 mod resolver;
 
+pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionError;
 pub use resolver::SpecifiedImportMap;
-pub use resolver::CreateResolverOptions;
 pub use resolver::WorkspaceResolver;
 pub use resolver::WorkspaceResolverCreateError;
 
@@ -291,8 +291,11 @@ impl Workspace {
           workspace.root_dir = pkg_json_dir.clone();
         }
 
-        workspace.config_folders.entry(pkg_json_dir).or_default().pkg_json =
-          Some(root);
+        workspace
+          .config_folders
+          .entry(pkg_json_dir)
+          .or_default()
+          .pkg_json = Some(root);
 
         for (member_dir, pkg_json) in members {
           workspace
@@ -307,7 +310,10 @@ impl Workspace {
       }
     }
 
-    debug_assert!(workspace.config_folders.contains_key(&workspace.root_dir), "root should always have a folder");
+    debug_assert!(
+      workspace.config_folders.contains_key(&workspace.root_dir),
+      "root should always have a folder"
+    );
     Ok(workspace)
   }
 
@@ -318,8 +324,7 @@ impl Workspace {
     options: CreateResolverOptions,
     fetch_text: impl Fn(&Url) -> TReturn,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(self, options, fetch_text)
-      .await
+    WorkspaceResolver::from_workspace(self, options, fetch_text).await
   }
 
   pub fn diagnostics(&self) -> Vec<WorkspaceDiagnostic> {
@@ -1491,7 +1496,7 @@ fn discover_with_npm(
   config_file_discovery: &ConfigFileDiscovery,
   opts: &WorkspaceDiscoverOptions,
 ) -> Result<PackageJsonDiscovery, WorkspaceDiscoverError> {
-  let mut found_configs: HashMap<_, Arc<PackageJson>> = HashMap::new();
+  let mut found_configs: HashMap<PathBuf, Arc<PackageJson>> = HashMap::new();
   let mut first_config_file = None;
   let maybe_stop_config_file_path = match &config_file_discovery {
     ConfigFileDiscovery::None => None,
@@ -1574,7 +1579,9 @@ fn discover_with_npm(
           }
         };
         final_members.insert(
-          Arc::new(Url::from_file_path(&pkg_json.path).unwrap()),
+          Arc::new(
+            Url::from_file_path(&pkg_json.path.parent().unwrap()).unwrap(),
+          ),
           pkg_json,
         );
       }
@@ -1582,7 +1589,8 @@ fn discover_with_npm(
       // just include any remaining found configs as workspace members
       // instead of erroring for now
       for (path, config) in found_configs {
-        let url = Arc::new(Url::from_file_path(&path).unwrap());
+        let url =
+          Arc::new(Url::from_file_path(&path.parent().unwrap()).unwrap());
         final_members.insert(url, config);
       }
 

@@ -272,10 +272,12 @@ impl WorkspaceResolver {
           Err(err) => MappedResolutionError::ImportMap(err),
         }
       }
-      None => match import_map::specifier::resolve_import(specifier, referrer) {
-        Ok(value) => return Ok(MappedResolution::Normal(value)),
-        Err(err) => MappedResolutionError::Specifier(err),
-      },
+      None => {
+        match import_map::specifier::resolve_import(specifier, referrer) {
+          Ok(value) => return Ok(MappedResolution::Normal(value)),
+          Err(err) => MappedResolutionError::Specifier(err),
+        }
+      }
     };
 
     // then using the package.json

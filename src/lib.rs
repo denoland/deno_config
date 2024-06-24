@@ -1,5 +1,9 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+#![deny(clippy::print_stderr)]
+#![deny(clippy::print_stdout)]
+#![deny(clippy::unused_async)]
+
 #[cfg(feature = "deno_json")]
 mod deno_json;
 pub mod fs;
