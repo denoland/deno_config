@@ -9,6 +9,7 @@ use deno_semver::package::PackageReq;
 use deno_semver::VersionReq;
 use indexmap::IndexMap;
 use serde::Serialize;
+use serde_json::value::Index;
 use serde_json::Map;
 use serde_json::Value;
 use thiserror::Error;
@@ -134,16 +135,70 @@ impl PackageJson {
     path: PathBuf,
     package_json: serde_json::Value,
   ) -> PackageJson {
-    // todo(dsherret): avoid all the clones here
-    let imports_val = package_json.get("imports");
-    let main_val = package_json.get("main");
-    let module_val = package_json.get("module");
-    let name_val = package_json.get("name");
-    let version_val = package_json.get("version");
-    let type_val = package_json.get("type");
-    let bin = package_json.get("bin").map(ToOwned::to_owned);
-    let exports = package_json.get("exports").and_then(|exports| {
-      Some(if is_conditional_exports_main_sugar(exports) {
+    fn parse_string_map(value: serde_json::Value) -> Option<IndexMap<String, String>> {
+      if let Value::Object(map) = value {
+        let mut result = IndexMap::with_capacity(map.len());
+        for (k, v) in map {
+          match v {
+            Value::String(text) => {
+              result.insert(k, text);
+            },
+            _ => {
+              // ignore
+            }
+          }
+        }
+        Some(result)
+      } else {
+        None
+      }
+    }
+
+    fn map_object(value: serde_json::Value) -> Option<Map<String, Value>> {
+      match value {
+        Value::Object(v) => Some(v),
+        _ => None,
+      }
+    }
+
+    fn map_string(value: serde_json::Value) -> Option<String> {
+      match value {
+        Value::String(v) => Some(v),
+        _ => None,
+      }
+    }
+
+    fn map_array(value: serde_json::Value) -> Option<Vec<Value>> {
+      match value {
+        Value::Array(v) => Some(v),
+        _ => None,
+      }
+    }
+
+    fn parse_string_array(value: serde_json::Value) -> Option<Vec<String>> {
+      let value = map_array(value)?;
+      let mut result = Vec::with_capacity(value.len());
+      for v in value {
+        if let Value::String(v) = v {
+          result.push(v);
+        }
+      }
+      Some(result)
+    }
+
+    let mut package_json = match package_json {
+      Value::Object(o) => o,
+      _ => Default::default(),
+    };
+    let imports_val = package_json.remove("imports");
+    let main_val = package_json.remove("main");
+    let module_val = package_json.remove("module");
+    let name_val = package_json.remove("name");
+    let version_val = package_json.remove("version");
+    let type_val = package_json.remove("type");
+    let bin = package_json.remove("bin");
+    let exports = package_json.remove("exports").and_then(|exports| {
+      Some(if is_conditional_exports_main_sugar(&exports) {
         let mut map = Map::new();
         map.insert(".".to_string(), exports.to_owned());
         map
@@ -153,35 +208,22 @@ impl PackageJson {
     });
 
     let imports = imports_val
-      .and_then(|imp| imp.as_object())
-      .map(|imp| imp.to_owned());
-    let main = main_val.and_then(|s| s.as_str()).map(|s| s.to_string());
-    let name = name_val.and_then(|s| s.as_str()).map(|s| s.to_string());
-    let version = version_val.and_then(|s| s.as_str()).map(|s| s.to_string());
-    let module = module_val.and_then(|s| s.as_str()).map(|s| s.to_string());
+      .and_then(map_object);
+    let main = main_val.and_then(map_string);
+    let name = name_val.and_then(map_string);
+    let version = version_val.and_then(map_string);
+    let module = module_val.and_then(map_string);
 
-    let dependencies = package_json.get("dependencies").and_then(|d| {
-      if d.is_object() {
-        let deps: IndexMap<String, String> =
-          serde_json::from_value(d.to_owned()).unwrap();
-        Some(deps)
-      } else {
-        None
-      }
-    });
-    let dev_dependencies = package_json.get("devDependencies").and_then(|d| {
-      if d.is_object() {
-        let deps: IndexMap<String, String> =
-          serde_json::from_value(d.to_owned()).unwrap();
-        Some(deps)
-      } else {
-        None
-      }
-    });
+    let dependencies = package_json.remove("dependencies").and_then(
+      parse_string_map
+    );
+    let dev_dependencies = package_json.remove("devDependencies").and_then(
+      parse_string_map
+    );
 
     let scripts: Option<IndexMap<String, String>> = package_json
-      .get("scripts")
-      .and_then(|d| serde_json::from_value(d.to_owned()).ok());
+      .remove("scripts")
+      .and_then(parse_string_map);
 
     // Ignore unknown types for forwards compatibility
     let typ = if let Some(t) = type_val {
@@ -200,17 +242,12 @@ impl PackageJson {
 
     // for typescript, it looks for "typings" first, then "types"
     let types = package_json
-      .get("typings")
-      .or_else(|| package_json.get("types"))
-      .and_then(|t| t.as_str().map(|s| s.to_string()));
+      .remove("typings")
+      .or_else(|| package_json.remove("types"))
+      .and_then(map_string);
     let workspaces = package_json
-      .get("workspaces")
-      .and_then(|w| w.as_array())
-      .map(|w| {
-        w.iter()
-          .filter_map(|v| v.as_str().map(|s| s.to_string()))
-          .collect()
-      });
+      .remove("workspaces")
+      .and_then(parse_string_array);
 
     PackageJson {
       path,
