@@ -67,6 +67,8 @@ pub enum WorkspaceDiagnosticKind {
   RootOnlyOption(&'static str),
   #[error("The '{0}' option can only be specified in a workspace member deno.json file and not the root workspace file.")]
   MemberOnlyOption(&'static str),
+  #[error("The 'workspaces' option should be called 'workspace'.")]
+  DeprecatedWorkspacesOption,
 }
 
 #[derive(Debug, Clone)]
@@ -200,28 +202,6 @@ impl Workspace {
     } else {
       PackageJsonDiscovery::None
     };
-
-    // todo(THIS PR): REMOVE
-    // let root_dir = match &config_file_discovery {
-    //   ConfigFileDiscovery::None => {
-    //     //
-    //     match &maybe_npm_discovery {
-    //       PackageJsonDiscovery::None => {
-    //         Url::from_directory_path(opts.start).unwrap()
-    //       }
-    //       PackageJsonDiscovery::Single(pkg_json)
-    //       | PackageJsonDiscovery::Workspace { root: pkg_json, .. } => {
-    //         Url::from_directory_path(&pkg_json.path.parent().unwrap()).unwrap()
-    //       }
-    //     }
-    //   }
-    //   ConfigFileDiscovery::Workspace { root: config, .. }
-    //   | ConfigFileDiscovery::Single(config) => {
-    //     // the npm lookup won't look further than this directory
-    //     let config_file_path = specifier_to_file_path(&config.specifier)?;
-    //     Url::from_directory_path(&config_file_path.parent().unwrap()).unwrap()
-    //   }
-    // };
 
     let mut workspace = match config_file_discovery {
       ConfigFileDiscovery::None => Workspace {
@@ -371,6 +351,12 @@ impl Workspace {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: root_config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::MemberOnlyOption("exports"),
+        });
+      }
+      if root_config.json.deprecated_workspaces.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: root_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::DeprecatedWorkspacesOption,
         });
       }
     }
@@ -1375,7 +1361,12 @@ fn discover_workspace_config_files(
     let Some(workspace_config_file) = config_file else {
       break;
     };
-    if let Some(members) = &workspace_config_file.json.workspace {
+    let workspace_field = workspace_config_file
+      .json
+      .workspace
+      .as_ref()
+      .or(workspace_config_file.json.deprecated_workspaces.as_ref());
+    if let Some(members) = workspace_field {
       if members.is_empty() {
         return Err(
           WorkspaceDiscoverErrorKind::MembersEmpty(
@@ -1657,5 +1648,124 @@ fn parent_specifier_str(specifier: &str) -> Option<&str> {
     Some(&specifier[..index + 1])
   } else {
     None
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use crate::assert_contains;
+  use crate::fs::DenoConfigFs;
+
+  use super::*;
+
+  #[derive(Debug, Default)]
+  struct TestFileSystem(pub HashMap<PathBuf, String>);
+
+  impl TestFileSystem {
+    fn insert(&mut self, path: impl AsRef<Path>, contents: &str) {
+      self
+        .0
+        .insert(path.as_ref().to_path_buf(), contents.to_string());
+    }
+  }
+
+  impl DenoConfigFs for TestFileSystem {
+    fn read_to_string(&self, path: &Path) -> Result<String, std::io::Error> {
+      self.0.get(path).cloned().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "file not found")
+      })
+    }
+  }
+
+  fn start_dir() -> PathBuf {
+    if cfg!(windows) {
+      PathBuf::from("C:\\Users\\User")
+    } else {
+      PathBuf::from("/home/user")
+    }
+  }
+
+  #[test]
+  fn test_empty_workspaces() {
+    let mut fs = TestFileSystem::default();
+    let config_text = r#"{
+      "workspace": [],
+    }"#;
+    fs.insert(start_dir().join("deno.json"), config_text);
+
+    let workspace_config_err = Workspace::discover(&WorkspaceDiscoverOptions {
+      fs: &fs,
+      pkg_json_cache: None,
+      start: WorkspaceDiscoverStart::Dir(&start_dir()),
+      config_parse_options: &ConfigParseOptions::default(),
+      additional_config_file_names: &[],
+      discover_pkg_json: false,
+    })
+    .err()
+    .unwrap();
+
+    assert_contains!(
+      workspace_config_err.to_string(),
+      "Workspace members cannot be empty"
+    );
+  }
+
+  #[test]
+  fn test_workspaces_outside_root_config_dir() {
+    let mut fs = TestFileSystem::default();
+    let config_text = r#"{
+      "workspaces": ["../a"],
+    }"#;
+    fs.insert(start_dir().join("deno.json"), config_text);
+
+    let workspace_config_err = Workspace::discover(&WorkspaceDiscoverOptions {
+      fs: &fs,
+      pkg_json_cache: None,
+      start: WorkspaceDiscoverStart::Dir(&start_dir()),
+      config_parse_options: &ConfigParseOptions::default(),
+      additional_config_file_names: &[],
+      discover_pkg_json: false,
+    })
+    .err()
+    .unwrap();
+
+    assert_contains!(
+      workspace_config_err.to_string(),
+      "Workspace member must be nested in a directory under the workspace."
+    );
+  }
+
+  #[test]
+  fn test_workspaces_json_jsonc() {
+    let mut fs = TestFileSystem::default();
+    let config_text = r#"{
+      "workspaces": [
+        "./a",
+        "./b",
+      ],
+    }"#;
+    let config_text_a = r#"{
+      "name": "a",
+      "version": "0.1.0"
+    }"#;
+    let config_text_b = r#"{
+      "name": "b",
+      "version": "0.2.0"
+    }"#;
+
+    fs.insert(start_dir().join("deno.json"), config_text);
+    fs.insert(start_dir().join("a/deno.json"), config_text_a);
+    fs.insert(start_dir().join("b/deno.jsonc"), config_text_b);
+
+    let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
+      fs: &fs,
+      pkg_json_cache: None,
+      start: WorkspaceDiscoverStart::Dir(&start_dir()),
+      config_parse_options: &ConfigParseOptions::default(),
+      additional_config_file_names: &[],
+      discover_pkg_json: false,
+    })
+    .unwrap();
+    assert_eq!(workspace.config_folders.len(), 3);
   }
 }

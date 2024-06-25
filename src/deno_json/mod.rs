@@ -540,8 +540,9 @@ pub struct ConfigFileJson {
 
   pub name: Option<String>,
   pub version: Option<String>,
-  #[serde(alias = "workspaces")]
   pub workspace: Option<Vec<String>>,
+  #[serde(rename = "workspaces")]
+  pub(crate) deprecated_workspaces: Option<Vec<String>>,
   pub exports: Option<Value>,
   #[serde(default)]
   pub unstable: Vec<String>,
@@ -1584,6 +1585,7 @@ pub fn get_ts_config_for_emit(
 
 #[cfg(test)]
 mod tests {
+  use crate::fs::RealDenoConfigFs;
   use crate::glob::PathOrPattern;
   use crate::util::specifier_to_file_path;
 
@@ -2624,137 +2626,6 @@ Caused by:
         "file:///deno/other.ts".to_string(),
       ]
     );
-  }
-
-  #[test]
-  fn test_empty_workspaces() {
-    let config_text = r#"{
-      "workspaces": [],
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-
-    let workspace_config_err = config_file.to_workspace_config().unwrap_err();
-    assert_eq!(
-      workspace_config_err.to_string(),
-      "Workspace members cannot be empty"
-    );
-  }
-
-  #[test]
-  fn test_workspaces_outside_root_config_dir() {
-    let config_text = r#"{
-      "workspaces": ["../a"],
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-
-    let workspace_config_err = config_file.to_workspace_config().unwrap_err();
-    assert_contains!(
-      workspace_config_err.to_string(),
-      "Workspace member '../a' is outside root configuration directory"
-    );
-  }
-
-  #[test]
-  fn test_workspaces_json_jsonc() {
-    let temp_dir = tempfile::TempDir::new().unwrap();
-    let config_text = r#"{
-      "workspaces": [
-        "./a",
-        "./b",
-      ],
-    }"#;
-    let config_text_a = r#"{
-      "name": "a",
-      "version": "0.1.0"
-    }"#;
-    let config_text_b = r#"{
-      "name": "b",
-      "version": "0.2.0"
-    }"#;
-
-    let temp_dir_path = temp_dir.path();
-    std::fs::write(temp_dir_path.join("deno.json"), config_text).unwrap();
-    std::fs::create_dir(temp_dir_path.join("a")).unwrap();
-    std::fs::write(temp_dir_path.join("a/deno.json"), config_text_a).unwrap();
-    std::fs::create_dir(temp_dir_path.join("b")).unwrap();
-    std::fs::write(temp_dir_path.join("b/deno.jsonc"), config_text_b).unwrap();
-
-    let config_specifier =
-      Url::from_file_path(temp_dir_path.join("deno.json")).unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-
-    let workspace_config = config_file.to_workspace_config().unwrap().unwrap();
-    assert_eq!(workspace_config.members.len(), 2);
-    assert_eq!(
-      workspace_config.members[0]
-        .config_file
-        .json
-        .version
-        .as_deref()
-        .unwrap(),
-      "0.1.0"
-    );
-    assert_eq!(
-      workspace_config.members[1]
-        .config_file
-        .json
-        .version
-        .as_deref()
-        .unwrap(),
-      "0.2.0"
-    );
-  }
-
-  #[test]
-  fn test_to_workspace_members_no_name() {
-    let config_text = r#"{
-      "version": "1.0.0"
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-
-    let members = config_file.to_workspace_members().unwrap();
-    assert!(members[0].package_name.is_none());
-  }
-
-  #[test]
-  fn test_to_workspace_members_single_config() {
-    let config_text = r#"{
-      "name": "@pkg/pkg"
-      "version": "1.0.0",
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-
-    let members = config_file.to_workspace_members().unwrap();
-    assert_eq!(members.len(), 1);
   }
 
   #[test]
