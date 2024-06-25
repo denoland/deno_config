@@ -97,6 +97,24 @@ pub enum MappedResolutionError {
   PkgJsonDep(#[from] PackageJsonDepValueParseError),
 }
 
+impl MappedResolutionError {
+  pub fn is_unmapped_bare_specifier(&self) -> bool {
+    match self {
+        MappedResolutionError::Specifier(err) => match err {
+            SpecifierError::InvalidUrl(_) => false,
+            SpecifierError::ImportPrefixMissing { .. } => {
+              true
+            },
+        },
+        MappedResolutionError::ImportMap(err) => match err {
+            ImportMapError::UnmappedBareSpecifier(_, _) => true,
+            ImportMapError::Other(_) => false,
+        },
+        MappedResolutionError::PkgJsonDep(_) => false,
+    }
+  }
+}
+
 #[derive(Debug)]
 pub struct WorkspaceResolver {
   maybe_import_map: Option<ImportMapWithDiagnostics>,
@@ -153,10 +171,21 @@ impl WorkspaceResolver {
                 ),
               }
             }
-            None => import_map::ext::ImportMapConfig {
-              base_url: config.specifier.clone(),
-              import_map_value: serde_json::Value::Object(Default::default()),
-            },
+            None => {
+              if !deno_jsons.iter().any(|c| {
+                c.json.import_map.is_some()
+                  || c.json.scopes.is_some()
+                  || c.json.imports.is_some()
+              }) {
+                // no configs have an import map, so exit
+                return Ok(None);
+              }
+
+              import_map::ext::ImportMapConfig {
+                base_url: config.specifier.clone(),
+                import_map_value: serde_json::Value::Object(Default::default()),
+              }
+            }
           };
           let child_import_map_configs = deno_jsons
             .iter()
