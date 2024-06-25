@@ -9,7 +9,6 @@ use deno_semver::package::PackageReq;
 use deno_semver::VersionReq;
 use indexmap::IndexMap;
 use serde::Serialize;
-use serde_json::value::Index;
 use serde_json::Map;
 use serde_json::Value;
 use thiserror::Error;

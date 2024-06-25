@@ -525,6 +525,13 @@ impl Workspace {
       .filter_map(|f| f.deno_json.as_ref())
   }
 
+  pub fn package_jsons(&self) -> impl Iterator<Item = &Arc<PackageJson>> {
+    self
+      .config_folders
+      .values()
+      .filter_map(|f| f.pkg_json.as_ref())
+  }
+
   pub fn packages(&self) -> Vec<JsrPackageConfig> {
     self
       .deno_jsons()

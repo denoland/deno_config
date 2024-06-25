@@ -134,18 +134,16 @@ impl WorkspaceResolver {
           value: import_map,
         }) => (base_url, import_map),
         None => {
-          let config_specified_import_map = match root_folder.deno_json.as_ref()
-          {
-            Some(config) => {
-              config.to_import_map_value(fetch_text).await.map_err(
-                |source| WorkspaceResolverCreateError::ImportMapFetch {
-                  referrer: config.specifier.clone(),
-                  source,
-                },
-              )?
-            }
-            None => return Ok(None),
+          let Some(config) = root_folder.deno_json.as_ref() else {
+            return Ok(None);
           };
+          let config_specified_import_map = config
+            .to_import_map_value(fetch_text)
+            .await
+            .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
+              referrer: config.specifier.clone(),
+              source,
+            })?;
           let base_import_map_config = match config_specified_import_map {
             Some((base_url, import_map_value)) => {
               import_map::ext::ImportMapConfig {
@@ -155,7 +153,10 @@ impl WorkspaceResolver {
                 ),
               }
             }
-            None => return Ok(None),
+            None => import_map::ext::ImportMapConfig {
+              base_url: config.specifier.clone(),
+              import_map_value: serde_json::Value::Object(Default::default()),
+            },
           };
           let child_import_map_configs = deno_jsons
             .iter()
