@@ -1071,7 +1071,7 @@ mod test {
 
   #[test]
   fn file_patterns_include() {
-    let cwd = std::env::current_dir().unwrap();
+    let cwd = current_dir();
     // include is a closed set
     let file_patterns = FilePatterns {
       base: cwd.clone(),
@@ -1115,7 +1115,7 @@ mod test {
 
   #[test]
   fn file_patterns_exclude() {
-    let cwd = std::env::current_dir().unwrap();
+    let cwd = current_dir();
     let file_patterns = FilePatterns {
       base: cwd.clone(),
       include: None,
@@ -1162,7 +1162,7 @@ mod test {
 
   #[test]
   fn file_patterns_include_exclude() {
-    let cwd = std::env::current_dir().unwrap();
+    let cwd = current_dir();
     let file_patterns = FilePatterns {
       base: cwd.clone(),
       include: Some(PathOrPatternSet(vec![
@@ -1245,7 +1245,7 @@ mod test {
 
   #[test]
   fn file_patterns_include_excluded() {
-    let cwd = std::env::current_dir().unwrap();
+    let cwd = current_dir();
     let file_patterns = FilePatterns {
       base: cwd.clone(),
       include: None,
@@ -1272,7 +1272,7 @@ mod test {
 
   #[test]
   fn file_patterns_opposite_incorrect_excluded_include() {
-    let cwd = std::env::current_dir().unwrap();
+    let cwd = current_dir();
     let file_patterns = FilePatterns {
       base: cwd.clone(),
       include: None,
@@ -1301,7 +1301,7 @@ mod test {
 
   #[test]
   fn from_relative() {
-    let cwd = std::env::current_dir().unwrap();
+    let cwd = current_dir();
     // leading dot slash
     {
       let pattern = PathOrPattern::from_relative(&cwd, "./**/*.ts").unwrap();
@@ -1402,7 +1402,7 @@ mod test {
 
   #[test]
   fn from_relative_dot_slash() {
-    let cwd = std::env::current_dir().unwrap();
+    let cwd = current_dir();
     let pattern = PathOrPattern::from_relative(&cwd, "./").unwrap();
     match pattern {
       PathOrPattern::Path(p) => assert_eq!(p, cwd),
@@ -1412,7 +1412,7 @@ mod test {
 
   #[test]
   fn from_relative_specifier() {
-    let cwd = std::env::current_dir().unwrap();
+    let cwd = current_dir();
     for scheme in &["http", "https"] {
       let url = format!("{}://deno.land/x/test", scheme);
       let pattern = PathOrPattern::from_relative(&cwd, &url).unwrap();
@@ -1440,7 +1440,8 @@ mod test {
 
   #[test]
   fn negated_globs() {
-    let cwd = std::env::current_dir().unwrap();
+    #[allow(clippy::disallowed_methods)]
+    let cwd = current_dir();
     {
       let pattern = GlobPattern::from_relative(&cwd, "!./**/*.ts").unwrap();
       assert!(pattern.is_negated());
@@ -1471,5 +1472,11 @@ mod test {
         PathGlobMatch::MatchedNegated
       );
     }
+  }
+
+  fn current_dir() -> PathBuf {
+    // ok because this is test code
+    #[allow(clippy::disallowed_methods)]
+    std::env::current_dir().unwrap()
   }
 }
