@@ -22,20 +22,10 @@ use crate::ConfigFile;
 
 use super::Workspace;
 
-struct DenoJsonResolverFolderConfig {
-  import_map: Option<Arc<ImportMap>>,
-  config: Arc<ConfigFile>,
-}
-
 #[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
   deps: PackageJsonDeps,
   pkg_json: Arc<PackageJson>,
-}
-
-struct ResolverFolderConfigs {
-  deno_json: Option<DenoJsonResolverFolderConfig>,
-  pkg_json: Option<PkgJsonResolverFolderConfig>,
 }
 
 #[derive(Debug, Error)]
@@ -100,17 +90,15 @@ pub enum MappedResolutionError {
 impl MappedResolutionError {
   pub fn is_unmapped_bare_specifier(&self) -> bool {
     match self {
-        MappedResolutionError::Specifier(err) => match err {
-            SpecifierError::InvalidUrl(_) => false,
-            SpecifierError::ImportPrefixMissing { .. } => {
-              true
-            },
-        },
-        MappedResolutionError::ImportMap(err) => match err {
-            ImportMapError::UnmappedBareSpecifier(_, _) => true,
-            ImportMapError::Other(_) => false,
-        },
-        MappedResolutionError::PkgJsonDep(_) => false,
+      MappedResolutionError::Specifier(err) => match err {
+        SpecifierError::InvalidUrl(_) => false,
+        SpecifierError::ImportPrefixMissing { .. } => true,
+      },
+      MappedResolutionError::ImportMap(err) => match err {
+        ImportMapError::UnmappedBareSpecifier(_, _) => true,
+        ImportMapError::Other(_) => false,
+      },
+      MappedResolutionError::PkgJsonDep(_) => false,
     }
   }
 }
@@ -329,7 +317,7 @@ impl WorkspaceResolver {
             let req = req_result.as_ref().map_err(|e| e.clone())?;
             return Ok(MappedResolution::PackageJson {
               pkg_json: &pkg_json_folder.pkg_json,
-              alias: &bare_specifier,
+              alias: bare_specifier,
               req_ref: NpmPackageReqReference::new(PackageReqReference {
                 req: req.clone(),
                 sub_path: if sub_path.is_empty() {

@@ -79,7 +79,7 @@ impl PackageJson {
     if let Some(item) = maybe_cache.and_then(|c| c.get(path)) {
       Ok(item)
     } else {
-      match fs.read_to_string(&path) {
+      match fs.read_to_string(path) {
         Ok(file_text) => {
           let pkg_json = Arc::new(PackageJson::load_from_string(
             path.to_path_buf(),
@@ -134,7 +134,9 @@ impl PackageJson {
     path: PathBuf,
     package_json: serde_json::Value,
   ) -> PackageJson {
-    fn parse_string_map(value: serde_json::Value) -> Option<IndexMap<String, String>> {
+    fn parse_string_map(
+      value: serde_json::Value,
+    ) -> Option<IndexMap<String, String>> {
       if let Value::Object(map) = value {
         let mut result = IndexMap::with_capacity(map.len());
         for (k, v) in map {
@@ -202,23 +204,21 @@ impl PackageJson {
       })
     });
 
-    let imports = imports_val
-      .and_then(map_object);
+    let imports = imports_val.and_then(map_object);
     let main = main_val.and_then(map_string);
     let name = name_val.and_then(map_string);
     let version = version_val.and_then(map_string);
     let module = module_val.and_then(map_string);
 
-    let dependencies = package_json.remove("dependencies").and_then(
-      parse_string_map
-    );
-    let dev_dependencies = package_json.remove("devDependencies").and_then(
-      parse_string_map
-    );
-
-    let scripts: Option<IndexMap<String, String>> = package_json
-      .remove("scripts")
+    let dependencies = package_json
+      .remove("dependencies")
       .and_then(parse_string_map);
+    let dev_dependencies = package_json
+      .remove("devDependencies")
+      .and_then(parse_string_map);
+
+    let scripts: Option<IndexMap<String, String>> =
+      package_json.remove("scripts").and_then(parse_string_map);
 
     // Ignore unknown types for forwards compatibility
     let typ = if let Some(t) = type_val {

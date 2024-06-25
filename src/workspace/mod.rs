@@ -93,8 +93,31 @@ pub enum ResolveWorkspaceMemberError {
   NonDescendant { workspace_url: Url, member_url: Url },
 }
 
+#[derive(Error, Debug)]
+#[error(transparent)]
+pub struct WorkspaceDiscoverError(Box<WorkspaceDiscoverErrorKind>);
+
+impl WorkspaceDiscoverError {
+  pub fn as_kind(&self) -> &WorkspaceDiscoverErrorKind {
+    &self.0
+  }
+
+  pub fn into_kind(self) -> WorkspaceDiscoverErrorKind {
+    *self.0
+  }
+}
+
+impl<E> From<E> for WorkspaceDiscoverError
+where
+  WorkspaceDiscoverErrorKind: From<E>,
+{
+  fn from(err: E) -> Self {
+    WorkspaceDiscoverError(Box::new(WorkspaceDiscoverErrorKind::from(err)))
+  }
+}
+
 #[derive(Debug, Error)]
-pub enum WorkspaceDiscoverError {
+pub enum WorkspaceDiscoverErrorKind {
   #[error(transparent)]
   ConfigRead(#[from] ConfigFileReadError),
   #[error(transparent)]
@@ -212,7 +235,7 @@ impl Workspace {
       ConfigFileDiscovery::Single(config) => {
         let config_file_path = specifier_to_file_path(&config.specifier)?;
         let root_dir = config_file_path.parent().unwrap();
-        let root_dir = Arc::new(Url::from_directory_path(&root_dir).unwrap());
+        let root_dir = Arc::new(Url::from_directory_path(root_dir).unwrap());
         Workspace {
           config_folders: IndexMap::from([(
             root_dir.clone(),
@@ -228,7 +251,7 @@ impl Workspace {
       ConfigFileDiscovery::Workspace { root, members } => {
         let root_config_file_path = specifier_to_file_path(&root.specifier)?;
         let root_dir = root_config_file_path.parent().unwrap();
-        let root_dir = Arc::new(Url::from_directory_path(&root_dir).unwrap());
+        let root_dir = Arc::new(Url::from_directory_path(root_dir).unwrap());
         let mut config_folders = members
           .into_iter()
           .map(|(folder_url, config)| {
@@ -261,7 +284,7 @@ impl Workspace {
     match maybe_npm_discovery {
       PackageJsonDiscovery::Single(pkg_json) => {
         let pkg_json_dir = Arc::new(
-          Url::from_directory_path(&pkg_json.path.parent().unwrap()).unwrap(),
+          Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
         );
         if workspace
           .root_dir
@@ -280,7 +303,7 @@ impl Workspace {
       }
       PackageJsonDiscovery::Workspace { root, members } => {
         let pkg_json_dir = Arc::new(
-          Url::from_directory_path(&root.path.parent().unwrap()).unwrap(),
+          Url::from_directory_path(root.path.parent().unwrap()).unwrap(),
         );
         if workspace
           .root_dir
@@ -570,7 +593,7 @@ impl Workspace {
     self.resolve_deno_json_str(specifier.as_str())
   }
 
-  fn resolve_deno_json_str<'a>(
+  fn resolve_deno_json_str(
     &self,
     specifier: &str,
   ) -> Option<(&Arc<Url>, &Arc<ConfigFile>)> {
@@ -587,7 +610,7 @@ impl Workspace {
     }
   }
 
-  fn resolve_pkg_json_str<'a>(
+  fn resolve_pkg_json_str(
     &self,
     specifier: &str,
   ) -> Option<(&Arc<Url>, &Arc<PackageJson>)> {
@@ -630,12 +653,11 @@ impl Workspace {
     // it would be nice if we could store this config_folders relative to
     // the root, but the members might appear outside the root folder
     for (dir_url, config) in &self.config_folders {
-      if specifier.starts_with(dir_url.as_str()) {
-        if best_match.is_none()
-          || dir_url.as_str().len() > best_match.unwrap().0.as_str().len()
-        {
-          best_match = Some((dir_url, config));
-        }
+      if specifier.starts_with(dir_url.as_str())
+        && (best_match.is_none()
+          || dir_url.as_str().len() > best_match.unwrap().0.as_str().len())
+      {
+        best_match = Some((dir_url, config));
       }
     }
     best_match
@@ -1087,7 +1109,6 @@ impl WorkspaceMemberContext {
     let Some(member_config) = maybe_member_config else {
       return Ok(maybe_root_config.map(|c| BenchConfig {
         files: c.files.with_new_base(self.dir_url.to_file_path().unwrap()),
-        ..c
       }));
     };
     let Some(root_config) = maybe_root_config else {
@@ -1114,8 +1135,7 @@ impl WorkspaceMemberContext {
           .unwrap(),
           None => match maybe_pkg_json {
             Some(pkg_json) => {
-              Url::from_directory_path(&pkg_json.path.parent().unwrap())
-                .unwrap()
+              Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap()
             }
             None => return Ok(None),
           },
@@ -1159,7 +1179,6 @@ impl WorkspaceMemberContext {
     let Some(member_config) = maybe_member_config else {
       return Ok(maybe_root_config.map(|c| PublishConfig {
         files: c.files.with_new_base(self.dir_url.to_file_path().unwrap()),
-        ..c
       }));
     };
     let Some(root_config) = maybe_root_config else {
@@ -1183,7 +1202,6 @@ impl WorkspaceMemberContext {
     let Some(member_config) = maybe_member_config else {
       return Ok(maybe_root_config.map(|c| TestConfig {
         files: c.files.with_new_base(self.dir_url.to_file_path().unwrap()),
-        ..c
       }));
     };
     let Some(root_config) = maybe_root_config else {
@@ -1359,9 +1377,12 @@ fn discover_workspace_config_files(
     };
     if let Some(members) = &workspace_config_file.json.workspace {
       if members.is_empty() {
-        return Err(WorkspaceDiscoverError::MembersEmpty(
-          workspace_config_file.specifier.clone(),
-        ));
+        return Err(
+          WorkspaceDiscoverErrorKind::MembersEmpty(
+            workspace_config_file.specifier.clone(),
+          )
+          .into(),
+        );
       }
       let config_file_path =
         specifier_to_file_path(&workspace_config_file.specifier).unwrap();
@@ -1424,7 +1445,7 @@ fn discover_workspace_config_files(
                 dir_url: member_dir_url.clone(),
               })
             }
-            Err(err) => return Err(err.into()),
+            Err(err) => Err(err.into()),
           }
         };
 
@@ -1435,10 +1456,15 @@ fn discover_workspace_config_files(
         };
         let member_dir_url = root_config_file_directory_url
           .join(&member)
-          .map_err(|err| WorkspaceDiscoverError::InvalidMember {
-            base: workspace_config_file.specifier.clone(),
-            member: raw_member.clone(),
-            source: err,
+          .map_err(|err| {
+            WorkspaceDiscoverError(
+              WorkspaceDiscoverErrorKind::InvalidMember {
+                base: workspace_config_file.specifier.clone(),
+                member: raw_member.clone(),
+                source: err,
+              }
+              .into(),
+            )
           })?;
         if !member_dir_url
           .as_str()
@@ -1456,10 +1482,13 @@ fn discover_workspace_config_files(
         final_members.insert(Arc::new(member_dir_url), config);
       }
       if let Some(config_url) = found_configs.into_keys().next() {
-        return Err(WorkspaceDiscoverError::ConfigNotWorkspaceMember {
-          workspace_url: workspace_config_file.specifier.clone(),
-          config_url,
-        });
+        return Err(
+          WorkspaceDiscoverErrorKind::ConfigNotWorkspaceMember {
+            workspace_url: workspace_config_file.specifier.clone(),
+            config_url,
+          }
+          .into(),
+        );
       }
       return Ok(ConfigFileDiscovery::Workspace {
         root: Arc::new(workspace_config_file),
@@ -1534,7 +1563,7 @@ fn discover_with_npm(
       {
         continue; // keep going
       }
-      Err(err) => return Err(err.into()),
+      Err(err) => return Err(WorkspaceDiscoverError(Box::new(err.into()))),
     };
     log::debug!("package.json file found at '{}'", pkg_json_path.display());
     if let Some(members) = &pkg_json.workspaces {
@@ -1554,11 +1583,11 @@ fn discover_with_npm(
         let mut find_config = || {
           let pkg_json_path =
             normalize_path(ancestor.join(member).join("package.json"));
-          if !pkg_json_path.starts_with(&ancestor) {
+          if !pkg_json_path.starts_with(ancestor) {
             return Err(ResolveWorkspaceMemberError::NonDescendant {
-              workspace_url: Url::from_directory_path(&ancestor).unwrap(),
+              workspace_url: Url::from_directory_path(ancestor).unwrap(),
               member_url: Url::from_directory_path(
-                &pkg_json_path.parent().unwrap(),
+                pkg_json_path.parent().unwrap(),
               )
               .unwrap(),
             });
@@ -1587,7 +1616,7 @@ fn discover_with_npm(
         };
         final_members.insert(
           Arc::new(
-            Url::from_file_path(&pkg_json.path.parent().unwrap()).unwrap(),
+            Url::from_file_path(pkg_json.path.parent().unwrap()).unwrap(),
           ),
           pkg_json,
         );
@@ -1597,7 +1626,7 @@ fn discover_with_npm(
       // instead of erroring for now
       for (path, config) in found_configs {
         let url =
-          Arc::new(Url::from_file_path(&path.parent().unwrap()).unwrap());
+          Arc::new(Url::from_file_path(path.parent().unwrap()).unwrap());
         final_members.insert(url, config);
       }
 

@@ -25,7 +25,6 @@ use ts::parse_compiler_options;
 use url::Url;
 
 use crate::fs::DenoConfigFs;
-use crate::fs::RealDenoConfigFs;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPatternSet;
 use crate::util::is_skippable_io_error;
