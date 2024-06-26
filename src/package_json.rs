@@ -16,7 +16,7 @@ use url::Url;
 
 pub trait PackageJsonCache {
   fn get(&self, path: &Path) -> Option<Arc<PackageJson>>;
-  fn insert(&self, path: PathBuf, package_json: Arc<PackageJson>);
+  fn set(&self, path: PathBuf, package_json: Arc<PackageJson>);
 }
 
 #[derive(Debug, Error, Clone)]
@@ -86,7 +86,7 @@ impl PackageJson {
             file_text,
           )?);
           if let Some(cache) = maybe_cache {
-            cache.insert(path.to_path_buf(), pkg_json.clone());
+            cache.set(path.to_path_buf(), pkg_json.clone());
           }
           Ok(pkg_json)
         }
