@@ -43,6 +43,7 @@ jobs:
           cargo check --no-default-features
           cargo check --no-default-features --features workspace
           cargo check --no-default-features --features package_json
+          cargo check --no-default-features --features workspace --features sync
 
       - name: Cargo test
         run: cargo test --locked --release --all-features --bins --tests --examples
