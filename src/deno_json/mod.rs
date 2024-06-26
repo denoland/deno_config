@@ -696,8 +696,9 @@ impl ConfigFile {
     specifier: Url,
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
-    let config_path = specifier_to_file_path(&specifier)?;
-    Self::from_specifier_and_path(fs, specifier, &config_path, parse_options)
+    let config_path = specifier_to_file_path(&specifier)
+      .context("Invalid config file path.")?;
+    Self::from_specifier_and_path(specifier, &config_path, parse_options)
   }
 
   fn from_specifier_and_path(

@@ -11,11 +11,14 @@ pub mod fs;
 pub mod glob;
 #[cfg(feature = "package_json")]
 pub mod package_json;
-#[cfg(any(feature = "deno_json", feature = "package_json"))]
+#[cfg(feature = "package_json")]
+mod sync;
+#[cfg(feature = "deno_json")]
 mod util;
 #[cfg(feature = "workspace")]
 pub mod workspace;
 
 #[cfg(feature = "deno_json")]
 pub use deno_json::*;
+#[cfg(feature = "deno_json")]
 pub use util::SpecifierToFilePathError;

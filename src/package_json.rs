@@ -2,7 +2,6 @@
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use deno_semver::npm::NpmVersionReqParseError;
 use deno_semver::package::PackageReq;
@@ -14,9 +13,12 @@ use serde_json::Value;
 use thiserror::Error;
 use url::Url;
 
+#[allow(clippy::disallowed_types)]
+pub type PackageJsonRc = crate::sync::MaybeArc<PackageJson>;
+
 pub trait PackageJsonCache {
-  fn get(&self, path: &Path) -> Option<Arc<PackageJson>>;
-  fn insert(&self, path: PathBuf, package_json: Arc<PackageJson>);
+  fn get(&self, path: &Path) -> Option<PackageJsonRc>;
+  fn set(&self, path: PathBuf, package_json: PackageJsonRc);
 }
 
 #[derive(Debug, Error, Clone)]
@@ -75,18 +77,21 @@ impl PackageJson {
     path: &Path,
     fs: &dyn crate::fs::DenoConfigFs,
     maybe_cache: Option<&dyn PackageJsonCache>,
-  ) -> Result<Arc<Self>, PackageJsonLoadError> {
+  ) -> Result<PackageJsonRc, PackageJsonLoadError> {
     if let Some(item) = maybe_cache.and_then(|c| c.get(path)) {
       Ok(item)
     } else {
       match fs.read_to_string(path) {
         Ok(file_text) => {
-          let pkg_json = Arc::new(PackageJson::load_from_string(
-            path.to_path_buf(),
-            file_text,
-          )?);
+          let pkg_json =
+            PackageJson::load_from_string(path.to_path_buf(), file_text)?;
+          let pkg_json = {
+            // ok for constructing
+            #[allow(clippy::disallowed_types)]
+            crate::sync::MaybeArc::new(pkg_json)
+          };
           if let Some(cache) = maybe_cache {
-            cache.insert(path.to_path_buf(), pkg_json.clone());
+            cache.set(path.to_path_buf(), pkg_json.clone());
           }
           Ok(pkg_json)
         }
