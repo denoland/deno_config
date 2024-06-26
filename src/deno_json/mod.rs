@@ -421,11 +421,11 @@ pub struct WorkspaceConfig {
 #[derive(Debug, Clone)]
 pub struct WorkspaceMemberConfig {
   // As defined in `member` setting of the workspace deno.json.
-  pub member_name: Option<String>,
+  pub member_name: String,
   /// Directory path of the workspace member.
   pub dir_path: PathBuf,
-  pub package_name: Option<String>,
-  pub package_version: Option<String>,
+  pub package_name: String,
+  pub package_version: String,
   pub config_file: ConfigFile,
 }
 
@@ -1299,11 +1299,17 @@ impl ConfigFile {
         &member_deno_json,
         &ParseOptions::default(),
       )?;
+      let Some(package_name) = member_config_file.json.name.clone() else {
+        bail!("Missing 'name' for workspace member {}", member);
+      };
+      let Some(package_version) = member_config_file.json.version.clone() else {
+        bail!("Missing 'version' for workspace member {}", member);
+      };
       members.push(WorkspaceMemberConfig {
-        member_name: Some(member.to_string()),
+        member_name: member.to_string(),
         dir_path: member_path,
-        package_name: member_config_file.json.name.clone(),
-        package_version: member_config_file.json.version.clone(),
+        package_name,
+        package_version,
         config_file: member_config_file,
       });
     }
@@ -1330,16 +1336,27 @@ impl ConfigFile {
     let maybe_workspace_config = self.to_workspace_config()?;
     match maybe_workspace_config {
       Some(workspace_config) => Ok(workspace_config.members),
-      None => Ok(vec![WorkspaceMemberConfig {
-        member_name: self.json.name.clone(),
-        package_name: self.json.name.clone(),
-        package_version: self.json.version.clone(),
-        dir_path: specifier_to_file_path(&self.specifier)?
-          .parent()
-          .unwrap()
-          .to_path_buf(),
-        config_file: self.clone(),
-      }]),
+      None => {
+        let package_name = match self.json.name.clone() {
+          Some(name) => name,
+          None => bail!("{} is missing 'name' field", self.specifier),
+        };
+        Ok(vec![WorkspaceMemberConfig {
+          member_name: package_name.clone(),
+          package_name,
+          package_version: match self.json.version.clone() {
+            Some(version) => version,
+            None => {
+              bail!("{} is missing 'version' field", self.specifier)
+            }
+          },
+          dir_path: specifier_to_file_path(&self.specifier)?
+            .parent()
+            .unwrap()
+            .to_path_buf(),
+          config_file: self.clone(),
+        }])
+      }
     }
   }
 
@@ -2676,20 +2693,8 @@ Caused by:
 
     let workspace_config = config_file.to_workspace_config().unwrap().unwrap();
     assert_eq!(workspace_config.members.len(), 2);
-    assert_eq!(
-      workspace_config.members[0]
-        .package_version
-        .as_deref()
-        .unwrap(),
-      "0.1.0"
-    );
-    assert_eq!(
-      workspace_config.members[1]
-        .package_version
-        .as_deref()
-        .unwrap(),
-      "0.2.0"
-    );
+    assert_eq!(workspace_config.members[0].package_version, "0.1.0");
+    assert_eq!(workspace_config.members[1].package_version, "0.2.0");
   }
 
   #[test]
@@ -2702,8 +2707,8 @@ Caused by:
       ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
         .unwrap();
 
-    let members = config_file.to_workspace_members().unwrap();
-    assert!(members[0].package_name.is_none());
+    let err = config_file.to_workspace_members().err().unwrap();
+    assert!(err.to_string().ends_with("is missing 'name' field"));
   }
 
   #[test]
@@ -2716,8 +2721,8 @@ Caused by:
       ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
         .unwrap();
 
-    let members = config_file.to_workspace_members().unwrap();
-    assert!(members[0].package_version.is_none());
+    let err = config_file.to_workspace_members().err().unwrap();
+    assert!(err.to_string().ends_with("is missing 'version' field"));
   }
 
   #[test]
