@@ -41,7 +41,7 @@ jobs:
         if: contains(matrix.os, 'ubuntu')
         run: |
           cargo check --no-default-features
-          cargo check --no-default-features --features deno_json
+          cargo check --no-default-features --features workspace
           cargo check --no-default-features --features package_json
 
       - name: Cargo test
