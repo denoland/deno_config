@@ -418,38 +418,6 @@ impl SerializedBenchConfig {
   }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct WorkspaceConfig {
-  pub members: Vec<WorkspaceMemberConfig>,
-}
-
-#[derive(Debug, Clone)]
-pub struct WorkspaceMemberConfig {
-  // As defined in `member` setting of the workspace deno.json.
-  pub member_name: Option<String>,
-  /// Directory path of the workspace member.
-  pub dir_path: PathBuf,
-  pub package_name: Option<String>,
-  pub config_file: ConfigFile,
-}
-
-impl WorkspaceMemberConfig {
-  pub fn into_package(self) -> Option<WorkspaceMemberPackage> {
-    let package_name = self.package_name?;
-    Some(WorkspaceMemberPackage {
-      package_name,
-      dir_path: self.dir_path,
-      config_file: self.config_file,
-    })
-  }
-}
-
-pub struct WorkspaceMemberPackage {
-  pub package_name: String,
-  pub dir_path: PathBuf,
-  pub config_file: ConfigFile,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct BenchConfig {
   pub files: FilePatterns,
