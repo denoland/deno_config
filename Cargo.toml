@@ -7,19 +7,25 @@ authors = ["the Deno authors"]
 license = "MIT"
 repository = "https://github.com/denoland/deno_config"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["deno_json", "package_json"]
+deno_json = ["jsonc-parser", "glob", "import_map"]
+package_json = ["deno_semver"]
+sync = []
 
 [dependencies]
 anyhow = "1.0.57"
 indexmap = { version = "2", features = ["serde"] }
-jsonc-parser = { version = "0.23.0", features = ["serde"] }
+jsonc-parser = { version = "0.23.0", features = ["serde"], optional = true }
 log = "0.4.20"
-glob = "0.3.1"
+glob = { version = "0.3.1", optional = true }
 percent-encoding = "2.3.0"
 serde = { version = "1.0.149", features = ["derive"] }
 serde_json = "1.0.85"
 url = { version = "2.3.1" }
-import_map = { version = "0.19.0", features = ["ext"] }
+import_map = { version = "0.20.0", features = ["ext"], optional = true }
+thiserror = "1.0.61"
+deno_semver = { version = "0.5.6", optional = true }
 
 [dev-dependencies]
 tempfile = "3.4.0"

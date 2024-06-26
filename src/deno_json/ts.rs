@@ -241,7 +241,7 @@ impl TsConfig {
 
   /// Merge a serde_json value into the configuration.
   pub fn merge(&mut self, value: &Value) {
-    crate::util::json_merge(&mut self.0, value);
+    json_merge(&mut self.0, value);
   }
 
   /// Take an optional user provided config file
@@ -258,6 +258,20 @@ impl TsConfig {
       Ok(maybe_ignored_options)
     } else {
       Ok(None)
+    }
+  }
+}
+
+/// A function that works like JavaScript's `Object.assign()`.
+fn json_merge(a: &mut Value, b: &Value) {
+  match (a, b) {
+    (&mut Value::Object(ref mut a), Value::Object(b)) => {
+      for (k, v) in b {
+        json_merge(a.entry(k.clone()).or_insert(Value::Null), v);
+      }
+    }
+    (a, b) => {
+      *a = b.clone();
     }
   }
 }
@@ -295,5 +309,26 @@ mod tests {
       "target": "es5",
     }));
     assert_eq!(tsconfig1.as_bytes(), tsconfig2.as_bytes());
+  }
+
+  #[test]
+  fn test_json_merge() {
+    let mut value_a = json!({
+      "a": true,
+      "b": "c"
+    });
+    let value_b = json!({
+      "b": "d",
+      "e": false,
+    });
+    json_merge(&mut value_a, &value_b);
+    assert_eq!(
+      value_a,
+      json!({
+        "a": true,
+        "b": "d",
+        "e": false,
+      })
+    );
   }
 }

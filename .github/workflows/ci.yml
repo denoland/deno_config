@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Clone repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dsherret/rust-toolchain-file@v1
@@ -36,6 +36,13 @@ jobs:
         if: contains(matrix.os, 'ubuntu')
         run: |
           cargo fmt -- --check
+
+      - name: Check build features
+        if: contains(matrix.os, 'ubuntu')
+        run: |
+          cargo check --no-default-features
+          cargo check --no-default-features --features deno_json
+          cargo check --no-default-features --features package_json
 
       - name: Cargo test
         run: cargo test --locked --release --all-features --bins --tests --examples

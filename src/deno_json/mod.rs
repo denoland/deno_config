@@ -717,10 +717,8 @@ impl ConfigFile {
     specifier: Url,
     parse_options: &ParseOptions,
   ) -> Result<Self, AnyError> {
-    let config_path =
-      specifier_to_file_path(&specifier).with_context(|| {
-        format!("Invalid config file path for '{}'.", specifier)
-      })?;
+    let config_path = specifier_to_file_path(&specifier)
+      .context("Invalid config file path.")?;
     Self::from_specifier_and_path(specifier, &config_path, parse_options)
   }
 
