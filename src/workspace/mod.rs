@@ -619,7 +619,7 @@ impl Workspace {
             name: c.name.clone()?,
             version: {
               let version = c.version.as_ref()?;
-              deno_semver::Version::parse_from_npm(&version).ok()?
+              deno_semver::Version::parse_from_npm(version).ok()?
             },
           },
           package_json: c.clone(),
