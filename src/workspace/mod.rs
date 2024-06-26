@@ -72,26 +72,29 @@ pub enum WorkspaceDiagnosticKind {
   RootOnlyOption(&'static str),
   #[error("The '{0}' option can only be specified in a workspace member deno.json file and not the root workspace file.")]
   MemberOnlyOption(&'static str),
-  #[error("The '{name}' member at '{first_member}' cannot have the same name as the member at '{second_member}'.")]
-  DuplicateMemberName {
-    name: String,
-    first_member: Url,
-    second_member: Url,
-  },
+  #[error("The '{name}' member cannot have the same name as the member at '{other_member}'.")]
+  DuplicateMemberName { name: String, other_member: Url },
   #[error("The 'workspaces' option should be called 'workspace'.")]
   DeprecatedWorkspacesOption,
 }
 
-#[derive(Debug, Clone)]
+impl WorkspaceDiagnosticKind {
+  /// If the diagnostic should cause the process to shut down.
+  pub fn is_fatal(&self) -> bool {
+    match self {
+      Self::RootOnlyOption { .. }
+      | Self::MemberOnlyOption { .. }
+      | Self::DeprecatedWorkspacesOption => false,
+      Self::DuplicateMemberName { .. } => true,
+    }
+  }
+}
+
+#[derive(Debug, Error, Clone)]
+#[error("{}\n    at {}", .kind, .config_url)]
 pub struct WorkspaceDiagnostic {
   pub kind: WorkspaceDiagnosticKind,
   pub config_url: Url,
-}
-
-impl std::fmt::Display for WorkspaceDiagnostic {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}\n    at {}", self.kind, self.config_url,)
-  }
 }
 
 #[derive(Debug, Error)]
@@ -439,8 +442,7 @@ impl Workspace {
             config_url: member_config.specifier.clone(),
             kind: WorkspaceDiagnosticKind::DuplicateMemberName {
               name: name.to_string(),
-              first_member: member_config.specifier.clone(),
-              second_member: (*other_member_url).clone(),
+              other_member: (*other_member_url).clone(),
             },
           });
         } else {
