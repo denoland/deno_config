@@ -12,3 +12,9 @@ mod inner {
 mod inner {
   pub use std::rc::Rc as MaybeArc;
 }
+
+// ok for constructing
+#[allow(clippy::disallowed_types)]
+pub fn new_rc<T>(value: T) -> MaybeArc<T> {
+  MaybeArc::new(value)
+}

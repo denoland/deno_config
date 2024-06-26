@@ -12,6 +12,7 @@ default = ["deno_json", "package_json", "workspace"]
 deno_json = ["jsonc-parser", "glob", "import_map"]
 package_json = ["deno_semver"]
 sync = []
+workspace = []
 
 [dependencies]
 anyhow = "1.0.57"

@@ -85,11 +85,7 @@ impl PackageJson {
         Ok(file_text) => {
           let pkg_json =
             PackageJson::load_from_string(path.to_path_buf(), file_text)?;
-          let pkg_json = {
-            // ok for constructing
-            #[allow(clippy::disallowed_types)]
-            crate::sync::MaybeArc::new(pkg_json)
-          };
+          let pkg_json = crate::sync::new_rc(pkg_json);
           if let Some(cache) = maybe_cache {
             cache.set(path.to_path_buf(), pkg_json.clone());
           }

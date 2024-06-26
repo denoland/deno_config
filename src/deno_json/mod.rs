@@ -616,6 +616,9 @@ pub struct ConfigParseOptions {
   pub include_task_comments: bool,
 }
 
+#[allow(clippy::disallowed_types)]
+pub type ConfigFileRc = crate::sync::MaybeArc<ConfigFile>;
+
 #[derive(Clone, Debug)]
 pub struct ConfigFile {
   pub specifier: Url,
@@ -696,9 +699,8 @@ impl ConfigFile {
     specifier: Url,
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
-    let config_path = specifier_to_file_path(&specifier)
-      .context("Invalid config file path.")?;
-    Self::from_specifier_and_path(specifier, &config_path, parse_options)
+    let config_path = specifier_to_file_path(&specifier)?;
+    Self::from_specifier_and_path(fs, specifier, &config_path, parse_options)
   }
 
   fn from_specifier_and_path(

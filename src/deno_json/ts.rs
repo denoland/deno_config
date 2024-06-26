@@ -262,20 +262,6 @@ impl TsConfig {
   }
 }
 
-/// A function that works like JavaScript's `Object.assign()`.
-fn json_merge(a: &mut Value, b: &Value) {
-  match (a, b) {
-    (&mut Value::Object(ref mut a), Value::Object(b)) => {
-      for (k, v) in b {
-        json_merge(a.entry(k.clone()).or_insert(Value::Null), v);
-      }
-    }
-    (a, b) => {
-      *a = b.clone();
-    }
-  }
-}
-
 impl Serialize for TsConfig {
   /// Serializes inner hash map which is ordered by the key
   fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>

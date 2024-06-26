@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::Arc;
 
 use anyhow::Error as AnyError;
 use deno_semver::npm::NpmPackageReqReference;
@@ -15,17 +14,19 @@ use import_map::ImportMapWithDiagnostics;
 use thiserror::Error;
 use url::Url;
 
-use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonDepValueParseError;
 use crate::package_json::PackageJsonDeps;
+use crate::package_json::PackageJsonRc;
+use crate::sync::new_rc;
 use crate::ConfigFile;
 
+use super::UrlRc;
 use super::Workspace;
 
 #[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
   deps: PackageJsonDeps,
-  pkg_json: Arc<PackageJson>,
+  pkg_json: PackageJsonRc,
 }
 
 #[derive(Debug, Error)]
@@ -62,7 +63,7 @@ pub enum MappedResolution<'a> {
   Normal(Url),
   ImportMap(Url),
   PackageJson {
-    pkg_json: &'a Arc<PackageJson>,
+    pkg_json: &'a PackageJsonRc,
     alias: &'a str,
     req_ref: NpmPackageReqReference,
   },
@@ -106,7 +107,7 @@ impl MappedResolutionError {
 #[derive(Debug)]
 pub struct WorkspaceResolver {
   maybe_import_map: Option<ImportMapWithDiagnostics>,
-  pkg_jsons: BTreeMap<Arc<Url>, PkgJsonResolverFolderConfig>,
+  pkg_jsons: BTreeMap<UrlRc, PkgJsonResolverFolderConfig>,
 }
 
 impl WorkspaceResolver {
@@ -236,7 +237,7 @@ impl WorkspaceResolver {
   /// Generally, create this from a Workspace instead.
   pub fn new_raw(
     maybe_import_map: Option<ImportMap>,
-    pkg_jsons: Vec<Arc<PackageJson>>,
+    pkg_jsons: Vec<PackageJsonRc>,
   ) -> Self {
     let maybe_import_map =
       maybe_import_map.map(|import_map| ImportMapWithDiagnostics {
@@ -248,7 +249,7 @@ impl WorkspaceResolver {
       .map(|pkg_json| {
         let deps = pkg_json.resolve_local_package_json_version_reqs();
         (
-          Arc::new(
+          new_rc(
             Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
           ),
           PkgJsonResolverFolderConfig { deps, pkg_json },
@@ -265,7 +266,7 @@ impl WorkspaceResolver {
     self.maybe_import_map.as_ref().map(|c| &c.import_map)
   }
 
-  pub fn package_jsons(&self) -> impl Iterator<Item = &Arc<PackageJson>> {
+  pub fn package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
     self.pkg_jsons.values().map(|c| &c.pkg_json)
   }
 
