@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error as AnyError;
+use deno_semver::package::PackageNv;
 use indexmap::IndexMap;
 use thiserror::Error;
 use url::Url;
@@ -64,6 +65,13 @@ pub struct JsrPackageConfig {
   pub package_name: String,
   pub member_ctx: WorkspaceMemberContext,
   pub config_file: ConfigFileRc,
+}
+
+#[derive(Debug, Clone)]
+pub struct NpmPackageConfig {
+  pub package_nv: PackageNv,
+  pub member_ctx: WorkspaceMemberContext,
+  pub package_json: PackageJsonRc,
 }
 
 #[derive(Debug, Clone, Error)]
@@ -570,7 +578,7 @@ impl Workspace {
       .filter_map(|f| f.pkg_json.as_ref())
   }
 
-  pub fn packages(&self) -> Vec<JsrPackageConfig> {
+  pub fn jsr_packages(&self) -> Vec<JsrPackageConfig> {
     self
       .deno_jsons()
       .filter_map(|c| {
@@ -586,19 +594,38 @@ impl Workspace {
       .collect()
   }
 
-  pub fn packages_for_publish(&self) -> Vec<JsrPackageConfig> {
+  pub fn jsr_packages_for_publish(&self) -> Vec<JsrPackageConfig> {
     let ctx = self.resolve_start_ctx();
     let Some(config) = &ctx.deno_json else {
       return Vec::new();
     };
     let deno_json = &config.member;
     if deno_json.dir_path() == self.root_dir.to_file_path().unwrap() {
-      return self.packages();
+      return self.jsr_packages();
     }
     match ctx.maybe_package_config() {
       Some(pkg) => vec![pkg],
       None => Vec::new(),
     }
+  }
+
+  pub fn npm_packages(&self) -> Vec<NpmPackageConfig> {
+    self
+      .package_jsons()
+      .filter_map(|c| {
+        Some(NpmPackageConfig {
+          member_ctx: self.resolve_member_ctx(&c.specifier()),
+          package_nv: PackageNv {
+            name: c.name.clone()?,
+            version: {
+              let version = c.version.as_ref()?;
+              deno_semver::Version::parse_from_npm(&version).ok()?
+            },
+          },
+          package_json: c.clone(),
+        })
+      })
+      .collect()
   }
 
   pub fn resolve_deno_json(
