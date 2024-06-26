@@ -104,8 +104,6 @@ pub fn specifier_to_file_path(
       }
     }
   } else {
-    // allowed because the custom clippy rule says to use this code
-    #[allow(clippy::disallowed_methods)]
     specifier.to_file_path()
   };
   match result {
