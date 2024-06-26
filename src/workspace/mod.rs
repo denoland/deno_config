@@ -1328,8 +1328,6 @@ enum ConfigFileDiscovery {
 fn discover_workspace_config_files(
   opts: &WorkspaceDiscoverOptions,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
-  // todo(dsherret): we can remove this checked hashset
-  let mut checked = HashSet::new();
   let mut next_start_dir: Option<Cow<Path>>;
   let mut first_config_file: Option<Url> = None;
   let mut found_configs: HashMap<_, ConfigFile> = HashMap::new();
@@ -1354,7 +1352,6 @@ fn discover_workspace_config_files(
     let config_file = ConfigFile::discover_from(
       opts.fs,
       &start_dir,
-      &mut checked,
       opts.additional_config_file_names,
       opts.config_parse_options,
     )?;

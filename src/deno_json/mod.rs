@@ -16,7 +16,6 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -656,55 +655,6 @@ pub struct ConfigFile {
 }
 
 impl ConfigFile {
-  pub fn discover(
-    fs: &impl DenoConfigFs,
-    config_flag: &ConfigFlag,
-    maybe_config_path_args: Option<Vec<PathBuf>>,
-    cwd: &Path,
-    additional_config_file_names: &[&str],
-    parse_options: &ConfigParseOptions,
-  ) -> Result<Option<ConfigFile>, ConfigFileReadError> {
-    debug_assert!(cwd.is_absolute());
-    match config_flag {
-      ConfigFlag::Disabled => Ok(None),
-      ConfigFlag::Path(config_path) => {
-        let config_path = PathBuf::from(config_path);
-        let config_path = normalize_path(if config_path.is_absolute() {
-          config_path
-        } else {
-          cwd.join(config_path)
-        });
-        Ok(Some(ConfigFile::read(fs, &config_path, parse_options)?))
-      }
-      ConfigFlag::Discover => {
-        if let Some(config_path_args) = maybe_config_path_args {
-          let mut checked = HashSet::new();
-          for f in config_path_args {
-            if let Some(cf) = Self::discover_from(
-              fs,
-              &f,
-              &mut checked,
-              additional_config_file_names,
-              parse_options,
-            )? {
-              return Ok(Some(cf));
-            }
-          }
-          // From CWD walk up to root looking for deno.json or deno.jsonc
-          Self::discover_from(
-            fs,
-            cwd,
-            &mut checked,
-            additional_config_file_names,
-            parse_options,
-          )
-        } else {
-          Ok(None)
-        }
-      }
-    }
-  }
-
   /// Filenames that Deno will recognize when discovering config.
   pub(crate) fn resolve_config_file_names<'a>(
     additional_config_file_names: &[&'a str],
@@ -726,7 +676,6 @@ impl ConfigFile {
   pub fn discover_from(
     fs: &dyn DenoConfigFs,
     start: &Path,
-    checked: &mut HashSet<PathBuf>,
     additional_config_file_names: &[&str],
     parse_options: &ConfigParseOptions,
   ) -> Result<Option<ConfigFile>, ConfigFileReadError> {
@@ -743,20 +692,18 @@ impl ConfigFile {
 
     debug_assert!(start.is_absolute());
     for ancestor in start.ancestors() {
-      if checked.insert(ancestor.to_path_buf()) {
-        for config_filename in config_file_names.iter() {
-          let f = ancestor.join(config_filename);
-          match ConfigFile::read(fs, &f, parse_options) {
-            Ok(cf) => {
-              log::debug!("Config file found at '{}'", f.display());
-              return Ok(Some(cf));
-            }
-            Err(e) if is_skippable_err(&e) => {
-              // ok, keep going
-            }
-            Err(e) => {
-              return Err(e);
-            }
+      for config_filename in config_file_names.iter() {
+        let f = ancestor.join(config_filename);
+        match ConfigFile::read(fs, &f, parse_options) {
+          Ok(cf) => {
+            log::debug!("Config file found at '{}'", f.display());
+            return Ok(Some(cf));
+          }
+          Err(e) if is_skippable_err(&e) => {
+            // ok, keep going
+          }
+          Err(e) => {
+            return Err(e);
           }
         }
       }
@@ -2282,18 +2229,14 @@ Caused by:
     // testdata/fmt/deno.jsonc exists
     let testdata = testdata_path();
     let c_md = testdata.join("fmt/with_config/subdir/c.md");
-    let mut checked = HashSet::new();
     let config_file = ConfigFile::discover_from(
       &RealDenoConfigFs,
       &c_md,
-      &mut checked,
       &[],
       &ConfigParseOptions::default(),
     )
     .unwrap()
     .unwrap();
-    assert!(checked.contains(c_md.parent().unwrap()));
-    assert!(!checked.contains(testdata.as_path()));
     let fmt_config = config_file.to_fmt_config().unwrap().unwrap();
     let expected_exclude =
       Url::from_file_path(testdata.join("fmt/with_config/subdir/b.ts"))
@@ -2304,40 +2247,20 @@ Caused by:
       fmt_config.files.exclude,
       PathOrPatternSet::new(vec![PathOrPattern::Path(expected_exclude)])
     );
-
-    // Now add all ancestors of testdata to checked.
-    for a in testdata.as_path().ancestors() {
-      checked.insert(a.to_path_buf());
-    }
-
-    // If we call discover_from again starting at testdata, we ought to get None.
-    assert!(ConfigFile::discover_from(
-      &RealDenoConfigFs,
-      testdata.as_path(),
-      &mut checked,
-      &[],
-      &ConfigParseOptions::default()
-    )
-    .unwrap()
-    .is_none());
   }
 
   #[test]
   fn discover_from_additional_config_file_names_success() {
     let testdata = testdata_path();
     let dir = testdata.join("additional_files/");
-    let mut checked = HashSet::new();
     let config_file = ConfigFile::discover_from(
       &RealDenoConfigFs,
       &dir,
-      &mut checked,
       &["jsr.json"],
       &ConfigParseOptions::default(),
     )
     .unwrap()
     .unwrap();
-    assert!(checked.contains(&dir));
-    assert!(!checked.contains(testdata.as_path()));
     assert_eq!(config_file.json.name.unwrap(), "@foo/bar");
   }
 
@@ -2345,11 +2268,9 @@ Caused by:
   fn discover_from_malformed() {
     let testdata = testdata_path();
     let d = testdata.join("malformed_config/");
-    let mut checked = HashSet::new();
     let err = ConfigFile::discover_from(
       &RealDenoConfigFs,
       d.as_path(),
-      &mut checked,
       &[],
       &ConfigParseOptions::default(),
     )
