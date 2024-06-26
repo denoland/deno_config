@@ -241,7 +241,7 @@ impl TsConfig {
 
   /// Merge a serde_json value into the configuration.
   pub fn merge(&mut self, value: &Value) {
-    super::util::json_merge(&mut self.0, value);
+    crate::util::json_merge(&mut self.0, value);
   }
 
   /// Take an optional user provided config file
