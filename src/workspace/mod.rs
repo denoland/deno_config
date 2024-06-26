@@ -72,6 +72,12 @@ pub enum WorkspaceDiagnosticKind {
   RootOnlyOption(&'static str),
   #[error("The '{0}' option can only be specified in a workspace member deno.json file and not the root workspace file.")]
   MemberOnlyOption(&'static str),
+  #[error("The '{name}' member at '{first_member}' cannot have the same name as the member at '{second_member}'.")]
+  DuplicateMemberName {
+    name: String,
+    first_member: Url,
+    second_member: Url,
+  },
   #[error("The 'workspaces' option should be called 'workspace'.")]
   DeprecatedWorkspacesOption,
 }
@@ -366,9 +372,10 @@ impl Workspace {
       }
     }
 
-    fn check_member_diagnostics(
-      member_config: &ConfigFile,
+    fn check_member_diagnostics<'a>(
+      member_config: &'a ConfigFile,
       diagnostics: &mut Vec<WorkspaceDiagnostic>,
+      seen_names: &mut HashMap<&'a str, &'a Url>,
     ) {
       if member_config.json.compiler_options.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
@@ -426,6 +433,20 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("workspace"),
         });
       }
+      if let Some(name) = member_config.json.name.as_deref() {
+        if let Some(other_member_url) = seen_names.get(name) {
+          diagnostics.push(WorkspaceDiagnostic {
+            config_url: member_config.specifier.clone(),
+            kind: WorkspaceDiagnosticKind::DuplicateMemberName {
+              name: name.to_string(),
+              first_member: member_config.specifier.clone(),
+              second_member: (*other_member_url).clone(),
+            },
+          });
+        } else {
+          seen_names.insert(name, &member_config.specifier);
+        }
+      }
     }
 
     let mut diagnostics = Vec::new();
@@ -433,12 +454,13 @@ impl Workspace {
       // no diagnostics to surface because the root is the only config
       return diagnostics;
     }
+    let mut seen_names = HashMap::with_capacity(self.config_folders.len());
     for (url, folder) in &self.config_folders {
       if let Some(config) = &folder.deno_json {
         if url == &self.root_dir {
           check_root_diagnostics(config, &mut diagnostics);
         } else {
-          check_member_diagnostics(config, &mut diagnostics);
+          check_member_diagnostics(config, &mut diagnostics, &mut seen_names);
         }
       }
     }
