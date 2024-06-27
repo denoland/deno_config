@@ -77,7 +77,7 @@ pub struct NpmPackageConfig {
   pub package_json: PackageJsonRc,
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum WorkspaceDiagnosticKind {
   #[error("The '{0}' option can only be specified in the root workspace deno.json file.")]
   RootOnlyOption(&'static str),
@@ -101,7 +101,7 @@ impl WorkspaceDiagnosticKind {
   }
 }
 
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{}\n    at {}", .kind, .config_url)]
 pub struct WorkspaceDiagnostic {
   pub kind: WorkspaceDiagnosticKind,
@@ -1510,5 +1510,95 @@ mod test {
     })
     .unwrap();
     assert_eq!(workspace.config_folders.len(), 3);
+  }
+
+  #[test]
+  fn test_compiler_options_root_member() {
+    let workspace = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": {
+          "checkJs": true
+        }
+      }),
+      json!({
+        "compilerOptions": {
+          "checkJs": false
+        }
+      }),
+    );
+    assert_eq!(
+      workspace.to_compiler_options().unwrap().unwrap().0,
+      json!({
+        // ignores member config
+        "checkJs": true
+      })
+    );
+    assert_eq!(
+      workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
+        config_url: Url::from_file_path(start_dir().join("member/deno.json"))
+          .unwrap(),
+      }]
+    );
+  }
+
+  #[test]
+  fn test_import_map_root_member() {
+    let workspace = workspace_for_root_and_member_with_fs(
+      json!({
+        "importMap": "./other.json",
+      }),
+      json!({
+        "importMap": "./member.json",
+      }),
+      |fs| {
+        fs.insert_json(start_dir().join("other.json"), json!({}));
+        fs.insert_json(start_dir().join("member/member.json"), json!({}));
+      },
+    );
+    assert_eq!(
+      workspace.to_import_map_specifier().unwrap().unwrap(),
+      Url::from_file_path(start_dir().join("other.json")).unwrap()
+    );
+    assert_eq!(
+      workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("importMap"),
+        config_url: Url::from_file_path(start_dir().join("member/deno.json"))
+          .unwrap(),
+      }]
+    );
+  }
+
+  fn workspace_for_root_and_member(
+    root: serde_json::Value,
+    member: serde_json::Value,
+  ) -> Workspace {
+    workspace_for_root_and_member_with_fs(root, member, |_| {})
+  }
+
+  fn workspace_for_root_and_member_with_fs(
+    mut root: serde_json::Value,
+    member: serde_json::Value,
+    with_fs: impl FnOnce(&mut TestFileSystem),
+  ) -> Workspace {
+    root
+      .as_object_mut()
+      .unwrap()
+      .insert("workspace".to_string(), json!(["./member"]));
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(start_dir().join("deno.json"), root);
+    fs.insert_json(start_dir().join("member/deno.json"), member);
+    with_fs(&mut fs);
+    Workspace::discover(&WorkspaceDiscoverOptions {
+      fs: &fs,
+      pkg_json_cache: None,
+      start: WorkspaceDiscoverStart::Dir(&start_dir().join("member")),
+      config_parse_options: &ConfigParseOptions::default(),
+      additional_config_file_names: &[],
+      discover_pkg_json: false,
+    })
+    .unwrap()
   }
 }
