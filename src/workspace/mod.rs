@@ -505,7 +505,7 @@ impl Workspace {
             .map(|c| (member_url, c))
             .or_else(|| {
               let parent = parent_specifier_str(member_url.as_str())?;
-              self.resolve_deno_json_str(parent)
+              self.resolve_deno_json_from_str(parent)
             })
             .or_else(|| {
               let root = self.config_folders.get(&self.root_dir).unwrap();
@@ -517,7 +517,7 @@ impl Workspace {
             .map(|pkg_json| (member_url, pkg_json))
             .or_else(|| {
               let parent = parent_specifier_str(member_url.as_str())?;
-              self.resolve_pkg_json_str(parent)
+              self.resolve_pkg_json_from_str(parent)
             })
             .or_else(|| {
               let root = self.config_folders.get(&self.root_dir).unwrap();
@@ -636,10 +636,10 @@ impl Workspace {
     &self,
     specifier: &Url,
   ) -> Option<(&UrlRc, &ConfigFileRc)> {
-    self.resolve_deno_json_str(specifier.as_str())
+    self.resolve_deno_json_from_str(specifier.as_str())
   }
 
-  fn resolve_deno_json_str(
+  fn resolve_deno_json_from_str(
     &self,
     specifier: &str,
   ) -> Option<(&UrlRc, &ConfigFileRc)> {
@@ -656,7 +656,7 @@ impl Workspace {
     }
   }
 
-  fn resolve_pkg_json_str(
+  fn resolve_pkg_json_from_str(
     &self,
     specifier: &str,
   ) -> Option<(&UrlRc, &PackageJsonRc)> {
@@ -1387,6 +1387,7 @@ mod test {
 
   use crate::assert_contains;
   use crate::fs::DenoConfigFs;
+  use crate::glob::PathOrPattern;
 
   use super::*;
 
@@ -1417,7 +1418,7 @@ mod test {
     }
   }
 
-  fn start_dir() -> PathBuf {
+  fn root_dir() -> PathBuf {
     if cfg!(windows) {
       PathBuf::from("C:\\Users\\User")
     } else {
@@ -1429,7 +1430,7 @@ mod test {
   fn test_empty_workspaces() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
-      start_dir().join("deno.json"),
+      root_dir().join("deno.json"),
       json!({
         "workspace": []
       }),
@@ -1438,7 +1439,7 @@ mod test {
     let workspace_config_err = Workspace::discover(&WorkspaceDiscoverOptions {
       fs: &fs,
       pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&start_dir()),
+      start: WorkspaceDiscoverStart::Dir(&root_dir()),
       config_parse_options: &ConfigParseOptions::default(),
       additional_config_file_names: &[],
       discover_pkg_json: false,
@@ -1456,7 +1457,7 @@ mod test {
   fn test_workspaces_outside_root_config_dir() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
-      start_dir().join("deno.json"),
+      root_dir().join("deno.json"),
       json!({
         "workspace": ["../a"]
       }),
@@ -1465,7 +1466,7 @@ mod test {
     let workspace_config_err = Workspace::discover(&WorkspaceDiscoverOptions {
       fs: &fs,
       pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&start_dir()),
+      start: WorkspaceDiscoverStart::Dir(&root_dir()),
       config_parse_options: &ConfigParseOptions::default(),
       additional_config_file_names: &[],
       discover_pkg_json: false,
@@ -1497,14 +1498,14 @@ mod test {
       "version": "0.2.0"
     });
 
-    fs.insert_json(start_dir().join("deno.json"), config_text);
-    fs.insert_json(start_dir().join("a/deno.json"), config_text_a);
-    fs.insert_json(start_dir().join("b/deno.jsonc"), config_text_b);
+    fs.insert_json(root_dir().join("deno.json"), config_text);
+    fs.insert_json(root_dir().join("a/deno.json"), config_text_a);
+    fs.insert_json(root_dir().join("b/deno.jsonc"), config_text_b);
 
     let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
       fs: &fs,
       pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&start_dir()),
+      start: WorkspaceDiscoverStart::Dir(&root_dir()),
       config_parse_options: &ConfigParseOptions::default(),
       additional_config_file_names: &[],
       discover_pkg_json: false,
@@ -1538,7 +1539,7 @@ mod test {
       workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
-        config_url: Url::from_file_path(start_dir().join("member/deno.json"))
+        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
           .unwrap(),
       }]
     );
@@ -1554,19 +1555,19 @@ mod test {
         "importMap": "./member.json",
       }),
       |fs| {
-        fs.insert_json(start_dir().join("other.json"), json!({}));
-        fs.insert_json(start_dir().join("member/member.json"), json!({}));
+        fs.insert_json(root_dir().join("other.json"), json!({}));
+        fs.insert_json(root_dir().join("member/member.json"), json!({}));
       },
     );
     assert_eq!(
       workspace.to_import_map_specifier().unwrap().unwrap(),
-      Url::from_file_path(start_dir().join("other.json")).unwrap()
+      Url::from_file_path(root_dir().join("other.json")).unwrap()
     );
     assert_eq!(
       workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("importMap"),
-        config_url: Url::from_file_path(start_dir().join("member/deno.json"))
+        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
           .unwrap(),
       }]
     );
@@ -1601,7 +1602,7 @@ mod test {
       workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("scopes"),
-        config_url: Url::from_file_path(start_dir().join("member/deno.json"))
+        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
           .unwrap(),
       }]
     );
@@ -1641,6 +1642,47 @@ mod test {
     );
   }
 
+  #[test]
+  fn test_exclude() {
+    let workspace = workspace_for_root_and_member(
+      json!({
+        "exclude": [
+          "./root",
+          "./member/vendor"
+        ]
+      }),
+      json!({
+        "exclude": [
+          "./member_exclude",
+          // unexclude from root
+          "!./vendor"
+        ]
+      }),
+    );
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let ctx = workspace.resolve_start_ctx();
+    let lint_config = ctx.to_lint_config().unwrap().unwrap();
+    assert_eq!(
+      lint_config.files,
+      FilePatterns {
+        base: root_dir().join("member"),
+        include: None,
+        exclude: PathOrPatternSet::new(vec![
+          // maybe this shouldn't contain excludes in a root directory, but this is ok
+          PathOrPattern::Path(root_dir().join("root")),
+          PathOrPattern::Path(root_dir().join("member").join("vendor")),
+          PathOrPattern::Path(root_dir().join("member").join("member_exclude")),
+          PathOrPattern::NegatedPath(root_dir().join("member").join("vendor")),
+        ]),
+      }
+    );
+
+    // will match because it was unexcluded in the member
+    assert!(lint_config
+      .files
+      .matches_path(&root_dir().join("member/vendor"), PathKind::Directory))
+  }
+
   fn workspace_for_root_and_member(
     root: serde_json::Value,
     member: serde_json::Value,
@@ -1658,13 +1700,14 @@ mod test {
       .unwrap()
       .insert("workspace".to_string(), json!(["./member"]));
     let mut fs = TestFileSystem::default();
-    fs.insert_json(start_dir().join("deno.json"), root);
-    fs.insert_json(start_dir().join("member/deno.json"), member);
+    fs.insert_json(root_dir().join("deno.json"), root);
+    fs.insert_json(root_dir().join("member/deno.json"), member);
     with_fs(&mut fs);
     Workspace::discover(&WorkspaceDiscoverOptions {
       fs: &fs,
       pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&start_dir().join("member")),
+      // start in the member
+      start: WorkspaceDiscoverStart::Dir(&root_dir().join("member")),
       config_parse_options: &ConfigParseOptions::default(),
       additional_config_file_names: &[],
       discover_pkg_json: false,
