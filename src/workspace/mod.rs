@@ -477,7 +477,7 @@ impl Workspace {
     diagnostics
   }
 
-  /// Resolves the member context from the directory that workspace discovery
+  /// Resolves the `WorkspaceMemberContext` from the directory that workspace discovery
   /// started from.
   pub fn resolve_start_ctx(&self) -> WorkspaceMemberContext {
     self.resolve_member_ctx(&self.start_dir)
