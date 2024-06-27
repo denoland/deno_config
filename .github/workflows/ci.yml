@@ -54,7 +54,7 @@ jobs:
         run: cargo test --all-features
 
       - name: Cargo test (Coverage)
-        if: "contains(matrix.os, 'ubuntu') && !startsWith(github.ref, 'refs/tags/')"
+        if: contains(matrix.os, 'ubuntu')
         uses: ./.github/workflows/ci-coverage
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
