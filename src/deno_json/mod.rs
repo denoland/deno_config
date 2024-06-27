@@ -1085,7 +1085,7 @@ impl ConfigFile {
     })
   }
 
-  pub fn to_files_config(&self) -> Result<FilePatterns, AnyError> {
+  pub fn to_exclude_files_config(&self) -> Result<FilePatterns, AnyError> {
     let exclude = self.resolve_exclude_patterns()?;
     let raw_files_config = SerializedFilesConfig {
       exclude,
@@ -1111,10 +1111,10 @@ impl ConfigFile {
     Ok(exclude)
   }
 
-  pub fn to_bench_config(&self) -> Result<Option<BenchConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.bench.clone() {
+  pub fn to_bench_config(&self) -> Result<BenchConfig, AnyError> {
+    match self.json.bench.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedBenchConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"bench\" configuration")?;
@@ -1122,20 +1122,19 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid bench config.")
       }
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid bench config.")
-      .map(Some)
+      None => Ok(BenchConfig {
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
-  pub fn to_fmt_config(&self) -> Result<Option<FmtConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.fmt.clone() {
+  pub fn to_fmt_config(&self) -> Result<FmtConfig, AnyError> {
+    match self.json.fmt.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedFmtConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"fmt\" configuration")?;
@@ -1143,24 +1142,20 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid fmt config.")
       }
-      None if !exclude_patterns.is_empty() => SerializedFmtConfig {
-        exclude: exclude_patterns,
-        ..Default::default()
-      },
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid fmt config.")
-      .map(Some)
+      None => Ok(FmtConfig {
+        options: Default::default(),
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
-  pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.lint.clone() {
+  pub fn to_lint_config(&self) -> Result<LintConfig, AnyError> {
+    match self.json.lint.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedLintConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"lint\" configuration")?;
@@ -1168,24 +1163,20 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid lint config.")
       }
-      None if !exclude_patterns.is_empty() => SerializedLintConfig {
-        exclude: exclude_patterns,
-        ..Default::default()
-      },
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid lint config.")
-      .map(Some)
+      None => Ok(LintConfig {
+        rules: Default::default(),
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
-  pub fn to_test_config(&self) -> Result<Option<TestConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.test.clone() {
+  pub fn to_test_config(&self) -> Result<TestConfig, AnyError> {
+    match self.json.test.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedTestConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"test\" configuration")?;
@@ -1193,26 +1184,19 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid test config.")
       }
-      None if !exclude_patterns.is_empty() => SerializedTestConfig {
-        exclude: exclude_patterns,
-        ..Default::default()
-      },
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid test config.")
-      .map(Some)
+      None => Ok(TestConfig {
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
-  pub(crate) fn to_publish_config(
-    &self,
-  ) -> Result<Option<PublishConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.publish.clone() {
+  pub(crate) fn to_publish_config(&self) -> Result<PublishConfig, AnyError> {
+    match self.json.publish.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedPublishConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"test\" configuration")?;
@@ -1220,18 +1204,13 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid publish config.")
       }
-      None if !exclude_patterns.is_empty() => SerializedPublishConfig {
-        exclude: exclude_patterns,
-        ..Default::default()
-      },
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid publish config.")
-      .map(Some)
+      None => Ok(PublishConfig {
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
   /// Return any tasks that are defined in the configuration file as a sequence
@@ -1531,10 +1510,9 @@ mod tests {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"))).join("testdata")
   }
 
-  fn unpack_object<T>(result: Result<Option<T>, AnyError>, name: &str) -> T {
+  fn unpack_object<T>(result: Result<T, AnyError>, name: &str) -> T {
     result
       .unwrap_or_else(|err| panic!("error parsing {name} object but got {err}"))
-      .unwrap_or_else(|| panic!("{name} object should be defined"))
   }
 
   #[test]
@@ -1959,7 +1937,7 @@ Caused by:
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
 
-    let test_config = config_file.to_test_config().unwrap().unwrap();
+    let test_config = config_file.to_test_config().unwrap();
     assert_eq!(test_config.files.include, None);
     assert_eq!(
       test_config.files.exclude,
@@ -1970,7 +1948,7 @@ Caused by:
       .unwrap()
     );
 
-    let bench_config = config_file.to_bench_config().unwrap().unwrap();
+    let bench_config = config_file.to_bench_config().unwrap();
     assert_eq!(
       bench_config.files.exclude,
       PathOrPatternSet::from_absolute_paths(&["/deno/foo/".to_string()])
@@ -1997,7 +1975,7 @@ Caused by:
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
 
-    let publish_config = config_file.to_publish_config().unwrap().unwrap();
+    let publish_config = config_file.to_publish_config().unwrap();
     assert_eq!(publish_config.files.include, None);
     assert_eq!(
       publish_config.files.exclude,
@@ -2025,7 +2003,7 @@ Caused by:
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
 
-    let files_config = config_file.to_files_config().unwrap();
+    let files_config = config_file.to_exclude_files_config().unwrap();
     assert_eq!(files_config.include, None);
     assert_eq!(
       files_config.exclude,
@@ -2033,7 +2011,7 @@ Caused by:
         .unwrap()
     );
 
-    let lint_config = config_file.to_lint_config().unwrap().unwrap();
+    let lint_config = config_file.to_lint_config().unwrap();
     assert_eq!(lint_config.files.include, None);
     assert_eq!(
       lint_config.files.exclude,
@@ -2041,7 +2019,7 @@ Caused by:
         .unwrap()
     );
 
-    let fmt_config = config_file.to_fmt_config().unwrap().unwrap();
+    let fmt_config = config_file.to_fmt_config().unwrap();
     assert_eq!(fmt_config.files.include, None);
     assert_eq!(
       fmt_config.files.exclude,
@@ -2208,7 +2186,7 @@ Caused by:
     )
     .unwrap()
     .unwrap();
-    let fmt_config = config_file.to_fmt_config().unwrap().unwrap();
+    let fmt_config = config_file.to_fmt_config().unwrap();
     let expected_exclude =
       Url::from_file_path(testdata.join("fmt/with_config/subdir/b.ts"))
         .unwrap()
