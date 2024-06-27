@@ -692,8 +692,6 @@ impl Workspace {
     specifier: &str,
   ) -> Option<(&UrlRc, &FolderConfigs)> {
     let mut best_match: Option<(&UrlRc, &FolderConfigs)> = None;
-    // it would be nice if we could store this config_folders relative to
-    // the root, but the members might appear outside the root folder
     for (dir_url, config) in &self.config_folders {
       if specifier.starts_with(dir_url.as_str())
         && (best_match.is_none()
