@@ -26,6 +26,7 @@ use crate::deno_json::ConfigParseOptions;
 use crate::get_ts_config_for_emit;
 use crate::glob::FilePatterns;
 use crate::glob::PathKind;
+use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonLoadError;
@@ -62,6 +63,8 @@ pub use resolver::WorkspaceResolverCreateError;
 
 #[allow(clippy::disallowed_types)]
 type UrlRc = crate::sync::MaybeArc<Url>;
+#[allow(clippy::disallowed_types)]
+type WorkspaceRc = crate::sync::MaybeArc<Workspace>;
 
 #[derive(Debug, Clone)]
 pub struct JsrPackageConfig {
@@ -483,18 +486,22 @@ impl Workspace {
 
   /// Resolves the `WorkspaceMemberContext` from the directory that workspace discovery
   /// started from.
-  pub fn resolve_start_ctx(&self) -> WorkspaceMemberContext {
+  pub fn resolve_start_ctx(self: &WorkspaceRc) -> WorkspaceMemberContext {
     self.resolve_member_ctx(&self.start_dir)
   }
 
   /// Resolves a workspace member's context, which can be used for deriving
   /// configuration specific to a member.
-  pub fn resolve_member_ctx(&self, specifier: &Url) -> WorkspaceMemberContext {
+  pub fn resolve_member_ctx(
+    self: &WorkspaceRc,
+    specifier: &Url,
+  ) -> WorkspaceMemberContext {
     let maybe_folder = self.resolve_folder(specifier);
     match maybe_folder {
       Some((member_url, folder)) => {
         if member_url == &self.root_dir {
           WorkspaceMemberContext::create_from_root_folder(
+            self.clone(),
             self.root_dir.clone(),
             folder,
           )
@@ -524,6 +531,7 @@ impl Workspace {
               root.pkg_json.as_ref().map(|c| (&self.root_dir, c))
             });
           WorkspaceMemberContext {
+            workspace: self.clone(),
             dir_url: member_url.clone(),
             pkg_json: maybe_pkg_json.map(|(member_url, pkg_json)| {
               WorkspaceMemberContextConfig {
@@ -561,6 +569,7 @@ impl Workspace {
       None => {
         let root = self.config_folders.get(&self.root_dir).unwrap();
         WorkspaceMemberContext::create_from_root_folder(
+          self.clone(),
           self.root_dir.clone(),
           root,
         )
@@ -582,7 +591,7 @@ impl Workspace {
       .filter_map(|f| f.pkg_json.as_ref())
   }
 
-  pub fn jsr_packages(&self) -> Vec<JsrPackageConfig> {
+  pub fn jsr_packages(self: &WorkspaceRc) -> Vec<JsrPackageConfig> {
     self
       .deno_jsons()
       .filter_map(|c| {
@@ -598,7 +607,7 @@ impl Workspace {
       .collect()
   }
 
-  pub fn jsr_packages_for_publish(&self) -> Vec<JsrPackageConfig> {
+  pub fn jsr_packages_for_publish(self: &WorkspaceRc) -> Vec<JsrPackageConfig> {
     let ctx = self.resolve_start_ctx();
     let Some(config) = &ctx.deno_json else {
       return Vec::new();
@@ -613,7 +622,7 @@ impl Workspace {
     }
   }
 
-  pub fn npm_packages(&self) -> Vec<NpmPackageConfig> {
+  pub fn npm_packages(self: &WorkspaceRc) -> Vec<NpmPackageConfig> {
     self
       .package_jsons()
       .filter_map(|c| {
@@ -805,7 +814,7 @@ impl Workspace {
   }
 
   pub fn resolve_ctxs_from_patterns(
-    &self,
+    self: &WorkspaceRc,
     patterns: &FilePatterns,
   ) -> Vec<WorkspaceMemberContext> {
     let context = self.resolve_start_ctx();
@@ -983,6 +992,7 @@ struct WorkspaceMemberContextConfig<T> {
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceMemberContext {
+  workspace: WorkspaceRc,
   dir_url: UrlRc,
   pkg_json: Option<WorkspaceMemberContextConfig<PackageJson>>,
   deno_json: Option<WorkspaceMemberContextConfig<ConfigFile>>,
@@ -990,10 +1000,12 @@ pub struct WorkspaceMemberContext {
 
 impl WorkspaceMemberContext {
   fn create_from_root_folder(
+    workspace: WorkspaceRc,
     dir_url: UrlRc,
     root_folder: &FolderConfigs,
   ) -> Self {
     WorkspaceMemberContext {
+      workspace,
       dir_url,
       pkg_json: root_folder.pkg_json.as_ref().map(|config| {
         WorkspaceMemberContextConfig {
@@ -1052,6 +1064,14 @@ impl WorkspaceMemberContext {
   }
 
   pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
+    let mut maybe_config = self.to_lint_config_inner()?;
+    if let Some(config) = &mut maybe_config {
+      self.append_workspace_members_to_exclude(&mut config.files);
+    }
+    Ok(maybe_config)
+  }
+
+  fn to_lint_config_inner(&self) -> Result<Option<LintConfig>, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(None);
     };
@@ -1096,6 +1116,14 @@ impl WorkspaceMemberContext {
   }
 
   pub fn to_fmt_config(&self) -> Result<Option<FmtConfig>, AnyError> {
+    let mut maybe_config = self.to_fmt_config_inner()?;
+    if let Some(config) = &mut maybe_config {
+      self.append_workspace_members_to_exclude(&mut config.files);
+    }
+    Ok(maybe_config)
+  }
+
+  fn to_fmt_config_inner(&self) -> Result<Option<FmtConfig>, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(None);
     };
@@ -1146,6 +1174,14 @@ impl WorkspaceMemberContext {
   }
 
   pub fn to_bench_config(&self) -> Result<Option<BenchConfig>, AnyError> {
+    let mut maybe_config = self.to_bench_config_inner()?;
+    if let Some(config) = &mut maybe_config {
+      self.append_workspace_members_to_exclude(&mut config.files);
+    }
+    Ok(maybe_config)
+  }
+
+  fn to_bench_config_inner(&self) -> Result<Option<BenchConfig>, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(None);
     };
@@ -1216,6 +1252,14 @@ impl WorkspaceMemberContext {
   }
 
   pub fn to_publish_config(&self) -> Result<Option<PublishConfig>, AnyError> {
+    let mut maybe_config = self.to_publish_config_inner()?;
+    if let Some(config) = &mut maybe_config {
+      self.append_workspace_members_to_exclude(&mut config.files);
+    }
+    Ok(maybe_config)
+  }
+
+  fn to_publish_config_inner(&self) -> Result<Option<PublishConfig>, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(None);
     };
@@ -1239,6 +1283,14 @@ impl WorkspaceMemberContext {
   }
 
   pub fn to_test_config(&self) -> Result<Option<TestConfig>, AnyError> {
+    let mut maybe_config = self.to_test_config_inner()?;
+    if let Some(config) = &mut maybe_config {
+      self.append_workspace_members_to_exclude(&mut config.files);
+    }
+    Ok(maybe_config)
+  }
+
+  fn to_test_config_inner(&self) -> Result<Option<TestConfig>, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(None);
     };
@@ -1259,6 +1311,24 @@ impl WorkspaceMemberContext {
     Ok(Some(TestConfig {
       files: combine_patterns(root_config.files, member_config.files),
     }))
+  }
+
+  fn append_workspace_members_to_exclude(&self, files: &mut FilePatterns) {
+    let maybe_root_dir = self.maybe_deno_json().map(|d| d.dir_path());
+    files.exclude.append(
+      self
+        .workspace
+        .deno_jsons()
+        .filter(|member_deno_json| {
+          if let Some(root_dir) = &maybe_root_dir {
+            let member_dir = member_deno_json.dir_path();
+            member_dir != *root_dir && member_dir.starts_with(root_dir)
+          } else {
+            true // ok, this is just a perf optimization
+          }
+        })
+        .map(|d| PathOrPattern::Path(d.dir_path())),
+    );
   }
 }
 
@@ -1688,43 +1758,93 @@ mod test {
     let workspace = workspace_for_root_and_member(
       json!({
         "lint": {
-          "report": "json"
+          "report": "json",
+          "rules": {
+            "tags": ["tag1"],
+            "include": ["rule1"],
+            "exclude": ["rule2"],
+          }
         }
       }),
       json!({
         "lint": {
-          "report": "pretty"
+          "report": "pretty",
+          "include": ["subdir"],
+          "rules": {
+            "tags": ["tag1"],
+            "include": ["rule2"],
+          }
         }
       }),
     );
-    assert_eq!(workspace.diagnostics(), vec![]);
-    let ctx = workspace.resolve_start_ctx();
-    let lint_config = ctx.to_lint_config().unwrap().unwrap();
     assert_eq!(
-      lint_config.files,
-      FilePatterns {
-        base: root_dir().join("member"),
-        include: None,
-        exclude: PathOrPatternSet::new(vec![
-          // maybe this shouldn't contain excludes in a root directory, but this is ok
-          PathOrPattern::Path(root_dir().join("root")),
-          PathOrPattern::Path(root_dir().join("member").join("vendor")),
-          PathOrPattern::Path(root_dir().join("member").join("member_exclude")),
-          PathOrPattern::NegatedPath(root_dir().join("member").join("vendor")),
-        ]),
+      workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("lint.report"),
+        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+          .unwrap(),
+      }]
+    );
+    assert_eq!(
+      workspace.to_lint_config().unwrap(),
+      WorkspaceLintConfig {
+        report: Some("json".to_string()),
+      }
+    );
+    let lint_config = workspace
+      .resolve_start_ctx()
+      .to_lint_config()
+      .unwrap()
+      .unwrap();
+    assert_eq!(
+      lint_config,
+      LintConfig {
+        rules: LintRulesConfig {
+          tags: Some(vec!["tag1".to_string()]),
+          include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
+          exclude: Some(vec![])
+        },
+        files: FilePatterns {
+          base: root_dir().join("member"),
+          include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+            root_dir().join("member").join("subdir")
+          )])),
+          exclude: Default::default(),
+        },
       }
     );
 
-    // will match because it was unexcluded in the member
-    assert!(lint_config
-      .files
-      .matches_path(&root_dir().join("member/vendor"), PathKind::Directory))
+    // check the root context
+    let root_lint_config = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
+      .to_lint_config()
+      .unwrap()
+      .unwrap();
+    assert_eq!(
+      root_lint_config,
+      LintConfig {
+        rules: LintRulesConfig {
+          tags: Some(vec!["tag1".to_string()]),
+          include: Some(vec!["rule1".to_string()]),
+          exclude: Some(vec!["rule2".to_string()])
+        },
+        files: FilePatterns {
+          base: root_dir(),
+          include: None,
+          // the workspace member will be excluded because that needs
+          // to be resolved separately
+          exclude: PathOrPatternSet::new(Vec::from([PathOrPattern::Path(
+            root_dir().join("member")
+          )])),
+        },
+      }
+    );
   }
 
   fn workspace_for_root_and_member(
     root: serde_json::Value,
     member: serde_json::Value,
-  ) -> Workspace {
+  ) -> WorkspaceRc {
     workspace_for_root_and_member_with_fs(root, member, |_| {})
   }
 
@@ -1732,7 +1852,7 @@ mod test {
     mut root: serde_json::Value,
     member: serde_json::Value,
     with_fs: impl FnOnce(&mut TestFileSystem),
-  ) -> Workspace {
+  ) -> WorkspaceRc {
     root
       .as_object_mut()
       .unwrap()
@@ -1741,15 +1861,17 @@ mod test {
     fs.insert_json(root_dir().join("deno.json"), root);
     fs.insert_json(root_dir().join("member/deno.json"), member);
     with_fs(&mut fs);
-    Workspace::discover(&WorkspaceDiscoverOptions {
-      fs: &fs,
-      pkg_json_cache: None,
-      // start in the member
-      start: WorkspaceDiscoverStart::Dir(&root_dir().join("member")),
-      config_parse_options: &ConfigParseOptions::default(),
-      additional_config_file_names: &[],
-      discover_pkg_json: false,
-    })
-    .unwrap()
+    new_rc(
+      Workspace::discover(&WorkspaceDiscoverOptions {
+        fs: &fs,
+        pkg_json_cache: None,
+        // start in the member
+        start: WorkspaceDiscoverStart::Dir(&root_dir().join("member")),
+        config_parse_options: &ConfigParseOptions::default(),
+        additional_config_file_names: &[],
+        discover_pkg_json: false,
+      })
+      .unwrap(),
+    )
   }
 }
