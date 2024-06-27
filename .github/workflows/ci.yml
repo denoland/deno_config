@@ -31,10 +31,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@b6880389f33347ffd265f5e9d76f95335616c9f3
-        if: contains(matrix.os, 'ubuntu')
-        with:
-          tool: cargo-llvm-cov@0.6.10
 
       - name: Format
         if: contains(matrix.os, 'ubuntu')
@@ -59,14 +55,7 @@ jobs:
 
       - name: Cargo test (Coverage)
         if: "contains(matrix.os, 'ubuntu') && !startsWith(github.ref, 'refs/tags/')"
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-      
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v4.0.1
-        if: "contains(matrix.os, 'ubuntu') && !startsWith(github.ref, 'refs/tags/')"
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
+        uses: ./.github/workflows/ci-coverage
 
       - name: Cargo publish
         if: |

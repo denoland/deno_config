@@ -1,0 +1,15 @@
+name: Coverage
+runs:
+  using: "composite"
+  steps:
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@b6880389f33347ffd265f5e9d76f95335616c9f3
+      with:
+        tool: cargo-llvm-cov@0.6.10
+    - name: Cargo test
+      run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+    - name: Upload to Codecov
+      uses: codecov/codecov-action@v4.0.1
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: lcov.info
