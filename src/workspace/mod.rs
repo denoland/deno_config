@@ -875,7 +875,9 @@ impl Workspace {
 }
 
 pub enum TaskOrScript<'a> {
+  /// A task from a deno.json.
   Task(&'a IndexMap<String, Task>, &'a str),
+  /// A script from a package.json.
   Script(&'a IndexMap<String, String>, &'a str),
 }
 
@@ -1703,6 +1705,8 @@ fn parent_specifier_str(specifier: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod test {
+  use serde_json::json;
+
   use crate::assert_contains;
   use crate::fs::DenoConfigFs;
 
@@ -1712,10 +1716,18 @@ mod test {
   struct TestFileSystem(pub HashMap<PathBuf, String>);
 
   impl TestFileSystem {
-    fn insert(&mut self, path: impl AsRef<Path>, contents: &str) {
+    fn insert_json(
+      &mut self,
+      path: impl AsRef<Path>,
+      contents: serde_json::Value,
+    ) {
+      self.insert(path, contents.to_string())
+    }
+
+    fn insert(&mut self, path: impl AsRef<Path>, contents: impl AsRef<str>) {
       self
         .0
-        .insert(path.as_ref().to_path_buf(), contents.to_string());
+        .insert(path.as_ref().to_path_buf(), contents.as_ref().to_string());
     }
   }
 
@@ -1738,10 +1750,12 @@ mod test {
   #[test]
   fn test_empty_workspaces() {
     let mut fs = TestFileSystem::default();
-    let config_text = r#"{
-      "workspace": [],
-    }"#;
-    fs.insert(start_dir().join("deno.json"), config_text);
+    fs.insert_json(
+      start_dir().join("deno.json"),
+      json!({
+        "workspace": []
+      }),
+    );
 
     let workspace_config_err = Workspace::discover(&WorkspaceDiscoverOptions {
       fs: &fs,
@@ -1763,10 +1777,12 @@ mod test {
   #[test]
   fn test_workspaces_outside_root_config_dir() {
     let mut fs = TestFileSystem::default();
-    let config_text = r#"{
-      "workspaces": ["../a"],
-    }"#;
-    fs.insert(start_dir().join("deno.json"), config_text);
+    fs.insert_json(
+      start_dir().join("deno.json"),
+      json!({
+        "workspace": ["../a"]
+      }),
+    );
 
     let workspace_config_err = Workspace::discover(&WorkspaceDiscoverOptions {
       fs: &fs,
@@ -1788,24 +1804,24 @@ mod test {
   #[test]
   fn test_workspaces_json_jsonc() {
     let mut fs = TestFileSystem::default();
-    let config_text = r#"{
-      "workspaces": [
+    let config_text = json!({
+      "workspace": [
         "./a",
         "./b",
       ],
-    }"#;
-    let config_text_a = r#"{
+    });
+    let config_text_a = json!({
       "name": "a",
       "version": "0.1.0"
-    }"#;
-    let config_text_b = r#"{
+    });
+    let config_text_b = json!({
       "name": "b",
       "version": "0.2.0"
-    }"#;
+    });
 
-    fs.insert(start_dir().join("deno.json"), config_text);
-    fs.insert(start_dir().join("a/deno.json"), config_text_a);
-    fs.insert(start_dir().join("b/deno.jsonc"), config_text_b);
+    fs.insert_json(start_dir().join("deno.json"), config_text);
+    fs.insert_json(start_dir().join("a/deno.json"), config_text_a);
+    fs.insert_json(start_dir().join("b/deno.jsonc"), config_text_b);
 
     let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
       fs: &fs,

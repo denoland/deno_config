@@ -46,8 +46,10 @@ pub struct CreateResolverOptions {
   /// Whether to resolve dependencies by reading the dependencies list
   /// from a package.json
   ///
-  /// This should only be set when a node_modules folder doesn't exist
-  /// as node resolution should be used otherwise.
+  /// This should only be set when resolving using the global resolver and
+  /// no node_modules folder is present. For scenarios where a node_modules
+  /// folder exists, node resolution based on the file system should be used
+  /// otherwise.
   pub pkg_json_dep_resolution: bool,
   pub specified_import_map: Option<SpecifiedImportMap>,
 }
