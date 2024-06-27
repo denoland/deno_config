@@ -1,4 +1,8 @@
 name: Coverage
+inputs:
+  token:
+    description: 'Code coverage token'
+    required: true
 runs:
   using: "composite"
   steps:
@@ -7,9 +11,10 @@ runs:
       with:
         tool: cargo-llvm-cov@0.6.10
     - name: Cargo test
+      shell: bash
       run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
     - name: Upload to Codecov
       uses: codecov/codecov-action@v4.0.1
       with:
-        token: ${{ secrets.CODECOV_TOKEN }}
+        token: ${{ inputs.token }}
         files: lcov.info
