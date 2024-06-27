@@ -88,18 +88,16 @@ pub enum WorkspaceDiagnosticKind {
   MemberOnlyOption(&'static str),
   #[error("The '{name}' member cannot have the same name as the member at '{other_member}'.")]
   DuplicateMemberName { name: String, other_member: Url },
-  #[error("The 'workspaces' option should be called 'workspace'.")]
-  DeprecatedWorkspacesOption,
+  #[error("The 'workspaces' option should be renamed to 'workspace'.")]
+  InvalidWorkspacesOption,
 }
 
 impl WorkspaceDiagnosticKind {
   /// If the diagnostic should cause the process to shut down.
   pub fn is_fatal(&self) -> bool {
     match self {
-      Self::RootOnlyOption { .. }
-      | Self::MemberOnlyOption { .. }
-      | Self::DeprecatedWorkspacesOption => false,
-      Self::DuplicateMemberName { .. } => true,
+      Self::RootOnlyOption { .. } | Self::MemberOnlyOption { .. } => false,
+      Self::InvalidWorkspacesOption | Self::DuplicateMemberName { .. } => true,
     }
   }
 }
@@ -382,12 +380,6 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::MemberOnlyOption("exports"),
         });
       }
-      if root_config.json.deprecated_workspaces.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: root_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::DeprecatedWorkspacesOption,
-        });
-      }
     }
 
     fn check_member_diagnostics<'a>(
@@ -399,12 +391,6 @@ impl Workspace {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
-        });
-      }
-      if member_config.json.node_modules_dir.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: member_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
         });
       }
       if member_config.json.import_map.is_some() {
@@ -419,16 +405,34 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("lock"),
         });
       }
+      if member_config.json.node_modules_dir.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
+        });
+      }
       if member_config.json.scopes.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::RootOnlyOption("scopes"),
         });
       }
+      if !member_config.json.unstable.is_empty() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("unstable"),
+        });
+      }
       if member_config.json.vendor.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::RootOnlyOption("vendor"),
+        });
+      }
+      if member_config.json.workspace.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("workspace"),
         });
       }
       if let Some(value) = &member_config.json.lint {
@@ -438,18 +442,6 @@ impl Workspace {
             kind: WorkspaceDiagnosticKind::RootOnlyOption("lint.report"),
           });
         }
-      }
-      if !member_config.json.unstable.is_empty() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: member_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::RootOnlyOption("unstable"),
-        });
-      }
-      if member_config.json.workspace.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: member_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::RootOnlyOption("workspace"),
-        });
       }
       if let Some(name) = member_config.json.name.as_deref() {
         if let Some(other_member_url) = seen_names.get(name) {
@@ -466,19 +458,38 @@ impl Workspace {
       }
     }
 
-    let mut diagnostics = Vec::new();
-    if self.config_folders.len() == 1 {
-      // no diagnostics to surface because the root is the only config
-      return diagnostics;
+    fn check_all_configs(
+      config: &ConfigFile,
+      diagnostics: &mut Vec<WorkspaceDiagnostic>,
+    ) {
+      if config.json.deprecated_workspaces.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::InvalidWorkspacesOption,
+        });
+      }
     }
+
+    let mut diagnostics = Vec::new();
+    let is_deno_workspace = self
+      .root_folder()
+      .1
+      .deno_json
+      .as_ref()
+      .map(|d| d.json.workspace.is_some())
+      .unwrap_or(false);
     let mut seen_names = HashMap::with_capacity(self.config_folders.len());
     for (url, folder) in &self.config_folders {
       if let Some(config) = &folder.deno_json {
-        if url == &self.root_dir {
-          check_root_diagnostics(config, &mut diagnostics);
-        } else {
-          check_member_diagnostics(config, &mut diagnostics, &mut seen_names);
+        if is_deno_workspace {
+          if url == &self.root_dir {
+            check_root_diagnostics(config, &mut diagnostics);
+          } else {
+            check_member_diagnostics(config, &mut diagnostics, &mut seen_names);
+          }
         }
+
+        check_all_configs(config, &mut diagnostics);
       }
     }
     diagnostics
@@ -2172,48 +2183,53 @@ mod test {
   }
 
   #[test]
-  fn test_root_member_lock() {
+  fn test_root_member_root_only_in_member() {
     let workspace = workspace_for_root_and_member(
       json!({
-        "lock": false
+        "unstable": ["byonm"],
+        "lock": false,
+        "nodeModulesDir": false,
+        "vendor": true,
       }),
       json!({
-        "lock": true
+        "unstable": ["sloppy-imports"],
+        "lock": true,
+        "nodeModulesDir": true,
+        "vendor": false,
       }),
     );
-    assert_eq!(
-      workspace.to_lock_config().unwrap().unwrap(),
-      // ignores member config
-      LockConfig::Bool(false),
-    );
-    assert_eq!(
-      workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::RootOnlyOption("lock"),
-        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
-          .unwrap(),
-      }]
-    );
-  }
-
-  #[test]
-  fn test_root_member_unstable() {
-    let workspace = workspace_for_root_and_member(
-      json!({
-        "unstable": ["byonm"]
-      }),
-      json!({
-        "unstable": ["sloppy-imports"]
-      }),
-    );
+    // ignores member config
     assert_eq!(workspace.unstable_features(), &["byonm".to_string()]);
     assert_eq!(
+      workspace.to_lock_config().unwrap().unwrap(),
+      LockConfig::Bool(false),
+    );
+    assert_eq!(workspace.node_modules_dir(), Some(false));
+    assert_eq!(workspace.vendor_dir_path(), Some(root_dir().join("vendor")));
+    assert_eq!(
       workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::RootOnlyOption("unstable"),
-        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
-          .unwrap(),
-      }]
+      vec![
+        WorkspaceDiagnostic {
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("lock"),
+          config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap(),
+        },
+        WorkspaceDiagnostic {
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
+          config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap(),
+        },
+        WorkspaceDiagnostic {
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("unstable"),
+          config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap(),
+        },
+        WorkspaceDiagnostic {
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("vendor"),
+          config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap(),
+        }
+      ]
     );
   }
 
@@ -2250,7 +2266,7 @@ mod test {
   }
 
   #[test]
-  fn test_root_member_workspace() {
+  fn test_root_member_workspace_on_member() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -2280,6 +2296,76 @@ mod test {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("workspace"),
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
           .unwrap(),
+      }]
+    );
+  }
+
+  #[test]
+  fn test_workspaces_property() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspaces": ["./member"]
+      }),
+    );
+    let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
+      fs: &fs,
+      pkg_json_cache: None,
+      start: WorkspaceDiscoverStart::Dir(&root_dir()),
+      config_parse_options: &ConfigParseOptions::default(),
+      additional_config_file_names: &[],
+      discover_pkg_json: false,
+    })
+    .unwrap();
+    assert_eq!(
+      workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::InvalidWorkspacesOption,
+        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }]
+    );
+  }
+
+  #[test]
+  fn test_multiple_pkgs_same_name() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member1", "./member2"]
+      }),
+    );
+    let pkg = json!({
+      "name": "@scope/pkg",
+      "version": "1.0.0",
+      "exports": "./main.ts",
+    });
+    fs.insert_json(root_dir().join("member1").join("deno.json"), pkg.clone());
+    fs.insert_json(root_dir().join("member2").join("deno.json"), pkg.clone());
+    let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
+      fs: &fs,
+      pkg_json_cache: None,
+      start: WorkspaceDiscoverStart::Dir(&root_dir()),
+      config_parse_options: &ConfigParseOptions::default(),
+      additional_config_file_names: &[],
+      discover_pkg_json: false,
+    })
+    .unwrap();
+    assert_eq!(
+      workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::DuplicateMemberName {
+          name: "@scope/pkg".to_string(),
+          other_member: Url::from_file_path(
+            root_dir().join("member1").join("deno.json")
+          )
+          .unwrap(),
+        },
+        config_url: Url::from_file_path(
+          root_dir().join("member2").join("deno.json")
+        )
+        .unwrap(),
       }]
     );
   }

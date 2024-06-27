@@ -74,11 +74,7 @@ pub fn discover_workspace_config_files(
     let Some(workspace_config_file) = config_file else {
       break;
     };
-    let workspace_field = workspace_config_file
-      .json
-      .workspace
-      .as_ref()
-      .or(workspace_config_file.json.deprecated_workspaces.as_ref());
+    let workspace_field = workspace_config_file.json.workspace.as_ref();
     if let Some(members) = workspace_field {
       if members.is_empty() {
         return Err(
