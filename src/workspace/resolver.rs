@@ -186,9 +186,14 @@ impl WorkspaceResolver {
             })
             .map(|config| import_map::ext::ImportMapConfig {
               base_url: config.specifier.clone(),
-              import_map_value: import_map::ext::expand_import_map_value(
-                config.to_import_map_value_from_imports(),
-              ),
+              import_map_value: {
+                // don't include scopes here
+                let mut value = serde_json::Map::with_capacity(1);
+                if let Some(imports) = &config.json.imports {
+                  value.insert("imports".to_string(), imports.clone());
+                }
+                import_map::ext::expand_import_map_value(value.into())
+              },
             })
             .collect::<Vec<_>>();
           let (import_map_url, import_map) =

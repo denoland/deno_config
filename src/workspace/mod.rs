@@ -1382,6 +1382,7 @@ fn parent_specifier_str(specifier: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod test {
+  use pretty_assertions::assert_eq;
   use serde_json::json;
 
   use crate::assert_contains;
@@ -1568,6 +1569,75 @@ mod test {
         config_url: Url::from_file_path(start_dir().join("member/deno.json"))
           .unwrap(),
       }]
+    );
+  }
+
+  #[tokio::test]
+  async fn test_imports_and_scopes() {
+    let workspace = workspace_for_root_and_member(
+      json!({
+        "imports": {
+          "@scope/pkg": "jsr:@scope/pkg@1"
+        },
+        "scopes": {
+          "https://deno.land/x/": {
+            "@scope/pkg": "jsr:@scope/pkg@2"
+          }
+        }
+      }),
+      json!({
+        "imports": {
+          "@scope/pkg": "jsr:@scope/pkg@3"
+        },
+        // will ignore this scopes because it's not in the root
+        "scopes": {
+          "https://deno.land/x/other": {
+            "@scope/pkg": "jsr:@scope/pkg@4"
+          }
+        }
+      }),
+    );
+    assert_eq!(
+      workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("scopes"),
+        config_url: Url::from_file_path(start_dir().join("member/deno.json"))
+          .unwrap(),
+      }]
+    );
+    let resolver = workspace
+      .create_resolver(
+        CreateResolverOptions {
+          pkg_json_dep_resolution: true,
+          specified_import_map: None,
+        },
+        |_| async move {
+          unreachable!();
+        },
+      )
+      .await
+      .unwrap();
+    assert_eq!(
+      serde_json::from_str::<serde_json::Value>(
+        &resolver.maybe_import_map().unwrap().to_json()
+      )
+      .unwrap(),
+      json!({
+        "imports": {
+          "@scope/pkg": "jsr:@scope/pkg@1",
+          "@scope/pkg/": "jsr:/@scope/pkg@1/"
+        },
+        "scopes": {
+          "https://deno.land/x/": {
+            "@scope/pkg": "jsr:@scope/pkg@2",
+            "@scope/pkg/": "jsr:/@scope/pkg@2/"
+          },
+          "./member/": {
+            "@scope/pkg": "jsr:@scope/pkg@3",
+            "@scope/pkg/": "jsr:/@scope/pkg@3/"
+          }
+        }
+      })
     );
   }
 
