@@ -1515,7 +1515,7 @@ mod test {
   }
 
   #[test]
-  fn test_compiler_options_root_member() {
+  fn test_root_member_compiler_options() {
     let workspace = workspace_for_root_and_member(
       json!({
         "compilerOptions": {
@@ -1546,7 +1546,7 @@ mod test {
   }
 
   #[test]
-  fn test_import_map_root_member() {
+  fn test_root_member_import_map() {
     let workspace = workspace_for_root_and_member_with_fs(
       json!({
         "importMap": "./other.json",
@@ -1574,7 +1574,7 @@ mod test {
   }
 
   #[tokio::test]
-  async fn test_imports_and_scopes() {
+  async fn test_root_member_imports_and_scopes() {
     let workspace = workspace_for_root_and_member(
       json!({
         "imports": {
@@ -1643,7 +1643,7 @@ mod test {
   }
 
   #[test]
-  fn test_exclude() {
+  fn test_root_member_exclude() {
     let workspace = workspace_for_root_and_member(
       json!({
         "exclude": [
@@ -1657,6 +1657,44 @@ mod test {
           // unexclude from root
           "!./vendor"
         ]
+      }),
+    );
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let ctx = workspace.resolve_start_ctx();
+    let lint_config = ctx.to_lint_config().unwrap().unwrap();
+    assert_eq!(
+      lint_config.files,
+      FilePatterns {
+        base: root_dir().join("member"),
+        include: None,
+        exclude: PathOrPatternSet::new(vec![
+          // maybe this shouldn't contain excludes in a root directory, but this is ok
+          PathOrPattern::Path(root_dir().join("root")),
+          PathOrPattern::Path(root_dir().join("member").join("vendor")),
+          PathOrPattern::Path(root_dir().join("member").join("member_exclude")),
+          PathOrPattern::NegatedPath(root_dir().join("member").join("vendor")),
+        ]),
+      }
+    );
+
+    // will match because it was unexcluded in the member
+    assert!(lint_config
+      .files
+      .matches_path(&root_dir().join("member/vendor"), PathKind::Directory))
+  }
+
+  #[test]
+  fn test_root_member_lint_combinations() {
+    let workspace = workspace_for_root_and_member(
+      json!({
+        "lint": {
+          "report": "json"
+        }
+      }),
+      json!({
+        "lint": {
+          "report": "pretty"
+        }
       }),
     );
     assert_eq!(workspace.diagnostics(), vec![]);
