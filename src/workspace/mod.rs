@@ -1928,6 +1928,109 @@ mod test {
   }
 
   #[test]
+  fn test_root_member_test_combinations() {
+    let workspace = workspace_for_root_and_member(
+      json!({}),
+      json!({
+        "test": {
+          "include": ["subdir"],
+        }
+      }),
+    );
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let config = workspace.resolve_start_ctx().to_test_config().unwrap();
+    assert_eq!(
+      config,
+      TestConfig {
+        files: FilePatterns {
+          base: root_dir().join("member"),
+          include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+            root_dir().join("member").join("subdir")
+          )])),
+          exclude: Default::default(),
+        },
+      }
+    );
+
+    // check the root context
+    let root_test_config = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
+      .to_test_config()
+      .unwrap();
+    assert_eq!(
+      root_test_config,
+      TestConfig {
+        files: FilePatterns {
+          base: root_dir(),
+          include: None,
+          // the workspace member will be excluded because that needs
+          // to be resolved separately
+          exclude: PathOrPatternSet::new(Vec::from([PathOrPattern::Path(
+            root_dir().join("member")
+          )])),
+        },
+      }
+    );
+  }
+
+  #[test]
+  fn test_root_member_publish_combinations() {
+    let workspace = workspace_for_root_and_member(
+      json!({
+        "publish": {
+          "exclude": ["other"]
+        }
+      }),
+      json!({
+        "publish": {
+          "include": ["subdir"],
+        },
+        "exclude": [
+          "./exclude_dir"
+        ],
+      }),
+    );
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let config = workspace.resolve_start_ctx().to_publish_config().unwrap();
+    assert_eq!(
+      config,
+      PublishConfig {
+        files: FilePatterns {
+          base: root_dir().join("member"),
+          include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+            root_dir().join("member").join("subdir")
+          )])),
+          exclude: PathOrPatternSet::new(vec![
+            PathOrPattern::Path(root_dir().join("other")),
+            PathOrPattern::Path(root_dir().join("member").join("exclude_dir")),
+          ]),
+        },
+      }
+    );
+
+    // check the root context
+    let root_publish_config = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
+      .to_publish_config()
+      .unwrap();
+    assert_eq!(
+      root_publish_config,
+      PublishConfig {
+        files: FilePatterns {
+          base: root_dir(),
+          include: None,
+          exclude: PathOrPatternSet::new(Vec::from([
+            PathOrPattern::Path(root_dir().join("other")),
+            // the workspace member will be excluded because that needs
+            // to be resolved separately
+            PathOrPattern::Path(root_dir().join("member")),
+          ])),
+        },
+      }
+    );
+  }
+
+  #[test]
   fn test_root_member_lock() {
     let workspace = workspace_for_root_and_member(
       json!({
