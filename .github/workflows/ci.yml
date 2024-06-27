@@ -31,9 +31,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install cargo-llvm-cov
+      - uses: taiki-e/install-action@b6880389f33347ffd265f5e9d76f95335616c9f3
         if: contains(matrix.os, 'ubuntu')
-        run: cargo +stable install cargo-llvm-cov --locked --version 0.6.10
+        with:
+          tool: cargo-llvm-cov@0.6.10
 
       - name: Format
         if: contains(matrix.os, 'ubuntu')
