@@ -898,17 +898,21 @@ pub enum TaskOrScript<'a> {
   Script(&'a IndexMap<String, String>, &'a str),
 }
 
-#[derive(Debug, Clone)]
-pub struct WorkspaceMemberTasksConfig {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMemberTasksConfigFile<TValue> {
   pub folder_url: Url,
-  pub deno_json: Option<IndexMap<String, Task>>,
-  pub package_json: Option<IndexMap<String, String>>,
+  pub tasks: IndexMap<String, TValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMemberTasksConfig {
+  pub deno_json: Option<WorkspaceMemberTasksConfigFile<Task>>,
+  pub package_json: Option<WorkspaceMemberTasksConfigFile<String>>,
 }
 
 impl WorkspaceMemberTasksConfig {
   pub fn with_only_pkg_json(self) -> Self {
     WorkspaceMemberTasksConfig {
-      folder_url: self.folder_url,
       deno_json: None,
       package_json: self.package_json,
     }
@@ -918,40 +922,50 @@ impl WorkspaceMemberTasksConfig {
     self
       .deno_json
       .as_ref()
-      .map(|d| d.is_empty())
+      .map(|d| d.tasks.is_empty())
       .unwrap_or(true)
       && self
         .package_json
         .as_ref()
-        .map(|d| d.is_empty())
+        .map(|d| d.tasks.is_empty())
         .unwrap_or(true)
   }
 
   pub fn tasks_count(&self) -> usize {
-    self.deno_json.as_ref().map(|d| d.len()).unwrap_or(0)
-      + self.package_json.as_ref().map(|d| d.len()).unwrap_or(0)
+    self.deno_json.as_ref().map(|d| d.tasks.len()).unwrap_or(0)
+      + self
+        .package_json
+        .as_ref()
+        .map(|d| d.tasks.len())
+        .unwrap_or(0)
   }
 
   pub fn task(&self, name: &str) -> Option<(&Url, TaskOrScript)> {
     self
       .deno_json
       .as_ref()
-      .and_then(|tasks| {
-        tasks.get(name).map(|t| {
-          (&self.folder_url, TaskOrScript::Task(tasks, t.definition()))
+      .and_then(|config| {
+        config.tasks.get(name).map(|t| {
+          (
+            &config.folder_url,
+            TaskOrScript::Task(&config.tasks, t.definition()),
+          )
         })
       })
       .or_else(|| {
-        self.package_json.as_ref().and_then(|scripts| {
-          scripts
-            .get(name)
-            .map(|s| (&self.folder_url, TaskOrScript::Script(scripts, s)))
+        self.package_json.as_ref().and_then(|config| {
+          config.tasks.get(name).map(|task| {
+            (
+              &config.folder_url,
+              TaskOrScript::Script(&config.tasks, task),
+            )
+          })
         })
       })
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceTasksConfig {
   pub root: Option<WorkspaceMemberTasksConfig>,
   pub member: Option<WorkspaceMemberTasksConfig>,
@@ -1188,34 +1202,37 @@ impl WorkspaceMemberContext {
       maybe_deno_json: Option<&ConfigFileRc>,
       maybe_pkg_json: Option<&PackageJsonRc>,
     ) -> Result<Option<WorkspaceMemberTasksConfig>, AnyError> {
-      Ok(Some(WorkspaceMemberTasksConfig {
-        folder_url: match maybe_deno_json {
-          Some(deno_json) => Url::from_directory_path(
-            specifier_to_file_path(&deno_json.specifier)?
-              .parent()
-              .unwrap(),
-          )
-          .unwrap(),
-          None => match maybe_pkg_json {
-            Some(pkg_json) => {
-              Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap()
-            }
-            None => return Ok(None),
-          },
-        },
+      let config = WorkspaceMemberTasksConfig {
         deno_json: match maybe_deno_json {
-          Some(deno_json) => {
-            deno_json.to_tasks_config().with_context(|| {
+          Some(deno_json) => deno_json
+            .to_tasks_config()
+            .map(|tasks| {
+              tasks.map(|tasks| WorkspaceMemberTasksConfigFile {
+                folder_url: Url::from_directory_path(deno_json.dir_path())
+                  .unwrap(),
+                tasks,
+              })
+            })
+            .with_context(|| {
               format!("Failed parsing '{}'.", deno_json.specifier)
-            })?
-          }
+            })?,
           None => None,
         },
         package_json: match maybe_pkg_json {
-          Some(pkg_json) => pkg_json.scripts.clone(),
+          Some(pkg_json) => pkg_json.scripts.clone().map(|scripts| {
+            WorkspaceMemberTasksConfigFile {
+              folder_url: Url::from_directory_path(pkg_json.dir_path())
+                .unwrap(),
+              tasks: scripts,
+            }
+          }),
           None => None,
         },
-      }))
+      };
+      if config.deno_json.is_none() && config.package_json.is_none() {
+        return Ok(None);
+      }
+      Ok(Some(config))
     }
 
     Ok(WorkspaceTasksConfig {
@@ -1550,6 +1567,130 @@ mod test {
     })
     .unwrap();
     assert_eq!(workspace.config_folders.len(), 3);
+  }
+
+  #[test]
+  fn test_tasks() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member", "./pkg_json"],
+        "tasks": {
+          "hi": "echo hi",
+          "overwrite": "echo overwrite"
+        }
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "tasks": {
+          "overwrite": "echo overwritten",
+          "bye": "echo bye"
+        }
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("pkg_json/package.json"),
+      json!({
+        "scripts": {
+          "script": "echo 1"
+        }
+      }),
+    );
+    let workspace = new_rc(
+      Workspace::discover(&WorkspaceDiscoverOptions {
+        fs: &fs,
+        pkg_json_cache: None,
+        // start at root for this test
+        start: WorkspaceDiscoverStart::Dir(&root_dir()),
+        config_parse_options: &ConfigParseOptions::default(),
+        additional_config_file_names: &[],
+        discover_pkg_json: false,
+      })
+      .unwrap(),
+    );
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let root_deno_json = Some(WorkspaceMemberTasksConfigFile {
+      folder_url: Url::from_directory_path(root_dir()).unwrap(),
+      tasks: IndexMap::from([
+        ("hi".to_string(), Task::Definition("echo hi".to_string())),
+        (
+          "overwrite".to_string(),
+          Task::Definition("echo overwrite".to_string()),
+        ),
+      ]),
+    });
+    let root = Some(WorkspaceMemberTasksConfig {
+      deno_json: root_deno_json.clone(),
+      package_json: None,
+    });
+    // root
+    {
+      let tasks_config =
+        workspace.resolve_start_ctx().to_tasks_config().unwrap();
+      assert_eq!(
+        tasks_config,
+        WorkspaceTasksConfig {
+          root: None,
+          // the root context will have the root config as the member config
+          member: root.clone(),
+        }
+      );
+    }
+    // member
+    {
+      let member_ctx = workspace.resolve_member_ctx(
+        &Url::from_directory_path(root_dir().join("member/deno.json")).unwrap(),
+      );
+      let tasks_config = member_ctx.to_tasks_config().unwrap();
+      assert_eq!(
+        tasks_config,
+        WorkspaceTasksConfig {
+          root: root.clone(),
+          member: Some(WorkspaceMemberTasksConfig {
+            deno_json: Some(WorkspaceMemberTasksConfigFile {
+              folder_url: Url::from_directory_path(root_dir().join("member"))
+                .unwrap(),
+              tasks: IndexMap::from([
+                (
+                  "overwrite".to_string(),
+                  Task::Definition("echo overwritten".to_string())
+                ),
+                ("bye".to_string(), Task::Definition("echo bye".to_string())),
+              ]),
+            }),
+            package_json: None,
+          }),
+        }
+      );
+    }
+    // pkg json
+    {
+      let member_ctx = workspace.resolve_member_ctx(
+        &Url::from_directory_path(root_dir().join("pkg_json/package.json"))
+          .unwrap(),
+      );
+      let tasks_config = member_ctx.to_tasks_config().unwrap();
+      assert_eq!(
+        tasks_config,
+        WorkspaceTasksConfig {
+          root: None,
+          member: Some(WorkspaceMemberTasksConfig {
+            deno_json: root_deno_json.clone(),
+            package_json: Some(WorkspaceMemberTasksConfigFile {
+              folder_url: Url::from_directory_path(root_dir().join("pkg_json"))
+                .unwrap(),
+              tasks: IndexMap::from([(
+                "script".to_string(),
+                "echo 1".to_string()
+              )]),
+            }),
+          })
+        }
+      );
+    }
   }
 
   #[test]

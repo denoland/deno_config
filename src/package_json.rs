@@ -267,6 +267,10 @@ impl PackageJson {
     Url::from_file_path(&self.path).unwrap()
   }
 
+  pub fn dir_path(&self) -> &Path {
+    self.path.parent().unwrap()
+  }
+
   pub fn main(&self, referrer_kind: NodeModuleKind) -> Option<&str> {
     let main = if referrer_kind == NodeModuleKind::Esm && self.typ == "module" {
       self.module.as_ref().or(self.main.as_ref())
