@@ -205,7 +205,7 @@ pub fn parse_compiler_options(
 }
 
 /// A structure for managing the configuration of TypeScript
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsConfig(pub Value);
 
 impl TsConfig {

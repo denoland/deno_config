@@ -926,6 +926,10 @@ impl ConfigFile {
     self.json.name.is_some() && self.json.exports.is_some()
   }
 
+  pub fn is_workspace(&self) -> bool {
+    self.json.workspace.is_some()
+  }
+
   pub fn has_unstable(&self, name: &str) -> bool {
     self.json.unstable.iter().any(|v| v == name)
   }
@@ -1400,6 +1404,7 @@ pub enum TsConfigType {
   Emit,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsConfigForEmit {
   pub ts_config: TsConfig,
   pub maybe_ignored_options: Option<IgnoredCompilerOptions>,

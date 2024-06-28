@@ -82,21 +82,25 @@ pub struct NpmPackageConfig {
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum WorkspaceDiagnosticKind {
-  #[error("The '{0}' option can only be specified in the root workspace deno.json file.")]
+  #[error("The '{0}' field can only be specified in the root workspace deno.json file.")]
   RootOnlyOption(&'static str),
-  #[error("The '{0}' option can only be specified in a workspace member deno.json file and not the root workspace file.")]
+  #[error("The '{0}' field can only be specified in a workspace member deno.json file and not the root workspace file.")]
   MemberOnlyOption(&'static str),
   #[error("The '{name}' member cannot have the same name as the member at '{other_member}'.")]
   DuplicateMemberName { name: String, other_member: Url },
-  #[error("The 'workspaces' option should be renamed to 'workspace'.")]
+  #[error("The 'workspaces' field must be renamed to 'workspace'.")]
   InvalidWorkspacesOption,
+  #[error("The 'exports' field should be specified when specifying a 'name'.")]
+  MissingExports,
 }
 
 impl WorkspaceDiagnosticKind {
   /// If the diagnostic should cause the process to shut down.
   pub fn is_fatal(&self) -> bool {
     match self {
-      Self::RootOnlyOption { .. } | Self::MemberOnlyOption { .. } => false,
+      Self::RootOnlyOption { .. }
+      | Self::MemberOnlyOption { .. }
+      | Self::MissingExports => false,
       Self::InvalidWorkspacesOption | Self::DuplicateMemberName { .. } => true,
     }
   }
@@ -472,6 +476,12 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::InvalidWorkspacesOption,
         });
       }
+      if config.json.name.is_some() && config.json.exports.is_none() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::MissingExports,
+        });
+      }
     }
 
     let mut diagnostics = Vec::new();
@@ -636,7 +646,18 @@ impl Workspace {
       return Vec::new();
     };
     let deno_json = &config.member;
-    if deno_json.dir_path() == self.root_dir.to_file_path().unwrap() {
+    if let Some(pkg_json) = &ctx.pkg_json {
+      // don't publish anything if in a package.json only directory within
+      // a workspace
+      if pkg_json.member.dir_path().starts_with(deno_json.dir_path())
+        && deno_json.dir_path() != pkg_json.member.dir_path()
+      {
+        return Vec::new();
+      }
+    }
+    if deno_json.dir_path() == self.root_dir.to_file_path().unwrap()
+      && !(deno_json.is_workspace() && deno_json.is_package())
+    {
       return self.jsr_packages();
     }
     match ctx.maybe_package_config() {
@@ -1466,6 +1487,7 @@ mod test {
   use crate::assert_contains;
   use crate::fs::TestFileSystem;
   use crate::glob::PathOrPattern;
+  use crate::TsConfig;
 
   use super::*;
 
@@ -1782,6 +1804,30 @@ mod test {
         default_types_specifier: Some("npm:@types/react".to_string()),
         module: "jsx-runtime".to_string(),
         base_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }
+    );
+    assert_eq!(workspace.check_js(), true);
+    assert_eq!(
+      workspace
+        .resolve_ts_config_for_emit(TsConfigType::Emit)
+        .unwrap(),
+      TsConfigForEmit {
+        ts_config: TsConfig(json!({
+          "allowImportingTsExtensions": true,
+          "checkJs": true,
+          "emitDecoratorMetadata": false,
+          "experimentalDecorators": false,
+          "importsNotUsedAsValues": "remove",
+          "inlineSourceMap": true,
+          "inlineSources": true,
+          "sourceMap": false,
+          "jsx": "react-jsx",
+          "jsxFactory": "React.createElement",
+          "jsxFragmentFactory": "React.Fragment",
+          "resolveJsonModule": true,
+          "jsxImportSource": "npm:react"
+        })),
+        maybe_ignored_options: None,
       }
     );
     assert_eq!(
@@ -2242,6 +2288,64 @@ mod test {
   }
 
   #[test]
+  fn test_root_member_empty_config_resolves_excluded_members() {
+    let workspace = workspace_for_root_and_member(json!({}), json!({}));
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let root_files = FilePatterns {
+      base: root_dir(),
+      include: None,
+      // the workspace member will be excluded because that needs
+      // to be resolved separately
+      exclude: PathOrPatternSet::new(Vec::from([PathOrPattern::Path(
+        root_dir().join("member"),
+      )])),
+    };
+    let root_ctx = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+    let member_files = FilePatterns {
+      base: root_dir().join("member"),
+      include: None,
+      exclude: Default::default(),
+    };
+    let member_ctx = workspace.resolve_start_ctx();
+
+    for (files, ctx) in [(root_files, root_ctx), (member_files, member_ctx)] {
+      assert_eq!(
+        ctx.to_bench_config().unwrap(),
+        BenchConfig {
+          files: files.clone(),
+        }
+      );
+      assert_eq!(
+        ctx.to_fmt_config().unwrap(),
+        FmtConfig {
+          options: Default::default(),
+          files: files.clone(),
+        }
+      );
+      assert_eq!(
+        ctx.to_lint_config().unwrap(),
+        LintConfig {
+          files: files.clone(),
+          rules: Default::default(),
+        }
+      );
+      assert_eq!(
+        ctx.to_test_config().unwrap(),
+        TestConfig {
+          files: files.clone(),
+        }
+      );
+      assert_eq!(
+        ctx.to_publish_config().unwrap(),
+        PublishConfig {
+          files: files.clone(),
+        }
+      );
+    }
+  }
+
+  #[test]
   fn test_root_member_root_only_in_member() {
     let workspace = workspace_for_root_and_member(
       json!({
@@ -2387,6 +2491,32 @@ mod test {
   }
 
   #[test]
+  fn test_workspaces_missing_exports() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "name": "@scope/name",
+      }),
+    );
+    let workspace = Workspace::discover(
+      WorkspaceDiscoverStart::Dir(&root_dir()),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(
+      workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::MissingExports,
+        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }]
+    );
+  }
+
+  #[test]
   fn test_multiple_pkgs_same_name() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
@@ -2467,6 +2597,196 @@ mod test {
     assert_eq!(names, vec!["@scope/root", "@scope/pkg",]);
   }
 
+  #[test]
+  fn test_packages_for_publish_non_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "name": "@scope/pkg",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let jsr_pkgs = workspace.jsr_packages_for_publish();
+    let names = jsr_pkgs
+      .iter()
+      .map(|p| p.package_name.as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(names, vec!["@scope/pkg"]);
+  }
+
+  #[test]
+  fn test_packages_for_publish_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./a", "./b", "./c", "./d"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("a/deno.json"),
+      json!({
+        "name": "@scope/a",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("b/deno.json"),
+      json!({
+        "name": "@scope/b",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("c/deno.json"),
+      // not a package
+      json!({}),
+    );
+    fs.insert_json(
+      root_dir().join("d/package.json"),
+      json!({
+        "name": "pkg",
+        "version": "1.0.0",
+      }),
+    );
+    // root
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      let names = jsr_pkgs
+        .iter()
+        .map(|p| p.package_name.as_str())
+        .collect::<Vec<_>>();
+      assert_eq!(names, vec!["@scope/a", "@scope/b"]);
+    }
+    // member
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir().join("a"));
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      let names = jsr_pkgs
+        .iter()
+        .map(|p| p.package_name.as_str())
+        .collect::<Vec<_>>();
+      assert_eq!(names, vec!["@scope/a"]);
+    }
+    // member, not a package
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir().join("c"));
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      assert!(jsr_pkgs.is_empty());
+    }
+    // package.json
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir().join("d"));
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      assert!(jsr_pkgs.is_empty());
+
+      // while we're here, test this
+      assert_eq!(
+        workspace
+          .package_jsons()
+          .map(|p| p.dir_path().to_path_buf())
+          .collect::<Vec<_>>(),
+        vec![root_dir().join("d")]
+      );
+      assert_eq!(
+        workspace
+          .npm_packages()
+          .into_iter()
+          .map(|p| p.package_json.dir_path().to_path_buf())
+          .collect::<Vec<_>>(),
+        vec![root_dir().join("d")]
+      );
+    }
+  }
+
+  #[test]
+  fn test_packages_for_publish_self_reference() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "name": "@scope/root",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+        "workspace": [".", "./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "name": "@scope/pkg",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    // in a member
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      let names = jsr_pkgs
+        .iter()
+        .map(|p| p.package_name.as_str())
+        .collect::<Vec<_>>();
+      assert_eq!(names, vec!["@scope/pkg"]);
+    }
+    // at the root
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      let names = jsr_pkgs
+        .iter()
+        .map(|p| p.package_name.as_str())
+        .collect::<Vec<_>>();
+      // Only returns the root package because it allows for publishing
+      // this individually. If someone wants the behaviour of publishing
+      // the entire workspace then they should move each package to a descendant
+      // directory.
+      assert_eq!(names, vec!["@scope/root"]);
+    }
+  }
+
+  #[test]
+  fn test_packages_for_publish_self_reference_root_not_package() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": [".", "./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "name": "@scope/pkg",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    // the workspace is a self reference, but it's not a jsr package so
+    // publish the members
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let jsr_pkgs = workspace.jsr_packages_for_publish();
+    let names = jsr_pkgs
+      .iter()
+      .map(|p| p.package_name.as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(names, vec!["@scope/pkg"]);
+  }
+
   fn workspace_for_root_and_member(
     root: serde_json::Value,
     member: serde_json::Value,
@@ -2487,12 +2807,20 @@ mod test {
     fs.insert_json(root_dir().join("deno.json"), root);
     fs.insert_json(root_dir().join("member/deno.json"), member);
     with_fs(&mut fs);
+    // start in the member
+    workspace_at_start_dir(&fs, &root_dir().join("member"))
+  }
+
+  fn workspace_at_start_dir(
+    fs: &TestFileSystem,
+    start_dir: &Path,
+  ) -> WorkspaceRc {
     new_rc(
       Workspace::discover(
-        // start in the member
-        WorkspaceDiscoverStart::Dir(&root_dir().join("member")),
+        WorkspaceDiscoverStart::Dir(start_dir),
         &WorkspaceDiscoverOptions {
-          fs: &fs,
+          fs,
+          discover_pkg_json: true,
           ..Default::default()
         },
       )

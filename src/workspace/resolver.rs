@@ -361,6 +361,8 @@ fn enhance_import_map_value_with_workspace_members<'a>(
     let Some(name) = &deno_json.json.name else {
       continue;
     };
+    // todo(dsherret): support and use `@workspace` here instead
+    // so it works even when no version is specified
     let Some(version) = &deno_json.json.version else {
       continue;
     };
