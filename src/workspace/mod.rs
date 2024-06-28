@@ -121,8 +121,8 @@ pub enum ResolveWorkspaceMemberError {
   NonDescendant { workspace_url: Url, member_url: Url },
   #[error("Cannot specify a workspace member twice ('{}').", .member)]
   Duplicate { member: String },
-  #[error("A workspace config file cannot reference itself as a member ('{}').", .member)]
-  SelfReference { member: String },
+  #[error("A workspace config file can only reference itself as a package by specifying \".\" and not \"{}\".", .member)]
+  InvalidSelfReference { member: String },
 }
 
 #[derive(Error, Debug)]
@@ -475,18 +475,26 @@ impl Workspace {
     }
 
     let mut diagnostics = Vec::new();
-    let is_deno_workspace = self
-      .root_folder()
-      .1
-      .deno_json
-      .as_ref()
+    let root_deno_json = self.root_folder().1.deno_json.as_ref();
+    let is_deno_workspace = root_deno_json
       .map(|d| d.json.workspace.is_some())
+      .unwrap_or(false);
+    let is_workspace_self_reference = root_deno_json
+      .map(|d| {
+        d.json
+          .workspace
+          .as_ref()
+          .map(|w| w.iter().any(|w| w == "."))
+          .unwrap_or(false)
+      })
       .unwrap_or(false);
     let mut seen_names = HashMap::with_capacity(self.config_folders.len());
     for (url, folder) in &self.config_folders {
       if let Some(config) = &folder.deno_json {
-        if is_deno_workspace {
-          if url == &self.root_dir {
+        let is_root = url == &self.root_dir;
+        let is_root_and_self_reference = is_root && is_workspace_self_reference;
+        if is_deno_workspace && !is_root_and_self_reference {
+          if is_root {
             check_root_diagnostics(config, &mut diagnostics);
           } else {
             check_member_diagnostics(config, &mut diagnostics, &mut seen_names);
@@ -1523,32 +1531,29 @@ mod test {
   }
 
   #[test]
-  fn test_workspace_reference_self() {
-    for sub_path in [".", "../sub_dir"] {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
-        root_dir().join("sub_dir").join("deno.json"),
-        json!({
-          "workspace": [sub_path],
-        }),
-      );
+  fn test_workspace_invalid_self_reference() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("sub_dir").join("deno.json"),
+      json!({
+        "workspace": ["../sub_dir"],
+      }),
+    );
 
-      let workspace_config_err = Workspace::discover(
-        WorkspaceDiscoverStart::Dir(&root_dir().join("sub_dir")),
-        &WorkspaceDiscoverOptions {
-          fs: &fs,
-          ..Default::default()
-        },
-      )
-      .err()
-      .unwrap();
+    let workspace_config_err = Workspace::discover(
+      WorkspaceDiscoverStart::Dir(&root_dir().join("sub_dir")),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
+    .err()
+    .unwrap();
 
-      let text = format!(
-        "A workspace config file cannot reference itself as a member ('{}').",
-        sub_path
-      );
-      assert_contains!(workspace_config_err.to_string(), &text);
-    }
+    assert_contains!(
+      workspace_config_err.to_string(),
+      "A workspace config file can only reference itself as a package by specifying \".\" and not \"../sub_dir\"."
+    );
   }
 
   #[test]
@@ -2421,6 +2426,45 @@ mod test {
         .unwrap(),
       }]
     );
+  }
+
+  #[test]
+  fn test_workspace_self_reference() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "name": "@scope/root",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+        "workspace": [".", "./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "name": "@scope/pkg",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    let workspace = new_rc(
+      Workspace::discover(
+        WorkspaceDiscoverStart::Dir(&root_dir().join("member")),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          ..Default::default()
+        },
+      )
+      .unwrap(),
+    );
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let jsr_pkgs = workspace.jsr_packages();
+    let names = jsr_pkgs
+      .iter()
+      .map(|p| p.package_name.as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(names, vec!["@scope/root", "@scope/pkg",]);
   }
 
   fn workspace_for_root_and_member(
