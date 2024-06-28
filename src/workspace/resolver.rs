@@ -349,13 +349,15 @@ fn enhance_import_map_value_with_workspace_members<'a>(
   mut import_map_value: serde_json::Value,
   deno_jsons: impl Iterator<Item = &'a ConfigFile>,
 ) -> serde_json::Value {
-  let mut imports = if let Some(serde_json::Value::Object(imports)) =
-    import_map_value.get("imports").as_ref()
-  {
-    imports.clone() // todo(dsherret): do not clone here
-  } else {
-    serde_json::Map::new()
-  };
+  let maybe_imports = import_map_value
+    .as_object_mut()
+    .and_then(|o| o.remove("imports"));
+  let mut imports =
+    if let Some(serde_json::Value::Object(imports)) = maybe_imports {
+      imports
+    } else {
+      serde_json::Map::new()
+    };
 
   for deno_json in deno_jsons {
     let Some(name) = &deno_json.json.name else {
