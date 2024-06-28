@@ -60,6 +60,7 @@ mod resolver;
 pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionError;
+pub use resolver::PackageJsonDepResolution;
 pub use resolver::SpecifiedImportMap;
 pub use resolver::WorkspaceResolvePkgJsonFolderError;
 pub use resolver::WorkspaceResolvePkgJsonFolderErrorKind;
@@ -73,16 +74,17 @@ type WorkspaceRc = crate::sync::MaybeArc<Workspace>;
 
 #[derive(Debug, Clone)]
 pub struct JsrPackageConfig {
-  pub package_name: String,
+  /// The package name.
+  pub name: String,
   pub member_ctx: WorkspaceMemberContext,
   pub config_file: ConfigFileRc,
 }
 
 #[derive(Debug, Clone)]
 pub struct NpmPackageConfig {
-  pub package_nv: PackageNv,
+  pub nv: PackageNv,
   pub member_ctx: WorkspaceMemberContext,
-  pub package_json: PackageJsonRc,
+  pub pkg_json: PackageJsonRc,
 }
 
 impl NpmPackageConfig {
@@ -90,12 +92,16 @@ impl NpmPackageConfig {
     self.matches_name_and_version_req(&req.name, &req.version_req)
   }
 
-  pub fn matches_name_and_version_req(&self, name: &str, version_req: &VersionReq) -> bool {
-    if name != self.package_nv.name {
+  pub fn matches_name_and_version_req(
+    &self,
+    name: &str,
+    version_req: &VersionReq,
+  ) -> bool {
+    if name != self.nv.name {
       return false;
     }
     match version_req.inner() {
-      RangeSetOrTag::RangeSet(set) => set.satisfies(&self.package_nv.version),
+      RangeSetOrTag::RangeSet(set) => set.satisfies(&self.nv.version),
       RangeSetOrTag::Tag(tag) => tag == "workspace",
     }
   }
@@ -654,7 +660,7 @@ impl Workspace {
         }
         Some(JsrPackageConfig {
           member_ctx: self.resolve_member_ctx(&c.specifier),
-          package_name: c.json.name.clone()?,
+          name: c.json.name.clone()?,
           config_file: c.clone(),
         })
       })
@@ -693,14 +699,14 @@ impl Workspace {
       .filter_map(|c| {
         Some(NpmPackageConfig {
           member_ctx: self.resolve_member_ctx(&c.specifier()),
-          package_nv: PackageNv {
+          nv: PackageNv {
             name: c.name.clone()?,
             version: {
               let version = c.version.as_ref()?;
               deno_semver::Version::parse_from_npm(version).ok()?
             },
           },
-          package_json: c.clone(),
+          pkg_json: c.clone(),
         })
       })
       .collect()
@@ -1140,7 +1146,7 @@ impl WorkspaceMemberContext {
       return None;
     }
     Some(JsrPackageConfig {
-      package_name: pkg_name.clone(),
+      name: pkg_name.clone(),
       config_file: deno_json.clone(),
       member_ctx: self.clone(),
     })
@@ -1923,15 +1929,9 @@ mod test {
       }]
     );
     let resolver = workspace
-      .create_resolver(
-        CreateResolverOptions {
-          pkg_json_dep_resolution: true,
-          specified_import_map: None,
-        },
-        |_| async move {
-          unreachable!();
-        },
-      )
+      .create_resolver(Default::default(), |_| async move {
+        unreachable!();
+      })
       .await
       .unwrap();
     assert_eq!(
@@ -2613,7 +2613,7 @@ mod test {
     let jsr_pkgs = workspace.jsr_packages();
     let names = jsr_pkgs
       .iter()
-      .map(|p| p.package_name.as_str())
+      .map(|p| p.name.as_str())
       .collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/root", "@scope/pkg",]);
   }
@@ -2634,7 +2634,7 @@ mod test {
     let jsr_pkgs = workspace.jsr_packages_for_publish();
     let names = jsr_pkgs
       .iter()
-      .map(|p| p.package_name.as_str())
+      .map(|p| p.name.as_str())
       .collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
   }
@@ -2683,7 +2683,7 @@ mod test {
       let jsr_pkgs = workspace.jsr_packages_for_publish();
       let names = jsr_pkgs
         .iter()
-        .map(|p| p.package_name.as_str())
+        .map(|p| p.name.as_str())
         .collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/a", "@scope/b"]);
     }
@@ -2694,7 +2694,7 @@ mod test {
       let jsr_pkgs = workspace.jsr_packages_for_publish();
       let names = jsr_pkgs
         .iter()
-        .map(|p| p.package_name.as_str())
+        .map(|p| p.name.as_str())
         .collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/a"]);
     }
@@ -2724,7 +2724,7 @@ mod test {
         workspace
           .npm_packages()
           .into_iter()
-          .map(|p| p.package_json.dir_path().to_path_buf())
+          .map(|p| p.pkg_json.dir_path().to_path_buf())
           .collect::<Vec<_>>(),
         vec![root_dir().join("d")]
       );
@@ -2758,7 +2758,7 @@ mod test {
       let jsr_pkgs = workspace.jsr_packages_for_publish();
       let names = jsr_pkgs
         .iter()
-        .map(|p| p.package_name.as_str())
+        .map(|p| p.name.as_str())
         .collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/pkg"]);
     }
@@ -2769,7 +2769,7 @@ mod test {
       let jsr_pkgs = workspace.jsr_packages_for_publish();
       let names = jsr_pkgs
         .iter()
-        .map(|p| p.package_name.as_str())
+        .map(|p| p.name.as_str())
         .collect::<Vec<_>>();
       // Only returns the root package because it allows for publishing
       // this individually. If someone wants the behaviour of publishing
@@ -2803,7 +2803,7 @@ mod test {
     let jsr_pkgs = workspace.jsr_packages_for_publish();
     let names = jsr_pkgs
       .iter()
-      .map(|p| p.package_name.as_str())
+      .map(|p| p.name.as_str())
       .collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
   }

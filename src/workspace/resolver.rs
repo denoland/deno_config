@@ -14,6 +14,8 @@ use import_map::ImportMap;
 use import_map::ImportMapDiagnostic;
 use import_map::ImportMapError;
 use import_map::ImportMapWithDiagnostics;
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 use url::Url;
 
@@ -45,16 +47,23 @@ pub enum WorkspaceResolverCreateError {
   ImportMap(#[from] import_map::ImportMapError),
 }
 
+/// Whether to resolve dependencies by reading the dependencies list
+/// from a package.json
+#[derive(
+  Debug, Default, Serialize, Deserialize, Copy, Clone, PartialEq, Eq,
+)]
+pub enum PackageJsonDepResolution {
+  /// Resolves based on the dep entries in the package.json.
+  #[default]
+  Enabled,
+  /// Doesn't use the package.json to resolve dependencies. Let's the caller
+  /// resolve based on the file system.
+  Disabled,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct CreateResolverOptions {
-  /// Whether to resolve dependencies by reading the dependencies list
-  /// from a package.json
-  ///
-  /// This should only be set when resolving using the global resolver and
-  /// no node_modules folder is present. For scenarios where a node_modules
-  /// folder exists, node resolution based on the file system should be used
-  /// otherwise.
-  pub pkg_json_dep_resolution: bool,
+  pub pkg_json_dep_resolution: PackageJsonDepResolution,
   pub specified_import_map: Option<SpecifiedImportMap>,
 }
 
@@ -138,6 +147,7 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
 pub struct WorkspaceResolver {
   maybe_import_map: Option<ImportMapWithDiagnostics>,
   pkg_jsons: BTreeMap<UrlRc, PkgJsonResolverFolderConfig>,
+  pkg_json_dep_resolution: PackageJsonDepResolution,
 }
 
 impl WorkspaceResolver {
@@ -245,23 +255,20 @@ impl WorkspaceResolver {
     let maybe_import_map =
       resolve_import_map(workspace, options.specified_import_map, fetch_text)
         .await?;
-    let pkg_jsons = if options.pkg_json_dep_resolution {
-      workspace
-        .config_folders()
-        .iter()
-        .filter_map(|(dir_url, f)| {
-          let pkg_json = f.pkg_json.clone()?;
-          let deps = pkg_json.resolve_local_package_json_deps();
-          Some((
-            dir_url.clone(),
-            PkgJsonResolverFolderConfig { deps, pkg_json },
-          ))
-        })
-        .collect::<BTreeMap<_, _>>()
-    } else {
-      BTreeMap::default()
-    };
+    let pkg_jsons = workspace
+      .config_folders()
+      .iter()
+      .filter_map(|(dir_url, f)| {
+        let pkg_json = f.pkg_json.clone()?;
+        let deps = pkg_json.resolve_local_package_json_deps();
+        Some((
+          dir_url.clone(),
+          PkgJsonResolverFolderConfig { deps, pkg_json },
+        ))
+      })
+      .collect::<BTreeMap<_, _>>();
     Ok(Self {
+      pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       maybe_import_map,
       pkg_jsons,
     })
@@ -273,6 +280,7 @@ impl WorkspaceResolver {
   pub fn new_raw(
     maybe_import_map: Option<ImportMap>,
     pkg_jsons: Vec<PackageJsonRc>,
+    pkg_json_dep_resolution: PackageJsonDepResolution,
   ) -> Self {
     let maybe_import_map =
       maybe_import_map.map(|import_map| ImportMapWithDiagnostics {
@@ -294,6 +302,7 @@ impl WorkspaceResolver {
     Self {
       maybe_import_map,
       pkg_jsons,
+      pkg_json_dep_resolution,
     }
   }
 
@@ -335,31 +344,33 @@ impl WorkspaceResolver {
     };
 
     // then using the package.json
-    let mut previously_found_dir = false;
-    for (dir_url, pkg_json_folder) in self.pkg_jsons.iter().rev() {
-      if !referrer.as_str().starts_with(dir_url.as_str()) {
-        if previously_found_dir {
-          break;
-        } else {
-          continue;
+    if self.pkg_json_dep_resolution == PackageJsonDepResolution::Enabled {
+      let mut previously_found_dir = false;
+      for (dir_url, pkg_json_folder) in self.pkg_jsons.iter().rev() {
+        if !referrer.as_str().starts_with(dir_url.as_str()) {
+          if previously_found_dir {
+            break;
+          } else {
+            continue;
+          }
         }
-      }
-      previously_found_dir = true;
+        previously_found_dir = true;
 
-      for (bare_specifier, dep_result) in &pkg_json_folder.deps {
-        if let Some(path) = specifier.strip_prefix(bare_specifier) {
-          if path.is_empty() || path.starts_with('/') {
-            let sub_path = path.strip_prefix('/').unwrap_or(path);
-            return Ok(MappedResolution::PackageJson {
-              pkg_json: &pkg_json_folder.pkg_json,
-              alias: bare_specifier,
-              sub_path: if sub_path.is_empty() {
-                None
-              } else {
-                Some(sub_path.to_string())
-              },
-              dep_result,
-            });
+        for (bare_specifier, dep_result) in &pkg_json_folder.deps {
+          if let Some(path) = specifier.strip_prefix(bare_specifier) {
+            if path.is_empty() || path.starts_with('/') {
+              let sub_path = path.strip_prefix('/').unwrap_or(path);
+              return Ok(MappedResolution::PackageJson {
+                pkg_json: &pkg_json_folder.pkg_json,
+                alias: bare_specifier,
+                sub_path: if sub_path.is_empty() {
+                  None
+                } else {
+                  Some(sub_path.to_string())
+                },
+                dep_result,
+              });
+            }
           }
         }
       }
@@ -394,6 +405,9 @@ impl WorkspaceResolver {
     name: &str,
     version_req: &VersionReq,
   ) -> Result<&Path, WorkspaceResolvePkgJsonFolderError> {
+    // this is not conditional on pkg_json_dep_resolution because we want
+    // to be able to do this resolution to figure out mapping an npm specifier
+    // to a workspace folder when using BYONM
     let pkg_json = self
       .package_jsons()
       .find(|p| p.name.as_deref() == Some(name));
@@ -428,6 +442,10 @@ impl WorkspaceResolver {
         Ok(pkg_json.dir_path())
       }
     }
+  }
+
+  pub fn pkg_json_dep_resolution(&self) -> PackageJsonDepResolution {
+    self.pkg_json_dep_resolution
   }
 }
 
@@ -644,7 +662,7 @@ mod test {
     workspace
       .create_resolver(
         super::CreateResolverOptions {
-          pkg_json_dep_resolution: true,
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
         |_| async move { unreachable!() },
