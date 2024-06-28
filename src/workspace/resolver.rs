@@ -195,9 +195,7 @@ impl WorkspaceResolver {
             Some((base_url, import_map_value)) => {
               import_map::ext::ImportMapConfig {
                 base_url: base_url.into_owned(),
-                import_map_value: import_map::ext::expand_import_map_value(
-                  import_map_value,
-                ),
+                import_map_value,
               }
             }
             None => {
@@ -230,7 +228,7 @@ impl WorkspaceResolver {
                 if let Some(imports) = &config.json.imports {
                   value.insert("imports".to_string(), imports.clone());
                 }
-                import_map::ext::expand_import_map_value(value.into())
+                value.into()
               },
             })
             .collect::<Vec<_>>();
@@ -243,6 +241,7 @@ impl WorkspaceResolver {
             import_map,
             deno_jsons.iter().map(|c| c.as_ref()),
           );
+          let import_map = import_map::ext::expand_import_map_value(import_map);
           log::debug!(
             "Workspace config generated this import map {}",
             serde_json::to_string_pretty(&import_map).unwrap()
