@@ -527,7 +527,7 @@ mod test {
     let resolve = |name: &str, referrer: &str| {
       resolver.resolve(
         name,
-        &Url::from_file_path(&root_dir().join(referrer)).unwrap(),
+        &Url::from_file_path(root_dir().join(referrer)).unwrap(),
       )
     };
     match resolve("pkg", "b/index.js").unwrap() {
