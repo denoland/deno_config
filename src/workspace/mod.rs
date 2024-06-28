@@ -13,6 +13,7 @@ use anyhow::Error as AnyError;
 use deno_semver::package::PackageNv;
 use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
+use deno_semver::VersionReq;
 use discovery::discover_with_npm;
 use discovery::discover_workspace_config_files;
 use discovery::ConfigFileDiscovery;
@@ -86,10 +87,14 @@ pub struct NpmPackageConfig {
 
 impl NpmPackageConfig {
   pub fn matches_req(&self, req: &PackageReq) -> bool {
-    if req.name != self.package_nv.name {
+    self.matches_name_and_version_req(&req.name, &req.version_req)
+  }
+
+  pub fn matches_name_and_version_req(&self, name: &str, version_req: &VersionReq) -> bool {
+    if name != self.package_nv.name {
       return false;
     }
-    match req.version_req.inner() {
+    match version_req.inner() {
       RangeSetOrTag::RangeSet(set) => set.satisfies(&self.package_nv.version),
       RangeSetOrTag::Tag(tag) => tag == "workspace",
     }
