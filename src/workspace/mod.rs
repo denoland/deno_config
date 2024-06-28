@@ -1738,7 +1738,11 @@ mod test {
     let workspace = workspace_for_root_and_member(
       json!({
         "compilerOptions": {
-          "checkJs": true
+          "checkJs": true,
+          "types": ["./types.d.ts"],
+          "jsx": "react-jsx",
+          "jsxImportSource": "npm:react",
+          "jsxImportSourceTypes": "npm:@types/react",
         }
       }),
       json!({
@@ -1751,8 +1755,29 @@ mod test {
       workspace.to_compiler_options().unwrap().unwrap().0,
       json!({
         // ignores member config
-        "checkJs": true
+        "checkJs": true,
+        "jsx": "react-jsx",
+        "jsxImportSource": "npm:react",
       })
+    );
+    assert_eq!(
+      workspace.to_maybe_imports().unwrap(),
+      vec![(
+        Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+        vec!["./types.d.ts".to_string()]
+      )]
+    );
+    assert_eq!(
+      workspace
+        .to_maybe_jsx_import_source_config()
+        .unwrap()
+        .unwrap(),
+      JsxImportSourceConfig {
+        default_specifier: Some("npm:react".to_string()),
+        default_types_specifier: Some("npm:@types/react".to_string()),
+        module: "jsx-runtime".to_string(),
+        base_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }
     );
     assert_eq!(
       workspace.diagnostics(),
@@ -2229,6 +2254,8 @@ mod test {
     );
     // ignores member config
     assert_eq!(workspace.unstable_features(), &["byonm".to_string()]);
+    assert!(workspace.has_unstable("byonm"));
+    assert!(!workspace.has_unstable("sloppy-imports"));
     assert_eq!(
       workspace.to_lock_config().unwrap().unwrap(),
       LockConfig::Bool(false),

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fmt;
 use url::Url;
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct JsxImportSourceConfig {
   pub default_specifier: Option<String>,
   pub default_types_specifier: Option<String>,

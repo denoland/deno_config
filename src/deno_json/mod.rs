@@ -1247,18 +1247,13 @@ impl ConfigFile {
   /// If the configuration file contains "extra" modules (like TypeScript
   /// `"types"`) options, return them as imports to be added to a module graph.
   pub fn to_maybe_imports(&self) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
-    let mut imports = Vec::new();
-    let compiler_options_value =
-      if let Some(value) = self.json.compiler_options.as_ref() {
-        value
-      } else {
-        return Ok(Vec::new());
-      };
-    let compiler_options: CompilerOptions =
-      serde_json::from_value(compiler_options_value.clone())?;
-    if let Some(types) = compiler_options.types {
-      imports.extend(types);
-    }
+    let Some(compiler_options_value) = self.json.compiler_options.as_ref() else {
+      return Ok(Vec::new());
+    };
+    let Some(types) = compiler_options_value.get("types") else {
+      return Ok(Vec::new());
+    };
+    let imports: Vec<String> = serde_json::from_value(types.clone())?;
     if !imports.is_empty() {
       let referrer = self.specifier.clone();
       Ok(vec![(referrer, imports)])
