@@ -199,12 +199,14 @@ impl WorkspaceResolver {
               }
             }
             None => {
-              if !deno_jsons.iter().any(|c| {
-                c.json.import_map.is_some()
-                  || c.json.scopes.is_some()
-                  || c.json.imports.is_some()
-              }) {
-                // no configs have an import map, so exit
+              if !deno_jsons.iter().any(|p| p.is_package())
+                && !deno_jsons.iter().any(|c| {
+                  c.json.import_map.is_some()
+                    || c.json.scopes.is_some()
+                    || c.json.imports.is_some()
+                })
+              {
+                // no configs have an import map and none are a package, so exit
                 return Ok(None);
               }
 
@@ -561,6 +563,34 @@ mod test {
         assert_eq!(alias, "pkg");
         assert_eq!(sub_path, None);
         dep_result.as_ref().unwrap();
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn single_pkg_no_import_map() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "name": "@scope/pkg",
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = create_resolver(&workspace).await;
+    assert!(resolver.diagnostics().is_empty());
+    let result = resolver
+      .resolve(
+        "@scope/pkg",
+        &Url::from_file_path(root_dir().join("file.ts")).unwrap(),
+      )
+      .unwrap();
+    match result {
+      MappedResolution::ImportMap(url) => {
+        assert_eq!(url, Url::parse("jsr:@scope/pkg@^1.0.0").unwrap());
       }
       _ => unreachable!(),
     }

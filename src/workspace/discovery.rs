@@ -119,6 +119,10 @@ pub fn discover_workspace_config_files(
             );
             match result {
               Ok(config_file) => {
+                log::debug!(
+                  "Member config file found at '{}'",
+                  config_file.specifier
+                );
                 return Ok(DenoOrPkgJson::Deno(new_rc(config_file)));
               }
               Err(err) if err.is_not_found() => {
@@ -138,7 +142,13 @@ pub fn discover_workspace_config_files(
             opts.pkg_json_cache,
           );
           match pkg_json_result {
-            Ok(pkg_json) => Ok(DenoOrPkgJson::PkgJson(pkg_json)),
+            Ok(pkg_json) => {
+              log::debug!(
+                "Member package.json found at '{}'",
+                pkg_json.path.display()
+              );
+              Ok(DenoOrPkgJson::PkgJson(pkg_json))
+            }
             Err(PackageJsonLoadError::Io { source, .. })
               if source.kind() == std::io::ErrorKind::NotFound =>
             {
