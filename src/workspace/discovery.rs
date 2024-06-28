@@ -42,12 +42,13 @@ pub enum ConfigFileDiscovery {
 }
 
 pub fn discover_workspace_config_files(
+  start: WorkspaceDiscoverStart,
   opts: &WorkspaceDiscoverOptions,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
   let mut next_start_dir: Option<Cow<Path>>;
   let mut first_config_file: Option<Url> = None;
   let mut found_configs: HashMap<_, ConfigFile> = HashMap::new();
-  match opts.start {
+  match start {
     WorkspaceDiscoverStart::Dir(dir) => {
       next_start_dir = Some(Cow::Borrowed(dir));
     }
@@ -58,7 +59,7 @@ pub fn discover_workspace_config_files(
       let config_file = ConfigFile::from_specifier(
         opts.fs,
         specifier.clone(),
-        opts.config_parse_options,
+        &opts.config_parse_options,
       )?;
       found_configs.insert(specifier.clone(), config_file);
       first_config_file = Some(specifier);
@@ -69,7 +70,7 @@ pub fn discover_workspace_config_files(
       opts.fs,
       &start_dir,
       opts.additional_config_file_names,
-      opts.config_parse_options,
+      &opts.config_parse_options,
     )?;
     let Some(workspace_config_file) = config_file else {
       break;
@@ -114,7 +115,7 @@ pub fn discover_workspace_config_files(
             let result = ConfigFile::from_specifier(
               opts.fs,
               url,
-              opts.config_parse_options,
+              &opts.config_parse_options,
             );
             match result {
               Ok(config_file) => {
@@ -166,6 +167,14 @@ pub fn discover_workspace_config_files(
               .into(),
             )
           })?;
+        if member_dir_url == root_config_file_directory_url {
+          return Err(
+            ResolveWorkspaceMemberError::SelfReference {
+              member: raw_member.to_string(),
+            }
+            .into(),
+          );
+        }
         if !member_dir_url
           .as_str()
           .starts_with(root_config_file_directory_url.as_str())
@@ -179,7 +188,16 @@ pub fn discover_workspace_config_files(
           );
         }
         let config = find_config(&member_dir_url)?;
-        final_members.insert(new_rc(member_dir_url), config);
+        let previous_member =
+          final_members.insert(new_rc(member_dir_url), config);
+        if previous_member.is_some() {
+          return Err(
+            ResolveWorkspaceMemberError::Duplicate {
+              member: raw_member.to_string(),
+            }
+            .into(),
+          );
+        }
       }
       if let Some(config_url) = found_configs.into_keys().next() {
         return Err(
@@ -229,6 +247,7 @@ pub enum PackageJsonDiscovery {
 }
 
 pub fn discover_with_npm(
+  start: WorkspaceDiscoverStart,
   config_file_discovery: &ConfigFileDiscovery,
   opts: &WorkspaceDiscoverOptions,
 ) -> Result<PackageJsonDiscovery, WorkspaceDiscoverError> {
@@ -247,7 +266,7 @@ pub fn discover_with_npm(
     .as_ref()
     .and_then(|p| p.parent())
     .and_then(|p| p.parent());
-  for ancestor in opts.start.dir_path().ancestors() {
+  for ancestor in start.dir_path().ancestors() {
     if Some(ancestor) == maybe_stop_dir {
       break;
     }

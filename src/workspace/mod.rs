@@ -119,6 +119,10 @@ pub enum ResolveWorkspaceMemberError {
   PackageJsonReadError(#[from] PackageJsonLoadError),
   #[error("Workspace member must be nested in a directory under the workspace.\n  Member: {member_url}\n  Workspace: {workspace_url}")]
   NonDescendant { workspace_url: Url, member_url: Url },
+  #[error("Cannot specify a workspace member twice ('{}').", .member)]
+  Duplicate { member: String },
+  #[error("A workspace config file cannot reference itself as a member ('{}').", .member)]
+  SelfReference { member: String },
 }
 
 #[derive(Error, Debug)]
@@ -182,11 +186,11 @@ impl<'a> WorkspaceDiscoverStart<'a> {
   }
 }
 
+#[derive(Default)]
 pub struct WorkspaceDiscoverOptions<'a> {
   pub fs: &'a dyn crate::fs::DenoConfigFs,
   pub pkg_json_cache: Option<&'a dyn crate::package_json::PackageJsonCache>,
-  pub start: WorkspaceDiscoverStart<'a>,
-  pub config_parse_options: &'a ConfigParseOptions,
+  pub config_parse_options: ConfigParseOptions,
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
 }
@@ -219,13 +223,13 @@ impl Workspace {
   }
 
   pub fn discover(
+    start: WorkspaceDiscoverStart,
     opts: &WorkspaceDiscoverOptions,
   ) -> Result<Self, WorkspaceDiscoverError> {
-    let start_dir =
-      new_rc(Url::from_directory_path(opts.start.dir_path()).unwrap());
-    let config_file_discovery = discover_workspace_config_files(opts)?;
+    let start_dir = new_rc(Url::from_directory_path(start.dir_path()).unwrap());
+    let config_file_discovery = discover_workspace_config_files(start, opts)?;
     let maybe_npm_discovery = if opts.discover_pkg_json {
-      discover_with_npm(&config_file_discovery, opts)?
+      discover_with_npm(start, &config_file_discovery, opts)?
     } else {
       PackageJsonDiscovery::None
     };
@@ -1452,41 +1456,14 @@ mod test {
   use serde_json::json;
 
   use crate::assert_contains;
-  use crate::fs::DenoConfigFs;
+  use crate::fs::TestFileSystem;
   use crate::glob::PathOrPattern;
 
   use super::*;
 
-  #[derive(Debug, Default)]
-  struct TestFileSystem(pub HashMap<PathBuf, String>);
-
-  impl TestFileSystem {
-    fn insert_json(
-      &mut self,
-      path: impl AsRef<Path>,
-      contents: serde_json::Value,
-    ) {
-      self.insert(path, contents.to_string())
-    }
-
-    fn insert(&mut self, path: impl AsRef<Path>, contents: impl AsRef<str>) {
-      self
-        .0
-        .insert(path.as_ref().to_path_buf(), contents.as_ref().to_string());
-    }
-  }
-
-  impl DenoConfigFs for TestFileSystem {
-    fn read_to_string(&self, path: &Path) -> Result<String, std::io::Error> {
-      self.0.get(path).cloned().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "file not found")
-      })
-    }
-  }
-
   fn root_dir() -> PathBuf {
     if cfg!(windows) {
-      PathBuf::from("C:\\Users\\User")
+      PathBuf::from("C:\\Users\\user")
     } else {
       PathBuf::from("/home/user")
     }
@@ -1502,14 +1479,13 @@ mod test {
       }),
     );
 
-    let workspace_config_err = Workspace::discover(&WorkspaceDiscoverOptions {
-      fs: &fs,
-      pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&root_dir()),
-      config_parse_options: &ConfigParseOptions::default(),
-      additional_config_file_names: &[],
-      discover_pkg_json: false,
-    })
+    let workspace_config_err = Workspace::discover(
+      WorkspaceDiscoverStart::Dir(&root_dir()),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
     .err()
     .unwrap();
 
@@ -1517,6 +1493,62 @@ mod test {
       workspace_config_err.to_string(),
       "Workspace members cannot be empty"
     );
+  }
+
+  #[test]
+  fn test_duplicate_members() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member/a", "./member/../member/a"],
+      }),
+    );
+    fs.insert_json(root_dir().join("member/a/deno.json"), json!({}));
+
+    let workspace_config_err = Workspace::discover(
+      WorkspaceDiscoverStart::Dir(&root_dir()),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
+    .err()
+    .unwrap();
+
+    assert_contains!(
+      workspace_config_err.to_string(),
+      "Cannot specify a workspace member twice ('./member/../member/a')."
+    );
+  }
+
+  #[test]
+  fn test_workspace_reference_self() {
+    for sub_path in [".", "../sub_dir"] {
+      let mut fs = TestFileSystem::default();
+      fs.insert_json(
+        root_dir().join("sub_dir").join("deno.json"),
+        json!({
+          "workspace": [sub_path],
+        }),
+      );
+
+      let workspace_config_err = Workspace::discover(
+        WorkspaceDiscoverStart::Dir(&root_dir().join("sub_dir")),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          ..Default::default()
+        },
+      )
+      .err()
+      .unwrap();
+
+      let text = format!(
+        "A workspace config file cannot reference itself as a member ('{}').",
+        sub_path
+      );
+      assert_contains!(workspace_config_err.to_string(), &text);
+    }
   }
 
   #[test]
@@ -1529,14 +1561,13 @@ mod test {
       }),
     );
 
-    let workspace_config_err = Workspace::discover(&WorkspaceDiscoverOptions {
-      fs: &fs,
-      pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&root_dir()),
-      config_parse_options: &ConfigParseOptions::default(),
-      additional_config_file_names: &[],
-      discover_pkg_json: false,
-    })
+    let workspace_config_err = Workspace::discover(
+      WorkspaceDiscoverStart::Dir(&root_dir()),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
     .err()
     .unwrap();
 
@@ -1568,14 +1599,13 @@ mod test {
     fs.insert_json(root_dir().join("a/deno.json"), config_text_a);
     fs.insert_json(root_dir().join("b/deno.jsonc"), config_text_b);
 
-    let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
-      fs: &fs,
-      pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&root_dir()),
-      config_parse_options: &ConfigParseOptions::default(),
-      additional_config_file_names: &[],
-      discover_pkg_json: false,
-    })
+    let workspace = Workspace::discover(
+      WorkspaceDiscoverStart::Dir(&root_dir()),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
     .unwrap();
     assert_eq!(workspace.config_folders.len(), 3);
   }
@@ -1611,15 +1641,14 @@ mod test {
       }),
     );
     let workspace = new_rc(
-      Workspace::discover(&WorkspaceDiscoverOptions {
-        fs: &fs,
-        pkg_json_cache: None,
+      Workspace::discover(
         // start at root for this test
-        start: WorkspaceDiscoverStart::Dir(&root_dir()),
-        config_parse_options: &ConfigParseOptions::default(),
-        additional_config_file_names: &[],
-        discover_pkg_json: false,
-      })
+        WorkspaceDiscoverStart::Dir(&root_dir()),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          ..Default::default()
+        },
+      )
       .unwrap(),
     );
     assert_eq!(workspace.diagnostics(), vec![]);
@@ -2280,15 +2309,14 @@ mod test {
         "workspace": ["./other_dir"]
       }),
     );
-    let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
-      fs: &fs,
-      pkg_json_cache: None,
+    let workspace = Workspace::discover(
       // start at root for this test
-      start: WorkspaceDiscoverStart::Dir(&root_dir()),
-      config_parse_options: &ConfigParseOptions::default(),
-      additional_config_file_names: &[],
-      discover_pkg_json: false,
-    })
+      WorkspaceDiscoverStart::Dir(&root_dir()),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
     .unwrap();
     assert_eq!(
       workspace.diagnostics(),
@@ -2309,14 +2337,13 @@ mod test {
         "workspaces": ["./member"]
       }),
     );
-    let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
-      fs: &fs,
-      pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&root_dir()),
-      config_parse_options: &ConfigParseOptions::default(),
-      additional_config_file_names: &[],
-      discover_pkg_json: false,
-    })
+    let workspace = Workspace::discover(
+      WorkspaceDiscoverStart::Dir(&root_dir()),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
     .unwrap();
     assert_eq!(
       workspace.diagnostics(),
@@ -2343,14 +2370,13 @@ mod test {
     });
     fs.insert_json(root_dir().join("member1").join("deno.json"), pkg.clone());
     fs.insert_json(root_dir().join("member2").join("deno.json"), pkg.clone());
-    let workspace = Workspace::discover(&WorkspaceDiscoverOptions {
-      fs: &fs,
-      pkg_json_cache: None,
-      start: WorkspaceDiscoverStart::Dir(&root_dir()),
-      config_parse_options: &ConfigParseOptions::default(),
-      additional_config_file_names: &[],
-      discover_pkg_json: false,
-    })
+    let workspace = Workspace::discover(
+      WorkspaceDiscoverStart::Dir(&root_dir()),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        ..Default::default()
+      },
+    )
     .unwrap();
     assert_eq!(
       workspace.diagnostics(),
@@ -2391,15 +2417,14 @@ mod test {
     fs.insert_json(root_dir().join("member/deno.json"), member);
     with_fs(&mut fs);
     new_rc(
-      Workspace::discover(&WorkspaceDiscoverOptions {
-        fs: &fs,
-        pkg_json_cache: None,
+      Workspace::discover(
         // start in the member
-        start: WorkspaceDiscoverStart::Dir(&root_dir().join("member")),
-        config_parse_options: &ConfigParseOptions::default(),
-        additional_config_file_names: &[],
-        discover_pkg_json: false,
-      })
+        WorkspaceDiscoverStart::Dir(&root_dir().join("member")),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          ..Default::default()
+        },
+      )
       .unwrap(),
     )
   }
