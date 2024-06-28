@@ -2,10 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::path::Path;
 
 use anyhow::Error as AnyError;
-use deno_semver::npm::NpmPackageReqReference;
-use deno_semver::package::PackageReqReference;
+use deno_semver::RangeSetOrTag;
+use deno_semver::Version;
+use deno_semver::VersionReq;
 use import_map::specifier::SpecifierError;
 use import_map::ImportMap;
 use import_map::ImportMapDiagnostic;
@@ -14,6 +16,7 @@ use import_map::ImportMapWithDiagnostics;
 use thiserror::Error;
 use url::Url;
 
+use crate::package_json::PackageJsonDepValue;
 use crate::package_json::PackageJsonDepValueParseError;
 use crate::package_json::PackageJsonDeps;
 use crate::package_json::PackageJsonRc;
@@ -67,17 +70,9 @@ pub enum MappedResolution<'a> {
   PackageJson {
     pkg_json: &'a PackageJsonRc,
     alias: &'a str,
-    req_ref: NpmPackageReqReference,
+    sub_path: Option<String>,
+    dep_result: &'a Result<PackageJsonDepValue, PackageJsonDepValueParseError>,
   },
-}
-
-impl<'a> MappedResolution<'a> {
-  pub fn into_url(self) -> Result<Url, url::ParseError> {
-    match self {
-      Self::Normal(url) | Self::ImportMap(url) => Ok(url),
-      Self::PackageJson { req_ref, .. } => Url::parse(&req_ref.to_string()),
-    }
-  }
 }
 
 #[derive(Debug, Error)]
@@ -86,8 +81,6 @@ pub enum MappedResolutionError {
   Specifier(#[from] SpecifierError),
   #[error(transparent)]
   ImportMap(#[from] ImportMapError),
-  #[error(transparent)]
-  PkgJsonDep(#[from] PackageJsonDepValueParseError),
 }
 
 impl MappedResolutionError {
@@ -101,9 +94,43 @@ impl MappedResolutionError {
         ImportMapError::UnmappedBareSpecifier(_, _) => true,
         ImportMapError::Other(_) => false,
       },
-      MappedResolutionError::PkgJsonDep(_) => false,
     }
   }
+}
+
+#[derive(Error, Debug)]
+#[error(transparent)]
+pub struct WorkspaceResolvePkgJsonFolderError(
+  Box<WorkspaceResolvePkgJsonFolderErrorKind>,
+);
+
+impl WorkspaceResolvePkgJsonFolderError {
+  pub fn as_kind(&self) -> &WorkspaceResolvePkgJsonFolderErrorKind {
+    &self.0
+  }
+
+  pub fn into_kind(self) -> WorkspaceResolvePkgJsonFolderErrorKind {
+    *self.0
+  }
+}
+
+impl<E> From<E> for WorkspaceResolvePkgJsonFolderError
+where
+  WorkspaceResolvePkgJsonFolderErrorKind: From<E>,
+{
+  fn from(err: E) -> Self {
+    WorkspaceResolvePkgJsonFolderError(Box::new(
+      WorkspaceResolvePkgJsonFolderErrorKind::from(err),
+    ))
+  }
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum WorkspaceResolvePkgJsonFolderErrorKind {
+  #[error("Could not find package.json with name '{0}' in workspace.")]
+  NotFound(String),
+  #[error("Found package.json in workspace, but version '{1}' didn't satisy constraint '{0}'.")]
+  VersionNotSatisfied(VersionReq, Version),
 }
 
 #[derive(Debug)]
@@ -223,7 +250,7 @@ impl WorkspaceResolver {
         .iter()
         .filter_map(|(dir_url, f)| {
           let pkg_json = f.pkg_json.clone()?;
-          let deps = pkg_json.resolve_local_package_json_version_reqs();
+          let deps = pkg_json.resolve_local_package_json_deps();
           Some((
             dir_url.clone(),
             PkgJsonResolverFolderConfig { deps, pkg_json },
@@ -254,7 +281,7 @@ impl WorkspaceResolver {
     let pkg_jsons = pkg_jsons
       .into_iter()
       .map(|pkg_json| {
-        let deps = pkg_json.resolve_local_package_json_version_reqs();
+        let deps = pkg_json.resolve_local_package_json_deps();
         (
           new_rc(
             Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
@@ -318,22 +345,19 @@ impl WorkspaceResolver {
       }
       previously_found_dir = true;
 
-      for (bare_specifier, req_result) in &pkg_json_folder.deps {
+      for (bare_specifier, dep_result) in &pkg_json_folder.deps {
         if let Some(path) = specifier.strip_prefix(bare_specifier) {
           if path.is_empty() || path.starts_with('/') {
             let sub_path = path.strip_prefix('/').unwrap_or(path);
-            let req = req_result.as_ref().map_err(|e| e.clone())?;
             return Ok(MappedResolution::PackageJson {
               pkg_json: &pkg_json_folder.pkg_json,
               alias: bare_specifier,
-              req_ref: NpmPackageReqReference::new(PackageReqReference {
-                req: req.clone(),
-                sub_path: if sub_path.is_empty() {
-                  None
-                } else {
-                  Some(sub_path.to_string())
-                },
-              }),
+              sub_path: if sub_path.is_empty() {
+                None
+              } else {
+                Some(sub_path.to_string())
+              },
+              dep_result,
             });
           }
         }
@@ -342,6 +366,47 @@ impl WorkspaceResolver {
 
     // wasn't found, so surface the initial resolve error
     Err(resolve_error)
+  }
+
+  pub fn resolve_workspace_pkg_json_folder(
+    &self,
+    name: &str,
+    version_req: &VersionReq,
+  ) -> Result<&Path, WorkspaceResolvePkgJsonFolderError> {
+    let pkg_json = self
+      .package_jsons()
+      .find(|p| p.name.as_deref() == Some(name));
+    let Some(pkg_json) = pkg_json else {
+      return Err(WorkspaceResolvePkgJsonFolderErrorKind::NotFound(name.to_string()).into());
+    };
+    match version_req.inner() {
+      RangeSetOrTag::RangeSet(set) => {
+        if let Some(version) = pkg_json
+          .version
+          .as_ref()
+          .and_then(|v| Version::parse_from_npm(v).ok())
+        {
+          if set.satisfies(&version) {
+            Ok(pkg_json.dir_path())
+          } else {
+            Err(
+              WorkspaceResolvePkgJsonFolderErrorKind::VersionNotSatisfied(
+                version_req.clone(),
+                version,
+              )
+              .into(),
+            )
+          }
+        } else {
+          // just match it
+          Ok(pkg_json.dir_path())
+        }
+      }
+      RangeSetOrTag::Tag(_) => {
+        // always match tags
+        Ok(pkg_json.dir_path())
+      }
+    }
   }
 }
 
@@ -381,4 +446,186 @@ fn enhance_import_map_value_with_workspace_members<'a>(
 
   import_map_value["imports"] = serde_json::Value::Object(imports);
   import_map_value
+}
+
+#[cfg(test)]
+mod test {
+  use std::path::Path;
+  use std::path::PathBuf;
+
+  use deno_semver::VersionReq;
+  use serde_json::json;
+  use url::Url;
+
+  use super::*;
+  use crate::fs::TestFileSystem;
+  use crate::sync::new_rc;
+  use crate::workspace::WorkspaceDiscoverOptions;
+  use crate::workspace::WorkspaceDiscoverStart;
+  use crate::workspace::WorkspaceRc;
+
+  fn root_dir() -> PathBuf {
+    if cfg!(windows) {
+      PathBuf::from("C:\\Users\\user")
+    } else {
+      PathBuf::from("/home/user")
+    }
+  }
+
+  #[tokio::test]
+  async fn pkg_json_resolution() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": [
+          "a",
+          "b",
+        ]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("a/deno.json"),
+      json!({
+        "imports": {
+          "b": "./index.js",
+        },
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("b/package.json"),
+      json!({
+        "dependencies": {
+          "pkg": "npm:pkg@^1.0.0",
+        },
+      }),
+    );
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = create_resolver(&workspace).await;
+    assert!(resolver.diagnostics().is_empty());
+    let resolve = |name: &str, referrer: &str| {
+      resolver.resolve(
+        name,
+        &Url::from_file_path(&root_dir().join(referrer)).unwrap(),
+      )
+    };
+    match resolve("pkg", "b/index.js").unwrap() {
+      MappedResolution::PackageJson {
+        alias,
+        sub_path,
+        dep_result,
+        ..
+      } => {
+        assert_eq!(alias, "pkg");
+        assert_eq!(sub_path, None);
+        dep_result.as_ref().unwrap();
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn resolve_workspace_pkg_json_folder() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": [
+          "a",
+          "b",
+          "no-version"
+        ]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("a/package.json"),
+      json!({
+        "name": "@scope/a",
+        "version": "1.0.0",
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("b/package.json"),
+      json!({
+        "name": "@scope/b",
+        "version": "2.0.0",
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("no-version/package.json"),
+      json!({
+        "name": "@scope/no-version",
+      }),
+    );
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = create_resolver(&workspace).await;
+    let resolve = |name: &str, req: &str| {
+      resolver.resolve_workspace_pkg_json_folder(
+        name,
+        &VersionReq::parse_from_npm(req).unwrap(),
+      )
+    };
+    assert_eq!(
+      resolve("non-existent", "*").map_err(|e| e.into_kind()),
+      Err(WorkspaceResolvePkgJsonFolderErrorKind::NotFound(
+        "non-existent".to_string()
+      ))
+    );
+    assert_eq!(
+      resolve("@scope/a", "6").map_err(|e| e.into_kind()),
+      Err(WorkspaceResolvePkgJsonFolderErrorKind::VersionNotSatisfied(
+        VersionReq::parse_from_npm("6").unwrap(),
+        Version::parse_from_npm("1.0.0").unwrap(),
+      ))
+    );
+    assert_eq!(resolve("@scope/a", "1").unwrap(), root_dir().join("a"));
+    assert_eq!(resolve("@scope/a", "*").unwrap(), root_dir().join("a"));
+    assert_eq!(
+      resolve("@scope/a", "workspace").unwrap(),
+      root_dir().join("a")
+    );
+    assert_eq!(resolve("@scope/b", "2").unwrap(), root_dir().join("b"));
+    // just match any tags with the workspace
+    assert_eq!(resolve("@scope/a", "latest").unwrap(), root_dir().join("a"));
+
+    // match any version for a pkg with no version
+    assert_eq!(
+      resolve("@scope/no-version", "1").unwrap(),
+      root_dir().join("no-version")
+    );
+    assert_eq!(
+      resolve("@scope/no-version", "20").unwrap(),
+      root_dir().join("no-version")
+    );
+  }
+
+  async fn create_resolver(workspace: &WorkspaceRc) -> WorkspaceResolver {
+    workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: true,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap()
+  }
+
+  fn workspace_at_start_dir(
+    fs: &TestFileSystem,
+    start_dir: &Path,
+  ) -> WorkspaceRc {
+    new_rc(
+      Workspace::discover(
+        WorkspaceDiscoverStart::Dir(start_dir),
+        &WorkspaceDiscoverOptions {
+          fs,
+          discover_pkg_json: true,
+          ..Default::default()
+        },
+      )
+      .unwrap(),
+    )
+  }
 }

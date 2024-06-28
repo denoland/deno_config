@@ -58,6 +58,8 @@ pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionError;
 pub use resolver::SpecifiedImportMap;
+pub use resolver::WorkspaceResolvePkgJsonFolderError;
+pub use resolver::WorkspaceResolvePkgJsonFolderErrorKind;
 pub use resolver::WorkspaceResolver;
 pub use resolver::WorkspaceResolverCreateError;
 
