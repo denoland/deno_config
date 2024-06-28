@@ -243,6 +243,10 @@ impl WorkspaceResolver {
             import_map,
             deno_jsons.iter().map(|c| c.as_ref()),
           );
+          log::debug!(
+            "Workspace config generated this import map {}",
+            serde_json::to_string_pretty(&import_map).unwrap()
+          );
           (import_map_url, import_map)
         }
       };
