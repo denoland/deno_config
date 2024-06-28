@@ -5,6 +5,7 @@ use std::future::Future;
 use std::path::Path;
 
 use anyhow::Error as AnyError;
+use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
 use deno_semver::Version;
 use deno_semver::VersionReq;
@@ -368,7 +369,27 @@ impl WorkspaceResolver {
     Err(resolve_error)
   }
 
-  pub fn resolve_workspace_pkg_json_folder(
+  pub fn resolve_workspace_pkg_json_folder_for_npm_specifier(
+    &self,
+    pkg_req: &PackageReq,
+  ) -> Option<&Path> {
+    let result = self
+      .resolve_workspace_pkg_json_folder_for_pkg_json_dep(
+        &pkg_req.name,
+        &pkg_req.version_req,
+      )
+      .ok()?;
+
+    if let Some(tag) = pkg_req.version_req.tag() {
+      if tag != "workspace" {
+        return None;
+      }
+    }
+
+    Some(result)
+  }
+
+  pub fn resolve_workspace_pkg_json_folder_for_pkg_json_dep(
     &self,
     name: &str,
     version_req: &VersionReq,
@@ -559,44 +580,64 @@ mod test {
     );
     let workspace = workspace_at_start_dir(&fs, &root_dir());
     let resolver = create_resolver(&workspace).await;
-    let resolve = |name: &str, req: &str| {
-      resolver.resolve_workspace_pkg_json_folder(
-        name,
-        &VersionReq::parse_from_npm(req).unwrap(),
-      )
-    };
-    assert_eq!(
-      resolve("non-existent", "*").map_err(|e| e.into_kind()),
-      Err(WorkspaceResolvePkgJsonFolderErrorKind::NotFound(
-        "non-existent".to_string()
-      ))
-    );
-    assert_eq!(
-      resolve("@scope/a", "6").map_err(|e| e.into_kind()),
-      Err(WorkspaceResolvePkgJsonFolderErrorKind::VersionNotSatisfied(
-        VersionReq::parse_from_npm("6").unwrap(),
-        Version::parse_from_npm("1.0.0").unwrap(),
-      ))
-    );
-    assert_eq!(resolve("@scope/a", "1").unwrap(), root_dir().join("a"));
-    assert_eq!(resolve("@scope/a", "*").unwrap(), root_dir().join("a"));
-    assert_eq!(
-      resolve("@scope/a", "workspace").unwrap(),
-      root_dir().join("a")
-    );
-    assert_eq!(resolve("@scope/b", "2").unwrap(), root_dir().join("b"));
-    // just match any tags with the workspace
-    assert_eq!(resolve("@scope/a", "latest").unwrap(), root_dir().join("a"));
+    // resolve for pkg json dep
+    {
+      let resolve = |name: &str, req: &str| {
+        resolver.resolve_workspace_pkg_json_folder_for_pkg_json_dep(
+          name,
+          &VersionReq::parse_from_npm(req).unwrap(),
+        )
+      };
+      assert_eq!(
+        resolve("non-existent", "*").map_err(|e| e.into_kind()),
+        Err(WorkspaceResolvePkgJsonFolderErrorKind::NotFound(
+          "non-existent".to_string()
+        ))
+      );
+      assert_eq!(
+        resolve("@scope/a", "6").map_err(|e| e.into_kind()),
+        Err(WorkspaceResolvePkgJsonFolderErrorKind::VersionNotSatisfied(
+          VersionReq::parse_from_npm("6").unwrap(),
+          Version::parse_from_npm("1.0.0").unwrap(),
+        ))
+      );
+      assert_eq!(resolve("@scope/a", "1").unwrap(), root_dir().join("a"));
+      assert_eq!(resolve("@scope/a", "*").unwrap(), root_dir().join("a"));
+      assert_eq!(
+        resolve("@scope/a", "workspace").unwrap(),
+        root_dir().join("a")
+      );
+      assert_eq!(resolve("@scope/b", "2").unwrap(), root_dir().join("b"));
+      // just match any tags with the workspace
+      assert_eq!(resolve("@scope/a", "latest").unwrap(), root_dir().join("a"));
 
-    // match any version for a pkg with no version
-    assert_eq!(
-      resolve("@scope/no-version", "1").unwrap(),
-      root_dir().join("no-version")
-    );
-    assert_eq!(
-      resolve("@scope/no-version", "20").unwrap(),
-      root_dir().join("no-version")
-    );
+      // match any version for a pkg with no version
+      assert_eq!(
+        resolve("@scope/no-version", "1").unwrap(),
+        root_dir().join("no-version")
+      );
+      assert_eq!(
+        resolve("@scope/no-version", "20").unwrap(),
+        root_dir().join("no-version")
+      );
+    }
+    // resolve for specifier
+    {
+      let resolve = |pkg_req: &str| {
+        resolver.resolve_workspace_pkg_json_folder_for_npm_specifier(
+          &PackageReq::from_str(pkg_req).unwrap(),
+        )
+      };
+      assert_eq!(resolve("non-existent@*"), None);
+      assert_eq!(
+        resolve("@scope/no-version@1").unwrap(),
+        root_dir().join("no-version")
+      );
+
+      assert_eq!(resolve("@scope/a@workspace").unwrap(), root_dir().join("a"));
+      // difference is here, it won't match for a non-workspace tag for an npm specifier
+      assert_eq!(resolve("@scope/a@latest"), None);
+    }
   }
 
   async fn create_resolver(workspace: &WorkspaceRc) -> WorkspaceResolver {
