@@ -8,10 +8,11 @@ license = "MIT"
 repository = "https://github.com/denoland/deno_config"
 
 [features]
-default = ["deno_json", "package_json"]
+default = ["workspace"]
 deno_json = ["jsonc-parser", "glob", "import_map"]
 package_json = ["deno_semver"]
 sync = []
+workspace = ["deno_json", "package_json"]
 
 [dependencies]
 anyhow = "1.0.57"

@@ -1,10 +1,52 @@
-// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::marker::PhantomData;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
+
+#[derive(Default)]
+pub struct CheckedSet<T: std::hash::Hash> {
+  _kind: PhantomData<T>,
+  checked: std::collections::HashSet<u64>,
+}
+
+impl<T: std::hash::Hash> CheckedSet<T> {
+  pub fn with_capacity(capacity: usize) -> Self {
+    Self {
+      _kind: PhantomData,
+      checked: std::collections::HashSet::with_capacity(capacity),
+    }
+  }
+
+  pub fn insert(&mut self, value: &T) -> bool {
+    self.checked.insert(self.get_hash(value))
+  }
+
+  fn get_hash(&self, value: &T) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+  }
+}
+
+pub fn is_skippable_io_error(e: &std::io::Error) -> bool {
+  use std::io::ErrorKind::*;
+  match e.kind() {
+    InvalidInput | PermissionDenied | NotFound => {
+      // ok keep going
+      true
+    }
+    _ => {
+      const NOT_A_DIRECTORY: i32 = 20;
+      cfg!(unix) && e.raw_os_error() == Some(NOT_A_DIRECTORY)
+    }
+  }
+}
 
 /// Gets the parent of this module specifier.
 pub fn specifier_parent(specifier: &Url) -> Url {

@@ -1,6 +1,5 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error as AnyError;
@@ -17,18 +16,21 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
+use thiserror::Error;
 use ts::parse_compiler_options;
 use url::Url;
 
+use crate::fs::DenoConfigFs;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPatternSet;
+use crate::util::is_skippable_io_error;
 use crate::util::normalize_path;
 use crate::util::specifier_parent;
 use crate::util::specifier_to_file_path;
+use crate::SpecifierToFilePathError;
 
 mod ts;
 
@@ -167,16 +169,19 @@ impl SerializedLintConfig {
       rules: self.rules,
       files: choose_files(files, self.deprecated_files)
         .into_resolved(config_file_specifier)?,
-      report: self.report,
     })
   }
+}
+
+#[derive(Clone, Debug, Default, Hash, PartialEq)]
+pub struct WorkspaceLintConfig {
+  pub report: Option<String>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct LintConfig {
   pub rules: LintRulesConfig,
   pub files: FilePatterns,
-  pub report: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
@@ -413,22 +418,6 @@ impl SerializedBenchConfig {
   }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct WorkspaceConfig {
-  pub members: Vec<WorkspaceMemberConfig>,
-}
-
-#[derive(Debug, Clone)]
-pub struct WorkspaceMemberConfig {
-  // As defined in `member` setting of the workspace deno.json.
-  pub member_name: String,
-  /// Directory path of the workspace member.
-  pub dir_path: PathBuf,
-  pub package_name: String,
-  pub package_version: String,
-  pub config_file: ConfigFile,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct BenchConfig {
   pub files: FilePatterns,
@@ -451,6 +440,53 @@ pub enum Task {
   },
 }
 
+impl Task {
+  pub fn definition(&self) -> &str {
+    match self {
+      Task::Definition(d) => d,
+      Task::Commented { definition, .. } => definition,
+    }
+  }
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigFileReadError {
+  #[error("Could not convert config file path to specifier. Path: {0}")]
+  PathToUrl(PathBuf),
+  #[error(transparent)]
+  SpecifierToFilePathError(#[from] SpecifierToFilePathError),
+  #[error("Error reading config file '{}'.", specifier)]
+  FailedReading {
+    specifier: Url,
+    #[source]
+    source: std::io::Error,
+  },
+  #[error("Unable to parse config file JSON {}.", specifier)]
+  Parse {
+    specifier: Url,
+    #[source]
+    source: Box<jsonc_parser::errors::ParseError>,
+  },
+  #[error("Failed deserializing config file '{}'.", specifier)]
+  Deserialize {
+    specifier: Url,
+    #[source]
+    source: serde_json::Error,
+  },
+  #[error("Config file JSON should be an object '{}'.", specifier)]
+  NotObject { specifier: Url },
+}
+
+impl ConfigFileReadError {
+  pub fn is_not_found(&self) -> bool {
+    if let ConfigFileReadError::FailedReading { source: ioerr, .. } = self {
+      matches!(ioerr.kind(), std::io::ErrorKind::NotFound)
+    } else {
+      false
+    }
+  }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
@@ -471,17 +507,12 @@ pub struct ConfigFileJson {
 
   pub name: Option<String>,
   pub version: Option<String>,
-  #[serde(alias = "workspaces")]
   pub workspace: Option<Vec<String>>,
+  #[serde(rename = "workspaces")]
+  pub(crate) deprecated_workspaces: Option<Vec<String>>,
   pub exports: Option<Value>,
   #[serde(default)]
   pub unstable: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ConfigFile {
-  pub specifier: Url,
-  pub json: ConfigFileJson,
 }
 
 /// collects comments attached to tasks and
@@ -581,115 +612,69 @@ fn decorate_tasks_json(
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ParseOptions {
+pub struct ConfigParseOptions {
   pub include_task_comments: bool,
 }
 
+#[allow(clippy::disallowed_types)]
+pub type ConfigFileRc = crate::sync::MaybeArc<ConfigFile>;
+
+#[derive(Clone, Debug)]
+pub struct ConfigFile {
+  pub specifier: Url,
+  pub json: ConfigFileJson,
+}
+
 impl ConfigFile {
-  pub fn discover(
-    config_flag: &ConfigFlag,
-    maybe_config_path_args: Option<Vec<PathBuf>>,
-    cwd: &Path,
-    additional_config_file_names: Option<Vec<&str>>,
-    parse_options: &ParseOptions,
-  ) -> Result<Option<ConfigFile>, AnyError> {
-    match config_flag {
-      ConfigFlag::Disabled => Ok(None),
-      ConfigFlag::Path(config_path) => {
-        let config_path = PathBuf::from(config_path);
-        let config_path = normalize_path(if config_path.is_absolute() {
-          config_path
-        } else {
-          cwd.join(config_path)
-        });
-        Ok(Some(ConfigFile::read(&config_path, parse_options)?))
-      }
-      ConfigFlag::Discover => {
-        if let Some(config_path_args) = maybe_config_path_args {
-          let mut checked = HashSet::new();
-          for f in config_path_args {
-            if let Some(cf) = Self::discover_from(
-              &f,
-              &mut checked,
-              additional_config_file_names.as_ref(),
-              parse_options,
-            )? {
-              return Ok(Some(cf));
-            }
-          }
-          // From CWD walk up to root looking for deno.json or deno.jsonc
-          Self::discover_from(
-            cwd,
-            &mut checked,
-            additional_config_file_names.as_ref(),
-            parse_options,
-          )
-        } else {
-          Ok(None)
-        }
-      }
+  /// Filenames that Deno will recognize when discovering config.
+  pub(crate) fn resolve_config_file_names<'a>(
+    additional_config_file_names: &[&'a str],
+  ) -> Cow<'a, [&'a str]> {
+    const CONFIG_FILE_NAMES: [&str; 2] = ["deno.json", "deno.jsonc"];
+    if additional_config_file_names.is_empty() {
+      Cow::Borrowed(&CONFIG_FILE_NAMES)
+    } else {
+      Cow::Owned(
+        CONFIG_FILE_NAMES
+          .iter()
+          .copied()
+          .chain(additional_config_file_names.iter().copied())
+          .collect::<Vec<_>>(),
+      )
     }
   }
 
   pub fn discover_from(
+    fs: &dyn DenoConfigFs,
     start: &Path,
-    checked: &mut HashSet<PathBuf>,
-    additional_config_file_names: Option<&Vec<&str>>,
-    parse_options: &ParseOptions,
-  ) -> Result<Option<ConfigFile>, AnyError> {
-    fn is_skippable_err(e: &AnyError) -> bool {
-      if let Some(ioerr) = e.downcast_ref::<std::io::Error>() {
-        use std::io::ErrorKind::*;
-        match ioerr.kind() {
-          InvalidInput | PermissionDenied | NotFound => {
-            // ok keep going
-            true
-          }
-          _ => {
-            const NOT_A_DIRECTORY: i32 = 20;
-            cfg!(unix) && ioerr.raw_os_error() == Some(NOT_A_DIRECTORY)
-          }
-        }
+    additional_config_file_names: &[&str],
+    parse_options: &ConfigParseOptions,
+  ) -> Result<Option<ConfigFile>, ConfigFileReadError> {
+    fn is_skippable_err(e: &ConfigFileReadError) -> bool {
+      if let ConfigFileReadError::FailedReading { source: ioerr, .. } = e {
+        is_skippable_io_error(ioerr)
       } else {
         false
       }
     }
 
-    /// Filenames that Deno will recognize when discovering config.
-    const CONFIG_FILE_NAMES: [&str; 2] = ["deno.json", "deno.jsonc"];
     let config_file_names =
-      if let Some(additional) = additional_config_file_names {
-        CONFIG_FILE_NAMES
-          .into_iter()
-          .chain(additional.to_vec())
-          .collect::<Vec<_>>()
-      } else {
-        CONFIG_FILE_NAMES.to_vec()
-      };
+      Self::resolve_config_file_names(additional_config_file_names);
 
-    // todo(dsherret): in the future, we should force all callers
-    // to provide a resolved path
-    let start = if start.is_absolute() {
-      Cow::Borrowed(start)
-    } else {
-      Cow::Owned(std::env::current_dir()?.join(start))
-    };
-
+    debug_assert!(start.is_absolute());
     for ancestor in start.ancestors() {
-      if checked.insert(ancestor.to_path_buf()) {
-        for config_filename in &config_file_names {
-          let f = ancestor.join(config_filename);
-          match ConfigFile::read(&f, parse_options) {
-            Ok(cf) => {
-              log::debug!("Config file found at '{}'", f.display());
-              return Ok(Some(cf));
-            }
-            Err(e) if is_skippable_err(&e) => {
-              // ok, keep going
-            }
-            Err(e) => {
-              return Err(e);
-            }
+      for config_filename in config_file_names.iter() {
+        let f = ancestor.join(config_filename);
+        match ConfigFile::read(fs, &f, parse_options) {
+          Ok(cf) => {
+            log::debug!("Config file found at '{}'", f.display());
+            return Ok(Some(cf));
+          }
+          Err(e) if is_skippable_err(&e) => {
+            // ok, keep going
+          }
+          Err(e) => {
+            return Err(e);
           }
         }
       }
@@ -699,44 +684,45 @@ impl ConfigFile {
   }
 
   pub fn read(
+    fs: &dyn DenoConfigFs,
     config_path: &Path,
-    parse_options: &ParseOptions,
-  ) -> Result<Self, AnyError> {
+    parse_options: &ConfigParseOptions,
+  ) -> Result<Self, ConfigFileReadError> {
     debug_assert!(config_path.is_absolute());
-
-    let specifier = Url::from_file_path(config_path).map_err(|_| {
-      anyhow!(
-        "Could not convert config file path to specifier. Path: {}",
-        config_path.display()
-      )
-    })?;
-    Self::from_specifier_and_path(specifier, config_path, parse_options)
+    let specifier = Url::from_file_path(config_path)
+      .map_err(|_| ConfigFileReadError::PathToUrl(config_path.to_path_buf()))?;
+    Self::from_specifier_and_path(fs, specifier, config_path, parse_options)
   }
 
   pub fn from_specifier(
+    fs: &dyn DenoConfigFs,
     specifier: Url,
-    parse_options: &ParseOptions,
-  ) -> Result<Self, AnyError> {
-    let config_path = specifier_to_file_path(&specifier)
-      .context("Invalid config file path.")?;
-    Self::from_specifier_and_path(specifier, &config_path, parse_options)
+    parse_options: &ConfigParseOptions,
+  ) -> Result<Self, ConfigFileReadError> {
+    let config_path = specifier_to_file_path(&specifier)?;
+    Self::from_specifier_and_path(fs, specifier, &config_path, parse_options)
   }
 
   fn from_specifier_and_path(
+    fs: &dyn DenoConfigFs,
     specifier: Url,
     config_path: &Path,
-    parse_options: &ParseOptions,
-  ) -> Result<Self, AnyError> {
-    let text = std::fs::read_to_string(config_path)
-      .with_context(|| format!("Error reading config file '{}'.", specifier))?;
+    parse_options: &ConfigParseOptions,
+  ) -> Result<Self, ConfigFileReadError> {
+    let text = fs.read_to_string(config_path).map_err(|err| {
+      ConfigFileReadError::FailedReading {
+        specifier: specifier.clone(),
+        source: err,
+      }
+    })?;
     Self::new(&text, specifier, parse_options)
   }
 
   pub fn new(
     text: &str,
     specifier: Url,
-    parse_options: &ParseOptions,
-  ) -> Result<Self, AnyError> {
+    parse_options: &ConfigParseOptions,
+  ) -> Result<Self, ConfigFileReadError> {
     let need_comments_tokens = parse_options.include_task_comments;
     let jsonc = match jsonc_parser::parse_to_ast(
       text,
@@ -771,20 +757,22 @@ impl ConfigFile {
         json!({})
       }
       Err(e) => {
-        return Err(anyhow!(
-          "Unable to parse config file JSON {} because of {}",
+        return Err(ConfigFileReadError::Parse {
           specifier,
-          e.to_string()
-        ))
+          source: Box::new(e),
+        });
       }
       _ => {
-        return Err(anyhow!(
-          "config file JSON {} should be an object",
-          specifier,
-        ))
+        return Err(ConfigFileReadError::NotObject { specifier });
       }
     };
-    let json: ConfigFileJson = serde_json::from_value(jsonc)?;
+    let json: ConfigFileJson =
+      serde_json::from_value(jsonc).map_err(|err| {
+        ConfigFileReadError::Deserialize {
+          specifier: specifier.clone(),
+          source: err,
+        }
+      })?;
 
     Ok(Self { specifier, json })
   }
@@ -936,6 +924,10 @@ impl ConfigFile {
 
   pub fn is_package(&self) -> bool {
     self.json.name.is_some() && self.json.exports.is_some()
+  }
+
+  pub fn is_workspace(&self) -> bool {
+    self.json.workspace.is_some()
   }
 
   pub fn has_unstable(&self, name: &str) -> bool {
@@ -1097,7 +1089,7 @@ impl ConfigFile {
     })
   }
 
-  pub fn to_files_config(&self) -> Result<FilePatterns, AnyError> {
+  pub fn to_exclude_files_config(&self) -> Result<FilePatterns, AnyError> {
     let exclude = self.resolve_exclude_patterns()?;
     let raw_files_config = SerializedFilesConfig {
       exclude,
@@ -1123,10 +1115,10 @@ impl ConfigFile {
     Ok(exclude)
   }
 
-  pub fn to_bench_config(&self) -> Result<Option<BenchConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.bench.clone() {
+  pub fn to_bench_config(&self) -> Result<BenchConfig, AnyError> {
+    match self.json.bench.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedBenchConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"bench\" configuration")?;
@@ -1134,20 +1126,19 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid bench config.")
       }
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid bench config.")
-      .map(Some)
+      None => Ok(BenchConfig {
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
-  pub fn to_fmt_config(&self) -> Result<Option<FmtConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.fmt.clone() {
+  pub fn to_fmt_config(&self) -> Result<FmtConfig, AnyError> {
+    match self.json.fmt.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedFmtConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"fmt\" configuration")?;
@@ -1155,24 +1146,20 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid fmt config.")
       }
-      None if !exclude_patterns.is_empty() => SerializedFmtConfig {
-        exclude: exclude_patterns,
-        ..Default::default()
-      },
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid fmt config.")
-      .map(Some)
+      None => Ok(FmtConfig {
+        options: Default::default(),
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
-  pub fn to_lint_config(&self) -> Result<Option<LintConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.lint.clone() {
+  pub fn to_lint_config(&self) -> Result<LintConfig, AnyError> {
+    match self.json.lint.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedLintConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"lint\" configuration")?;
@@ -1180,24 +1167,20 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid lint config.")
       }
-      None if !exclude_patterns.is_empty() => SerializedLintConfig {
-        exclude: exclude_patterns,
-        ..Default::default()
-      },
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid lint config.")
-      .map(Some)
+      None => Ok(LintConfig {
+        rules: Default::default(),
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
-  pub fn to_test_config(&self) -> Result<Option<TestConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.test.clone() {
+  pub fn to_test_config(&self) -> Result<TestConfig, AnyError> {
+    match self.json.test.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedTestConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"test\" configuration")?;
@@ -1205,24 +1188,19 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid test config.")
       }
-      None if !exclude_patterns.is_empty() => SerializedTestConfig {
-        exclude: exclude_patterns,
-        ..Default::default()
-      },
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid test config.")
-      .map(Some)
+      None => Ok(TestConfig {
+        files: self.to_exclude_files_config()?,
+      }),
+    }
   }
 
-  pub fn to_publish_config(&self) -> Result<Option<PublishConfig>, AnyError> {
-    let mut exclude_patterns = self.resolve_exclude_patterns()?;
-    let serialized = match self.json.publish.clone() {
+  pub(crate) fn to_publish_config(&self) -> Result<PublishConfig, AnyError> {
+    match self.json.publish.clone() {
       Some(config) => {
+        let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedPublishConfig =
           serde_json::from_value(config)
             .context("Failed to parse \"test\" configuration")?;
@@ -1230,133 +1208,12 @@ impl ConfigFile {
         exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
         serialized.exclude = exclude_patterns;
         serialized
+          .into_resolved(&self.specifier)
+          .context("Invalid publish config.")
       }
-      None if !exclude_patterns.is_empty() => SerializedPublishConfig {
-        exclude: exclude_patterns,
-        ..Default::default()
-      },
-      None => return Ok(None),
-    };
-
-    serialized
-      .into_resolved(&self.specifier)
-      .context("Invalid publish config.")
-      .map(Some)
-  }
-
-  pub fn to_workspace_config(
-    &self,
-  ) -> Result<Option<WorkspaceConfig>, AnyError> {
-    if self.specifier.scheme() != "file" {
-      return Ok(None);
-    };
-    let Ok(config_file_path) = self.specifier.to_file_path() else {
-      return Ok(None);
-    };
-
-    let Some(workspace) = &self.json.workspace else {
-      return Ok(None);
-    };
-
-    if workspace.is_empty() {
-      bail!("Workspace members cannot be empty");
-    }
-
-    let config_file_directory = config_file_path.parent().unwrap();
-    let config_file_directory_url =
-      Url::from_directory_path(config_file_directory).unwrap();
-    let mut members = Vec::with_capacity(workspace.len());
-
-    let mut all_member_paths_and_names: Vec<(PathBuf, String)> = vec![];
-
-    for member in workspace.iter() {
-      let member_path_url = config_file_directory_url.join(member)?;
-      let member_path = member_path_url.to_file_path().unwrap();
-      if !member_path_url
-        .as_str()
-        .starts_with(config_file_directory_url.as_str())
-      {
-        bail!(
-          "Workspace member '{}' is outside root configuration directory ('{}')",
-          member,
-          member_path.display()
-        );
-      }
-      all_member_paths_and_names.push((member_path.clone(), member.clone()));
-      let mut member_deno_json = member_path.as_path().join("deno.json");
-      if !member_deno_json.exists() {
-        member_deno_json = member_path.as_path().join("deno.jsonc");
-        if !member_deno_json.exists() {
-          bail!(
-            "Workspace member '{}' has no deno.json or deno.jsonc ('{}')",
-            member,
-            member_path.display()
-          );
-        }
-      }
-      let member_config_file = ConfigFile::from_specifier_and_path(
-        Url::from_file_path(&member_deno_json).unwrap(),
-        &member_deno_json,
-        &ParseOptions::default(),
-      )?;
-      let Some(package_name) = member_config_file.json.name.clone() else {
-        bail!("Missing 'name' for workspace member {}", member);
-      };
-      let Some(package_version) = member_config_file.json.version.clone() else {
-        bail!("Missing 'version' for workspace member {}", member);
-      };
-      members.push(WorkspaceMemberConfig {
-        member_name: member.to_string(),
-        dir_path: member_path,
-        package_name,
-        package_version,
-        config_file: member_config_file,
-      });
-    }
-
-    for (path, name) in &all_member_paths_and_names {
-      for (other_path, other_name) in &all_member_paths_and_names {
-        if other_path == path {
-          continue;
-        }
-
-        if path.starts_with(other_path) {
-          bail!("Workspace member '{}' is nested within other workspace member '{}'", name, other_name);
-        }
-      }
-    }
-
-    Ok(Some(WorkspaceConfig { members }))
-  }
-
-  /// Converts the configuration file into a list of workspace members.
-  pub fn to_workspace_members(
-    &self,
-  ) -> Result<Vec<WorkspaceMemberConfig>, AnyError> {
-    let maybe_workspace_config = self.to_workspace_config()?;
-    match maybe_workspace_config {
-      Some(workspace_config) => Ok(workspace_config.members),
-      None => {
-        let package_name = match self.json.name.clone() {
-          Some(name) => name,
-          None => bail!("{} is missing 'name' field", self.specifier),
-        };
-        Ok(vec![WorkspaceMemberConfig {
-          member_name: package_name.clone(),
-          package_name,
-          package_version: match self.json.version.clone() {
-            Some(version) => version,
-            None => {
-              bail!("{} is missing 'version' field", self.specifier)
-            }
-          },
-          dir_path: specifier_to_file_path(&self.specifier)?
-            .parent()
-            .unwrap()
-            .to_path_buf(),
-          config_file: self.clone(),
-        }])
-      }
+      None => Ok(PublishConfig {
+        files: self.to_exclude_files_config()?,
+      }),
     }
   }
 
@@ -1394,18 +1251,13 @@ impl ConfigFile {
   /// If the configuration file contains "extra" modules (like TypeScript
   /// `"types"`) options, return them as imports to be added to a module graph.
   pub fn to_maybe_imports(&self) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
-    let mut imports = Vec::new();
-    let compiler_options_value =
-      if let Some(value) = self.json.compiler_options.as_ref() {
-        value
-      } else {
-        return Ok(Vec::new());
-      };
-    let compiler_options: CompilerOptions =
-      serde_json::from_value(compiler_options_value.clone())?;
-    if let Some(types) = compiler_options.types {
-      imports.extend(types);
-    }
+    let Some(compiler_options_value) = self.json.compiler_options.as_ref() else {
+      return Ok(Vec::new());
+    };
+    let Some(types) = compiler_options_value.get("types") else {
+      return Ok(Vec::new());
+    };
+    let imports: Vec<String> = serde_json::from_value(types.clone())?;
     if !imports.is_empty() {
       let referrer = self.specifier.clone();
       Ok(vec![(referrer, imports)])
@@ -1481,8 +1333,14 @@ impl ConfigFile {
 
   pub fn to_lock_config(&self) -> Result<Option<LockConfig>, AnyError> {
     if let Some(config) = self.json.lock.clone() {
-      let lock_config: LockConfig = serde_json::from_value(config)
+      let mut lock_config: LockConfig = serde_json::from_value(config)
         .context("Failed to parse \"lock\" configuration")?;
+      if let LockConfig::PathBuf(path) = &mut lock_config {
+        *path = specifier_to_file_path(&self.specifier)?
+          .parent()
+          .unwrap()
+          .join(&path);
+      }
       Ok(Some(lock_config))
     } else {
       Ok(None)
@@ -1492,12 +1350,7 @@ impl ConfigFile {
   pub fn resolve_lockfile_path(&self) -> Result<Option<PathBuf>, AnyError> {
     match self.to_lock_config()? {
       Some(LockConfig::Bool(lock)) if !lock => Ok(None),
-      Some(LockConfig::PathBuf(lock)) => Ok(Some(
-        specifier_to_file_path(&self.specifier)?
-          .parent()
-          .unwrap()
-          .join(lock),
-      )),
+      Some(LockConfig::PathBuf(lock)) => Ok(Some(lock)),
       _ => {
         let mut path = specifier_to_file_path(&self.specifier)?;
         path.set_file_name("deno.lock");
@@ -1551,6 +1404,7 @@ pub enum TsConfigType {
   Emit,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsConfigForEmit {
   pub ts_config: TsConfig,
   pub maybe_ignored_options: Option<IgnoredCompilerOptions>,
@@ -1628,6 +1482,7 @@ pub fn get_ts_config_for_emit(
 
 #[cfg(test)]
 mod tests {
+  use crate::fs::RealDenoConfigFs;
   use crate::glob::PathOrPattern;
   use crate::util::specifier_to_file_path;
 
@@ -1655,26 +1510,33 @@ mod tests {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"))).join("testdata")
   }
 
-  fn unpack_object<T>(result: Result<Option<T>, AnyError>, name: &str) -> T {
+  fn unpack_object<T>(result: Result<T, AnyError>, name: &str) -> T {
     result
       .unwrap_or_else(|err| panic!("error parsing {name} object but got {err}"))
-      .unwrap_or_else(|| panic!("{name} object should be defined"))
   }
 
   #[test]
   fn read_config_file_absolute() {
     let path = testdata_path().join("module_graph/tsconfig.json");
-    let config_file =
-      ConfigFile::read(path.as_path(), &ParseOptions::default()).unwrap();
+    let config_file = ConfigFile::read(
+      &RealDenoConfigFs,
+      path.as_path(),
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     assert!(config_file.json.compiler_options.is_some());
   }
 
   #[test]
   fn include_config_path_on_error() {
     let path = testdata_path().join("404.json");
-    let error = ConfigFile::read(path.as_path(), &ParseOptions::default())
-      .err()
-      .unwrap();
+    let error = ConfigFile::read(
+      &RealDenoConfigFs,
+      path.as_path(),
+      &ConfigParseOptions::default(),
+    )
+    .err()
+    .unwrap();
     assert!(error.to_string().contains("404.json"));
   }
 
@@ -1714,7 +1576,7 @@ mod tests {
     let config_file = ConfigFile::new(
       config_text,
       config_specifier.clone(),
-      &ParseOptions::default(),
+      &ConfigParseOptions::default(),
     )
     .unwrap();
     let (options_value, ignored) = config_file.to_compiler_options().unwrap();
@@ -1748,7 +1610,6 @@ mod tests {
           exclude: None,
           tags: Some(vec!["recommended".to_string()]),
         },
-        report: None,
       }
     );
     assert_eq!(
@@ -1813,9 +1674,12 @@ mod tests {
     }"#;
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let config_dir_path = specifier_to_file_path(&config_dir).unwrap();
 
     let lint_files = unpack_object(config_file.to_lint_config(), "lint").files;
@@ -1883,9 +1747,12 @@ mod tests {
     }"#;
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
 
     let lint_include = unpack_object(config_file.to_lint_config(), "lint")
       .files
@@ -1936,9 +1803,12 @@ mod tests {
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
 
     let err = config_file.to_fmt_config().err().unwrap();
     assert_eq!(
@@ -1959,9 +1829,12 @@ Caused by:
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
 
     let err = config_file.to_lint_config().err().unwrap();
     assert_eq!(
@@ -1995,13 +1868,13 @@ Caused by:
     let config_file_both = ConfigFile::new(
       config_text_both,
       config_specifier.clone(),
-      &ParseOptions::default(),
+      &ConfigParseOptions::default(),
     )
     .unwrap();
     let config_file_deprecated = ConfigFile::new(
       config_text_deprecated,
       config_specifier,
-      &ParseOptions::default(),
+      &ConfigParseOptions::default(),
     )
     .unwrap();
 
@@ -2020,9 +1893,12 @@ Caused by:
   fn test_parse_config_with_empty_file() {
     let config_text = "";
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
   }
@@ -2031,9 +1907,12 @@ Caused by:
   fn test_parse_config_with_commented_file() {
     let config_text = r#"//{"foo":"bar"}"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
   }
@@ -2048,14 +1927,17 @@ Caused by:
       "bench": {}
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
 
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
 
-    let test_config = config_file.to_test_config().unwrap().unwrap();
+    let test_config = config_file.to_test_config().unwrap();
     assert_eq!(test_config.files.include, None);
     assert_eq!(
       test_config.files.exclude,
@@ -2066,7 +1948,7 @@ Caused by:
       .unwrap()
     );
 
-    let bench_config = config_file.to_bench_config().unwrap().unwrap();
+    let bench_config = config_file.to_bench_config().unwrap();
     assert_eq!(
       bench_config.files.exclude,
       PathOrPatternSet::from_absolute_paths(&["/deno/foo/".to_string()])
@@ -2083,14 +1965,17 @@ Caused by:
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
 
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
 
-    let publish_config = config_file.to_publish_config().unwrap().unwrap();
+    let publish_config = config_file.to_publish_config().unwrap();
     assert_eq!(publish_config.files.include, None);
     assert_eq!(
       publish_config.files.exclude,
@@ -2108,14 +1993,17 @@ Caused by:
       "exclude": ["npm/"]
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
 
     let (options_value, _) = config_file.to_compiler_options().unwrap();
     assert!(options_value.is_object());
 
-    let files_config = config_file.to_files_config().unwrap();
+    let files_config = config_file.to_exclude_files_config().unwrap();
     assert_eq!(files_config.include, None);
     assert_eq!(
       files_config.exclude,
@@ -2123,7 +2011,7 @@ Caused by:
         .unwrap()
     );
 
-    let lint_config = config_file.to_lint_config().unwrap().unwrap();
+    let lint_config = config_file.to_lint_config().unwrap();
     assert_eq!(lint_config.files.include, None);
     assert_eq!(
       lint_config.files.exclude,
@@ -2131,7 +2019,7 @@ Caused by:
         .unwrap()
     );
 
-    let fmt_config = config_file.to_fmt_config().unwrap().unwrap();
+    let fmt_config = config_file.to_fmt_config().unwrap();
     assert_eq!(fmt_config.files.include, None);
     assert_eq!(
       fmt_config.files.exclude,
@@ -2148,7 +2036,7 @@ Caused by:
     assert!(ConfigFile::new(
       config_text,
       config_specifier,
-      &ParseOptions::default()
+      &ConfigParseOptions::default()
     )
     .is_err());
   }
@@ -2161,7 +2049,7 @@ Caused by:
     assert!(ConfigFile::new(
       config_text,
       config_specifier,
-      &ParseOptions::default()
+      &ConfigParseOptions::default()
     )
     .is_err());
   }
@@ -2170,9 +2058,12 @@ Caused by:
   fn test_jsx_invalid_setting() {
     let config_text = r#"{ "compilerOptions": { "jsx": "preserve" } }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     assert_eq!(
       config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
       concat!(
@@ -2191,7 +2082,7 @@ Caused by:
       let config = ConfigFile::new(
         config_text,
         config_specifier.clone(),
-        &ParseOptions::default(),
+        &ConfigParseOptions::default(),
       )
       .unwrap();
       assert_eq!(
@@ -2207,7 +2098,7 @@ Caused by:
       let config = ConfigFile::new(
         config_text,
         config_specifier,
-        &ParseOptions::default(),
+        &ConfigParseOptions::default(),
       )
       .unwrap();
       assert_eq!(
@@ -2229,7 +2120,7 @@ Caused by:
       let config = ConfigFile::new(
         config_text,
         config_specifier.clone(),
-        &ParseOptions::default(),
+        &ConfigParseOptions::default(),
       )
       .unwrap();
       assert_eq!(
@@ -2245,7 +2136,7 @@ Caused by:
       let config = ConfigFile::new(
         config_text,
         config_specifier,
-        &ParseOptions::default(),
+        &ConfigParseOptions::default(),
       )
       .unwrap();
       assert_eq!(
@@ -2265,7 +2156,7 @@ Caused by:
     assert!(ConfigFile::new(
       config_text,
       config_specifier,
-      &ParseOptions::default()
+      &ConfigParseOptions::default()
     )
     .is_ok());
   }
@@ -2277,7 +2168,7 @@ Caused by:
     assert!(ConfigFile::new(
       config_text,
       config_specifier,
-      &ParseOptions::default()
+      &ConfigParseOptions::default()
     )
     .is_ok());
   }
@@ -2287,18 +2178,15 @@ Caused by:
     // testdata/fmt/deno.jsonc exists
     let testdata = testdata_path();
     let c_md = testdata.join("fmt/with_config/subdir/c.md");
-    let mut checked = HashSet::new();
     let config_file = ConfigFile::discover_from(
+      &RealDenoConfigFs,
       &c_md,
-      &mut checked,
-      None,
-      &ParseOptions::default(),
+      &[],
+      &ConfigParseOptions::default(),
     )
     .unwrap()
     .unwrap();
-    assert!(checked.contains(c_md.parent().unwrap()));
-    assert!(!checked.contains(testdata.as_path()));
-    let fmt_config = config_file.to_fmt_config().unwrap().unwrap();
+    let fmt_config = config_file.to_fmt_config().unwrap();
     let expected_exclude =
       Url::from_file_path(testdata.join("fmt/with_config/subdir/b.ts"))
         .unwrap()
@@ -2308,38 +2196,20 @@ Caused by:
       fmt_config.files.exclude,
       PathOrPatternSet::new(vec![PathOrPattern::Path(expected_exclude)])
     );
-
-    // Now add all ancestors of testdata to checked.
-    for a in testdata.as_path().ancestors() {
-      checked.insert(a.to_path_buf());
-    }
-
-    // If we call discover_from again starting at testdata, we ought to get None.
-    assert!(ConfigFile::discover_from(
-      testdata.as_path(),
-      &mut checked,
-      None,
-      &ParseOptions::default()
-    )
-    .unwrap()
-    .is_none());
   }
 
   #[test]
   fn discover_from_additional_config_file_names_success() {
     let testdata = testdata_path();
     let dir = testdata.join("additional_files/");
-    let mut checked = HashSet::new();
     let config_file = ConfigFile::discover_from(
+      &RealDenoConfigFs,
       &dir,
-      &mut checked,
-      Some(&vec!["jsr.json"]),
-      &ParseOptions::default(),
+      &["jsr.json"],
+      &ConfigParseOptions::default(),
     )
     .unwrap()
     .unwrap();
-    assert!(checked.contains(&dir));
-    assert!(!checked.contains(testdata.as_path()));
     assert_eq!(config_file.json.name.unwrap(), "@foo/bar");
   }
 
@@ -2347,12 +2217,11 @@ Caused by:
   fn discover_from_malformed() {
     let testdata = testdata_path();
     let d = testdata.join("malformed_config/");
-    let mut checked = HashSet::new();
     let err = ConfigFile::discover_from(
+      &RealDenoConfigFs,
       d.as_path(),
-      &mut checked,
-      None,
-      &ParseOptions::default(),
+      &[],
+      &ConfigParseOptions::default(),
     )
     .unwrap_err();
     assert!(err.to_string().contains("Unable to parse config file"));
@@ -2407,9 +2276,12 @@ Caused by:
   fn run_task_error_test(config_text: &str, expected_error: &str) {
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     assert_eq!(
       config_file.resolve_tasks_config().unwrap_err().to_string(),
       expected_error,
@@ -2427,7 +2299,7 @@ Caused by:
     let config_file = ConfigFile::new(
       "{}",
       Url::parse("file:///root/deno.json").unwrap(),
-      &ParseOptions::default(),
+      &ConfigParseOptions::default(),
     )
     .unwrap();
     let lockfile_path = config_file.resolve_lockfile_path().unwrap();
@@ -2443,7 +2315,7 @@ Caused by:
       let config_file = ConfigFile::new(
         config_text,
         config_specifier,
-        &ParseOptions::default(),
+        &ConfigParseOptions::default(),
       )
       .unwrap();
       config_file.to_exports_config().unwrap()
@@ -2486,7 +2358,7 @@ Caused by:
       let config_file = ConfigFile::new(
         config_text,
         config_specifier,
-        &ParseOptions::default(),
+        &ConfigParseOptions::default(),
       )
       .unwrap();
       assert_eq!(
@@ -2591,7 +2463,7 @@ Caused by:
       let config_file = ConfigFile::new(
         config_text,
         config_specifier,
-        &ParseOptions::default(),
+        &ConfigParseOptions::default(),
       )
       .unwrap();
       config_file
@@ -2627,127 +2499,13 @@ Caused by:
   }
 
   #[test]
-  fn test_empty_workspaces() {
-    let config_text = r#"{
-      "workspaces": [],
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
-
-    let workspace_config_err = config_file.to_workspace_config().unwrap_err();
-    assert_eq!(
-      workspace_config_err.to_string(),
-      "Workspace members cannot be empty"
-    );
-  }
-
-  #[test]
-  fn test_workspaces_outside_root_config_dir() {
-    let config_text = r#"{
-      "workspaces": ["../a"],
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
-
-    let workspace_config_err = config_file.to_workspace_config().unwrap_err();
-    assert_contains!(
-      workspace_config_err.to_string(),
-      "Workspace member '../a' is outside root configuration directory"
-    );
-  }
-
-  #[test]
-  fn test_workspaces_json_jsonc() {
-    let temp_dir = tempfile::TempDir::new().unwrap();
-    let config_text = r#"{
-      "workspaces": [
-        "./a",
-        "./b",
-      ],
-    }"#;
-    let config_text_a = r#"{
-      "name": "a",
-      "version": "0.1.0"
-    }"#;
-    let config_text_b = r#"{
-      "name": "b",
-      "version": "0.2.0"
-    }"#;
-
-    let temp_dir_path = temp_dir.path();
-    std::fs::write(temp_dir_path.join("deno.json"), config_text).unwrap();
-    std::fs::create_dir(temp_dir_path.join("a")).unwrap();
-    std::fs::write(temp_dir_path.join("a/deno.json"), config_text_a).unwrap();
-    std::fs::create_dir(temp_dir_path.join("b")).unwrap();
-    std::fs::write(temp_dir_path.join("b/deno.jsonc"), config_text_b).unwrap();
-
-    let config_specifier =
-      Url::from_file_path(temp_dir_path.join("deno.json")).unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
-
-    let workspace_config = config_file.to_workspace_config().unwrap().unwrap();
-    assert_eq!(workspace_config.members.len(), 2);
-    assert_eq!(workspace_config.members[0].package_version, "0.1.0");
-    assert_eq!(workspace_config.members[1].package_version, "0.2.0");
-  }
-
-  #[test]
-  fn test_to_workspace_members_no_name() {
-    let config_text = r#"{
-      "version": "1.0.0"
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
-
-    let err = config_file.to_workspace_members().err().unwrap();
-    assert!(err.to_string().ends_with("is missing 'name' field"));
-  }
-
-  #[test]
-  fn test_to_workspace_members_no_version() {
-    let config_text = r#"{
-      "name": "@pkg/pkg"
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
-
-    let err = config_file.to_workspace_members().err().unwrap();
-    assert!(err.to_string().ends_with("is missing 'version' field"));
-  }
-
-  #[test]
-  fn test_to_workspace_members_single_config() {
-    let config_text = r#"{
-      "name": "@pkg/pkg"
-      "version": "1.0.0",
-    }"#;
-    let config_specifier = root_url().join("tsconfig.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
-
-    let members = config_file.to_workspace_members().unwrap();
-    assert_eq!(members.len(), 1);
-  }
-
-  #[test]
   fn test_is_package() {
     fn get_for_config(config_text: &str) -> bool {
       let config_specifier = root_url().join("tsconfig.json").unwrap();
       let config_file = ConfigFile::new(
         config_text,
         config_specifier,
-        &ParseOptions::default(),
+        &ConfigParseOptions::default(),
       )
       .unwrap();
       config_file.is_package()
@@ -2794,9 +2552,12 @@ Caused by:
       }
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let result = config_file.to_import_map_from_imports().unwrap();
 
     assert_eq!(
@@ -2817,9 +2578,12 @@ Caused by:
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let result = config_file
       .to_import_map(|_url| async { unreachable!() })
       .await
@@ -2848,9 +2612,12 @@ Caused by:
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let result = config_file
       .to_import_map(|_url| async { unreachable!() })
       .await
@@ -2882,9 +2649,12 @@ Caused by:
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let result = config_file
       .to_import_map(|url| {
         assert_eq!(url, &root_url().join("import_map.json").unwrap());
@@ -2918,9 +2688,12 @@ Caused by:
       "importMap": "https://deno.land/import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let result = config_file
       .to_import_map(|url| {
         assert_eq!(url.as_str(), "https://deno.land/import_map.json");
@@ -2955,9 +2728,12 @@ Caused by:
     }"#;
     let config_specifier =
       Url::parse("https://deno.land/import_map.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     let result = config_file
       .to_import_map(|url| {
         assert_eq!(url.as_str(), "https://deno.land/import_map.json");
@@ -3017,7 +2793,7 @@ Caused by:
     let config = ConfigFile::new(
       config_text,
       root_url().join("deno.jsonc").unwrap(),
-      &ParseOptions {
+      &ConfigParseOptions {
         include_task_comments: true,
       },
     )
@@ -3075,9 +2851,12 @@ Caused by:
   fn resolve_import_map_specifier_parent() {
     let config_text = r#"{ "importMap": "../import_map.json" }"#;
     let config_specifier = Url::parse("file:///deno/sub/deno.json").unwrap();
-    let config_file =
-      ConfigFile::new(config_text, config_specifier, &ParseOptions::default())
-        .unwrap();
+    let config_file = ConfigFile::new(
+      config_text,
+      config_specifier,
+      &ConfigParseOptions::default(),
+    )
+    .unwrap();
     assert_eq!(
       config_file
         .to_import_map_specifier()

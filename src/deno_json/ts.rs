@@ -1,4 +1,4 @@
-// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
 use anyhow::Error as AnyError;
 use serde::Deserialize;
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fmt;
 use url::Url;
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct JsxImportSourceConfig {
   pub default_specifier: Option<String>,
   pub default_types_specifier: Option<String>,
@@ -205,7 +205,7 @@ pub fn parse_compiler_options(
 }
 
 /// A structure for managing the configuration of TypeScript
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsConfig(pub Value);
 
 impl TsConfig {
@@ -262,6 +262,16 @@ impl TsConfig {
   }
 }
 
+impl Serialize for TsConfig {
+  /// Serializes inner hash map which is ordered by the key
+  fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+  where
+    S: Serializer,
+  {
+    Serialize::serialize(&self.0, serializer)
+  }
+}
+
 /// A function that works like JavaScript's `Object.assign()`.
 fn json_merge(a: &mut Value, b: &Value) {
   match (a, b) {
@@ -273,16 +283,6 @@ fn json_merge(a: &mut Value, b: &Value) {
     (a, b) => {
       *a = b.clone();
     }
-  }
-}
-
-impl Serialize for TsConfig {
-  /// Serializes inner hash map which is ordered by the key
-  fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-  where
-    S: Serializer,
-  {
-    Serialize::serialize(&self.0, serializer)
   }
 }
 

@@ -29,8 +29,14 @@ pub enum PackageJsonDepValueParseError {
   Unsupported { scheme: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PackageJsonDepValue {
+  Req(PackageReq),
+  Workspace(VersionReq),
+}
+
 pub type PackageJsonDeps =
-  IndexMap<String, Result<PackageReq, PackageJsonDepValueParseError>>;
+  IndexMap<String, Result<PackageJsonDepValue, PackageJsonDepValueParseError>>;
 
 #[derive(Debug, Error)]
 pub enum PackageJsonLoadError {
@@ -85,11 +91,7 @@ impl PackageJson {
         Ok(file_text) => {
           let pkg_json =
             PackageJson::load_from_string(path.to_path_buf(), file_text)?;
-          let pkg_json = {
-            // ok for constructing
-            #[allow(clippy::disallowed_types)]
-            crate::sync::MaybeArc::new(pkg_json)
-          };
+          let pkg_json = crate::sync::new_rc(pkg_json);
           if let Some(cache) = maybe_cache {
             cache.set(path.to_path_buf(), pkg_json.clone());
           }
@@ -271,6 +273,10 @@ impl PackageJson {
     Url::from_file_path(&self.path).unwrap()
   }
 
+  pub fn dir_path(&self) -> &Path {
+    self.path.parent().unwrap()
+  }
+
   pub fn main(&self, referrer_kind: NodeModuleKind) -> Option<&str> {
     let main = if referrer_kind == NodeModuleKind::Esm && self.typ == "module" {
       self.module.as_ref().or(self.main.as_ref())
@@ -280,8 +286,8 @@ impl PackageJson {
     main.map(|m| m.trim()).filter(|m| !m.is_empty())
   }
 
-  /// Gets an application level package.json's npm package requirements.
-  pub fn resolve_local_package_json_version_reqs(&self) -> PackageJsonDeps {
+  /// Resolve the package.json's dependencies.
+  pub fn resolve_local_package_json_deps(&self) -> PackageJsonDeps {
     /// Gets the name and raw version constraint for a registry info or
     /// package.json dependency entry taking into account npm package aliases.
     fn parse_dep_entry_name_and_raw_version<'a>(
@@ -307,9 +313,12 @@ impl PackageJson {
     fn parse_entry(
       key: &str,
       value: &str,
-    ) -> Result<PackageReq, PackageJsonDepValueParseError> {
-      if value.starts_with("workspace:")
-        || value.starts_with("file:")
+    ) -> Result<PackageJsonDepValue, PackageJsonDepValueParseError> {
+      if let Some(workspace_key) = value.strip_prefix("workspace:") {
+        let version_req = VersionReq::parse_from_npm(workspace_key)?;
+        return Ok(PackageJsonDepValue::Workspace(version_req));
+      }
+      if value.starts_with("file:")
         || value.starts_with("git:")
         || value.starts_with("http:")
         || value.starts_with("https:")
@@ -322,10 +331,10 @@ impl PackageJson {
         parse_dep_entry_name_and_raw_version(key, value);
       let result = VersionReq::parse_from_npm(version_req);
       match result {
-        Ok(version_req) => Ok(PackageReq {
+        Ok(version_req) => Ok(PackageJsonDepValue::Req(PackageReq {
           name: name.to_string(),
           version_req,
-        }),
+        })),
         Err(err) => Err(PackageJsonDepValueParseError::VersionReq(err)),
       }
     }
@@ -401,9 +410,9 @@ mod test {
 
   fn get_local_package_json_version_reqs_for_tests(
     package_json: &PackageJson,
-  ) -> IndexMap<String, Result<PackageReq, String>> {
+  ) -> IndexMap<String, Result<PackageJsonDepValue, String>> {
     package_json
-      .resolve_local_package_json_version_reqs()
+      .resolve_local_package_json_deps()
       .into_iter()
       .map(|(k, v)| {
         (
@@ -439,15 +448,21 @@ mod test {
       IndexMap::from([
         (
           "test".to_string(),
-          Ok(PackageReq::from_str("test@^1.2").unwrap())
+          Ok(PackageJsonDepValue::Req(
+            PackageReq::from_str("test@^1.2").unwrap()
+          ))
         ),
         (
           "other".to_string(),
-          Ok(PackageReq::from_str("package@~1.3").unwrap())
+          Ok(PackageJsonDepValue::Req(
+            PackageReq::from_str("package@~1.3").unwrap()
+          ))
         ),
         (
           "package_b".to_string(),
-          Ok(PackageReq::from_str("package_b@~2.2").unwrap())
+          Ok(PackageJsonDepValue::Req(
+            PackageReq::from_str("package_b@~2.2").unwrap()
+          ))
         )
       ])
     );
@@ -497,10 +512,10 @@ mod test {
       map,
       IndexMap::from([(
         "test".to_string(),
-        Ok(PackageReq {
+        Ok(PackageJsonDepValue::Req(PackageReq {
           name: "test".to_string(),
           version_req: VersionReq::parse_from_npm("1.x - 1.3").unwrap()
-        })
+        }))
       )])
     );
   }
@@ -542,11 +557,15 @@ mod test {
         ),
         (
           "test".to_string(),
-          Ok(PackageReq::from_str("test@1").unwrap())
+          Ok(PackageJsonDepValue::Req(
+            PackageReq::from_str("test@1").unwrap()
+          ))
         ),
         (
           "work-test".to_string(),
-          Err("Not implemented scheme 'workspace'".to_string()),
+          Ok(PackageJsonDepValue::Workspace(
+            VersionReq::parse_from_npm("1.1.1").unwrap()
+          ))
         )
       ])
     );
