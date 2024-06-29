@@ -2611,10 +2611,7 @@ mod test {
     );
     assert_eq!(workspace.diagnostics(), vec![]);
     let jsr_pkgs = workspace.jsr_packages();
-    let names = jsr_pkgs
-      .iter()
-      .map(|p| p.name.as_str())
-      .collect::<Vec<_>>();
+    let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/root", "@scope/pkg",]);
   }
 
@@ -2632,10 +2629,7 @@ mod test {
     let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
     assert_eq!(workspace.diagnostics(), vec![]);
     let jsr_pkgs = workspace.jsr_packages_for_publish();
-    let names = jsr_pkgs
-      .iter()
-      .map(|p| p.name.as_str())
-      .collect::<Vec<_>>();
+    let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
   }
 
@@ -2681,10 +2675,7 @@ mod test {
       let workspace = workspace_at_start_dir(&fs, &root_dir());
       assert_eq!(workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace.jsr_packages_for_publish();
-      let names = jsr_pkgs
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect::<Vec<_>>();
+      let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/a", "@scope/b"]);
     }
     // member
@@ -2692,10 +2683,7 @@ mod test {
       let workspace = workspace_at_start_dir(&fs, &root_dir().join("a"));
       assert_eq!(workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace.jsr_packages_for_publish();
-      let names = jsr_pkgs
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect::<Vec<_>>();
+      let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/a"]);
     }
     // member, not a package
@@ -2756,10 +2744,7 @@ mod test {
       let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
       assert_eq!(workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace.jsr_packages_for_publish();
-      let names = jsr_pkgs
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect::<Vec<_>>();
+      let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/pkg"]);
     }
     // at the root
@@ -2767,10 +2752,7 @@ mod test {
       let workspace = workspace_at_start_dir(&fs, &root_dir());
       assert_eq!(workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace.jsr_packages_for_publish();
-      let names = jsr_pkgs
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect::<Vec<_>>();
+      let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       // Only returns the root package because it allows for publishing
       // this individually. If someone wants the behaviour of publishing
       // the entire workspace then they should move each package to a descendant
@@ -2801,10 +2783,7 @@ mod test {
     let workspace = workspace_at_start_dir(&fs, &root_dir());
     assert_eq!(workspace.diagnostics(), vec![]);
     let jsr_pkgs = workspace.jsr_packages_for_publish();
-    let names = jsr_pkgs
-      .iter()
-      .map(|p| p.name.as_str())
-      .collect::<Vec<_>>();
+    let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
   }
 
