@@ -177,8 +177,7 @@ pub fn discover_workspace_config_files(
               .into(),
             )
           })?;
-        if member_dir_url == root_config_file_directory_url && raw_member != "."
-        {
+        if member_dir_url == root_config_file_directory_url {
           return Err(
             ResolveWorkspaceMemberError::InvalidSelfReference {
               member: raw_member.to_string(),

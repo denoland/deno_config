@@ -152,7 +152,7 @@ pub enum ResolveWorkspaceMemberError {
   NonDescendant { workspace_url: Url, member_url: Url },
   #[error("Cannot specify a workspace member twice ('{}').", .member)]
   Duplicate { member: String },
-  #[error("A workspace config file can only reference itself as a package by specifying \".\" and not \"{}\".", .member)]
+  #[error("Remove the reference to the current config file (\"{}\") in \"workspaces\".", .member)]
   InvalidSelfReference { member: String },
 }
 
@@ -393,30 +393,6 @@ impl Workspace {
   }
 
   pub fn diagnostics(&self) -> Vec<WorkspaceDiagnostic> {
-    fn check_root_diagnostics(
-      root_config: &ConfigFile,
-      diagnostics: &mut Vec<WorkspaceDiagnostic>,
-    ) {
-      if root_config.json.name.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: root_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::MemberOnlyOption("name"),
-        });
-      }
-      if root_config.json.version.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: root_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::MemberOnlyOption("version"),
-        });
-      }
-      if root_config.json.exports.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: root_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::MemberOnlyOption("exports"),
-        });
-      }
-    }
-
     fn check_member_diagnostics<'a>(
       member_config: &'a ConfigFile,
       diagnostics: &mut Vec<WorkspaceDiagnostic>,
@@ -516,26 +492,12 @@ impl Workspace {
     let is_deno_workspace = root_deno_json
       .map(|d| d.json.workspace.is_some())
       .unwrap_or(false);
-    let is_workspace_self_reference = root_deno_json
-      .map(|d| {
-        d.json
-          .workspace
-          .as_ref()
-          .map(|w| w.iter().any(|w| w == "."))
-          .unwrap_or(false)
-      })
-      .unwrap_or(false);
     let mut seen_names = HashMap::with_capacity(self.config_folders.len());
     for (url, folder) in &self.config_folders {
       if let Some(config) = &folder.deno_json {
         let is_root = url == &self.root_dir;
-        let is_root_and_self_reference = is_root && is_workspace_self_reference;
-        if is_deno_workspace && !is_root_and_self_reference {
-          if is_root {
-            check_root_diagnostics(config, &mut diagnostics);
-          } else {
-            check_member_diagnostics(config, &mut diagnostics, &mut seen_names);
-          }
+        if is_deno_workspace && !is_root {
+          check_member_diagnostics(config, &mut diagnostics, &mut seen_names);
         }
 
         check_all_configs(config, &mut diagnostics);
@@ -1581,28 +1543,30 @@ mod test {
 
   #[test]
   fn test_workspace_invalid_self_reference() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
-      root_dir().join("sub_dir").join("deno.json"),
-      json!({
-        "workspace": ["../sub_dir"],
-      }),
-    );
+    for reference in [".", "../sub_dir"] {
+      let mut fs = TestFileSystem::default();
+      fs.insert_json(
+        root_dir().join("sub_dir").join("deno.json"),
+        json!({
+          "workspace": [reference],
+        }),
+      );
 
-    let workspace_config_err = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir().join("sub_dir")),
-      &WorkspaceDiscoverOptions {
-        fs: &fs,
-        ..Default::default()
-      },
-    )
-    .err()
-    .unwrap();
+      let workspace_config_err = Workspace::discover(
+        WorkspaceDiscoverStart::Dir(&root_dir().join("sub_dir")),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          ..Default::default()
+        },
+      )
+      .err()
+      .unwrap();
 
-    assert_contains!(
-      workspace_config_err.to_string(),
-      "A workspace config file can only reference itself as a package by specifying \".\" and not \"../sub_dir\"."
-    );
+      assert_contains!(
+        workspace_config_err.to_string(),
+        &format!("Remove the reference to the current config file (\"{reference}\") in \"workspaces\".")
+      );
+    }
   }
 
   #[test]
@@ -2429,26 +2393,8 @@ mod test {
       }),
       json!({}),
     );
-    assert_eq!(
-      workspace.diagnostics(),
-      vec![
-        WorkspaceDiagnostic {
-          kind: WorkspaceDiagnosticKind::MemberOnlyOption("name"),
-          config_url: Url::from_file_path(root_dir().join("deno.json"))
-            .unwrap(),
-        },
-        WorkspaceDiagnostic {
-          kind: WorkspaceDiagnosticKind::MemberOnlyOption("version"),
-          config_url: Url::from_file_path(root_dir().join("deno.json"))
-            .unwrap(),
-        },
-        WorkspaceDiagnostic {
-          kind: WorkspaceDiagnosticKind::MemberOnlyOption("exports"),
-          config_url: Url::from_file_path(root_dir().join("deno.json"))
-            .unwrap(),
-        }
-      ]
-    );
+    // this is fine because we can tell it's a package by it having name and exports fields
+    assert_eq!(workspace.diagnostics(), vec![]);
   }
 
   #[test]
@@ -2580,42 +2526,6 @@ mod test {
   }
 
   #[test]
-  fn test_workspace_self_reference() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
-      root_dir().join("deno.json"),
-      json!({
-        "name": "@scope/root",
-        "version": "1.0.0",
-        "exports": "./main.ts",
-        "workspace": [".", "./member"]
-      }),
-    );
-    fs.insert_json(
-      root_dir().join("member/deno.json"),
-      json!({
-        "name": "@scope/pkg",
-        "version": "1.0.0",
-        "exports": "./main.ts",
-      }),
-    );
-    let workspace = new_rc(
-      Workspace::discover(
-        WorkspaceDiscoverStart::Dir(&root_dir().join("member")),
-        &WorkspaceDiscoverOptions {
-          fs: &fs,
-          ..Default::default()
-        },
-      )
-      .unwrap(),
-    );
-    assert_eq!(workspace.diagnostics(), vec![]);
-    let jsr_pkgs = workspace.jsr_packages();
-    let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
-    assert_eq!(names, vec!["@scope/root", "@scope/pkg",]);
-  }
-
-  #[test]
   fn test_packages_for_publish_non_workspace() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
@@ -2720,7 +2630,7 @@ mod test {
   }
 
   #[test]
-  fn test_packages_for_publish_self_reference() {
+  fn test_packages_for_publish_root_is_package() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -2728,7 +2638,7 @@ mod test {
         "name": "@scope/root",
         "version": "1.0.0",
         "exports": "./main.ts",
-        "workspace": [".", "./member"]
+        "workspace": ["./member"]
       }),
     );
     fs.insert_json(
@@ -2767,7 +2677,7 @@ mod test {
     fs.insert_json(
       root_dir().join("deno.json"),
       json!({
-        "workspace": [".", "./member"]
+        "workspace": ["./member"]
       }),
     );
     fs.insert_json(
