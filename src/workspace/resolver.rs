@@ -45,6 +45,10 @@ pub enum WorkspaceResolverCreateError {
   },
   #[error(transparent)]
   ImportMap(#[from] import_map::ImportMapError),
+  #[error(
+    "Specifying an import map in a workspace via CLI flags is not implemented."
+  )]
+  WorkspaceSpecifiedImportMapNotImplemented,
 }
 
 /// Whether to resolve dependencies by reading the dependencies list
@@ -174,12 +178,17 @@ impl WorkspaceResolver {
         .collect::<Vec<_>>();
 
       let (import_map_url, import_map) = match specified_import_map {
-        // todo(THIS PR): is it ok that if someone does --import-map= that it just
-        // overwrites the entire workspace import map?
         Some(SpecifiedImportMap {
           base_url,
           value: import_map,
-        }) => (base_url, import_map),
+        }) => {
+          if workspace.config_folders.len() > 1 {
+            // We're not entirely sure how this should work, so for now we're just surfacing an error.
+            // Most likely it should just overwrite the import map.
+            return Err(WorkspaceResolverCreateError::WorkspaceSpecifiedImportMapNotImplemented);
+          }
+          (base_url, import_map)
+        }
         None => {
           let Some(config) = root_folder.deno_json.as_ref() else {
             return Ok(None);
@@ -689,6 +698,74 @@ mod test {
       // difference is here, it won't match for a non-workspace tag for an npm specifier
       assert_eq!(resolve("@scope/a@latest"), None);
     }
+  }
+
+  #[tokio::test]
+  async fn specified_import_map() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(root_dir().join("deno.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: Some(SpecifiedImportMap {
+            base_url: Url::from_directory_path(root_dir()).unwrap(),
+            value: json!({
+              "imports": {
+                "b": "./b/mod.ts",
+              },
+            }),
+          }),
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("b", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap(url) => {
+        assert_eq!(url, root.join("b/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn workspace_specified_import_map() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./a"]
+      }),
+    );
+    fs.insert_json(root_dir().join("a").join("deno.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let err = workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: Some(SpecifiedImportMap {
+            base_url: Url::from_directory_path(root_dir()).unwrap(),
+            value: json!({
+              "imports": {
+                "b": "./b/mod.ts",
+              },
+            }),
+          }),
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap_err();
+    assert!(matches!(
+      err,
+      WorkspaceResolverCreateError::WorkspaceSpecifiedImportMapNotImplemented
+    ));
   }
 
   async fn create_resolver(workspace: &WorkspaceRc) -> WorkspaceResolver {
