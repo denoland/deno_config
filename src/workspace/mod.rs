@@ -115,7 +115,7 @@ pub enum WorkspaceDiagnosticKind {
   MemberOnlyOption(&'static str),
   #[error("The '{name}' member cannot have the same name as the member at '{other_member}'.")]
   DuplicateMemberName { name: String, other_member: Url },
-  #[error("The 'workspaces' field must be renamed to 'workspace'.")]
+  #[error("The 'workspaces' field was ignored. Maybe you mean 'workspace'?")]
   InvalidWorkspacesOption,
   #[error("The 'exports' field should be specified when specifying a 'name'.")]
   MissingExports,
@@ -127,8 +127,9 @@ impl WorkspaceDiagnosticKind {
     match self {
       Self::RootOnlyOption { .. }
       | Self::MemberOnlyOption { .. }
-      | Self::MissingExports => false,
-      Self::InvalidWorkspacesOption | Self::DuplicateMemberName { .. } => true,
+      | Self::MissingExports
+      | Self::InvalidWorkspacesOption => false,
+      Self::DuplicateMemberName { .. } => true,
     }
   }
 }
@@ -2433,39 +2434,30 @@ mod test {
 
   #[test]
   fn test_workspaces_property() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
-      root_dir().join("deno.json"),
+    run_single_json_diagnostics_test(
       json!({
         "workspaces": ["./member"]
       }),
-    );
-    let workspace = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir()),
-      &WorkspaceDiscoverOptions {
-        fs: &fs,
-        ..Default::default()
-      },
-    )
-    .unwrap();
-    assert_eq!(
-      workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::InvalidWorkspacesOption,
-        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      }]
+      vec![WorkspaceDiagnosticKind::InvalidWorkspacesOption],
     );
   }
 
   #[test]
   fn test_workspaces_missing_exports() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
-      root_dir().join("deno.json"),
+    run_single_json_diagnostics_test(
       json!({
         "name": "@scope/name",
       }),
+      vec![WorkspaceDiagnosticKind::MissingExports],
     );
+  }
+
+  fn run_single_json_diagnostics_test(
+    json: serde_json::Value,
+    kinds: Vec<WorkspaceDiagnosticKind>,
+  ) {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(root_dir().join("deno.json"), json);
     let workspace = Workspace::discover(
       WorkspaceDiscoverStart::Dir(&root_dir()),
       &WorkspaceDiscoverOptions {
@@ -2476,10 +2468,16 @@ mod test {
     .unwrap();
     assert_eq!(
       workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::MissingExports,
-        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      }]
+      kinds
+        .into_iter()
+        .map(|kind| {
+          WorkspaceDiagnostic {
+            kind,
+            config_url: Url::from_file_path(root_dir().join("deno.json"))
+              .unwrap(),
+          }
+        })
+        .collect::<Vec<_>>()
     );
   }
 
