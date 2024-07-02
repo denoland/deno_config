@@ -115,8 +115,10 @@ pub enum WorkspaceDiagnosticKind {
   MemberOnlyOption(&'static str),
   #[error("The '{name}' member cannot have the same name as the member at '{other_member}'.")]
   DuplicateMemberName { name: String, other_member: Url },
-  #[error("The 'workspaces' field must be renamed to 'workspace'.")]
+  #[error("The 'workspaces' field was ignored. Maybe you mean 'workspace'?")]
   InvalidWorkspacesOption,
+  #[error("The 'name' field should be specified when specifying 'exports'.")]
+  MissingName,
   #[error("The 'exports' field should be specified when specifying a 'name'.")]
   MissingExports,
 }
@@ -127,8 +129,10 @@ impl WorkspaceDiagnosticKind {
     match self {
       Self::RootOnlyOption { .. }
       | Self::MemberOnlyOption { .. }
-      | Self::MissingExports => false,
-      Self::InvalidWorkspacesOption | Self::DuplicateMemberName { .. } => true,
+      | Self::MissingExports
+      | Self::MissingName
+      | Self::InvalidWorkspacesOption => false,
+      Self::DuplicateMemberName { .. } => true,
     }
   }
 }
@@ -479,10 +483,14 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::InvalidWorkspacesOption,
         });
       }
-      if config.json.name.is_some() && config.json.exports.is_none() {
+      if config.json.name.is_some() != config.json.exports.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::MissingExports,
+          kind: if config.json.name.is_none() {
+            WorkspaceDiagnosticKind::MissingName
+          } else {
+            WorkspaceDiagnosticKind::MissingExports
+          },
         });
       }
     }
@@ -2459,13 +2467,30 @@ mod test {
 
   #[test]
   fn test_workspaces_missing_exports() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
-      root_dir().join("deno.json"),
+    run_single_json_diagnostics_test(
       json!({
         "name": "@scope/name",
       }),
+      vec![WorkspaceDiagnosticKind::MissingExports],
     );
+  }
+
+  #[test]
+  fn test_workspaces_missing_name() {
+    run_single_json_diagnostics_test(
+      json!({
+        "exports": "./mod.ts"
+      }),
+      vec![WorkspaceDiagnosticKind::MissingName],
+    );
+  }
+
+  fn run_single_json_diagnostics_test(
+    json: serde_json::Value,
+    kinds: Vec<WorkspaceDiagnosticKind>,
+  ) {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(root_dir().join("deno.json"), json);
     let workspace = Workspace::discover(
       WorkspaceDiscoverStart::Dir(&root_dir()),
       &WorkspaceDiscoverOptions {
@@ -2476,10 +2501,16 @@ mod test {
     .unwrap();
     assert_eq!(
       workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::MissingExports,
-        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      }]
+      kinds
+        .into_iter()
+        .map(|kind| {
+          WorkspaceDiagnostic {
+            kind,
+            config_url: Url::from_file_path(root_dir().join("deno.json"))
+              .unwrap(),
+          }
+        })
+        .collect::<Vec<_>>()
     );
   }
 
