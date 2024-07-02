@@ -117,8 +117,6 @@ pub enum WorkspaceDiagnosticKind {
   DuplicateMemberName { name: String, other_member: Url },
   #[error("The 'workspaces' field was ignored. Maybe you mean 'workspace'?")]
   InvalidWorkspacesOption,
-  #[error("The 'name' field should be specified when specifying 'exports'.")]
-  MissingName,
   #[error("The 'exports' field should be specified when specifying a 'name'.")]
   MissingExports,
 }
@@ -130,7 +128,6 @@ impl WorkspaceDiagnosticKind {
       Self::RootOnlyOption { .. }
       | Self::MemberOnlyOption { .. }
       | Self::MissingExports
-      | Self::MissingName
       | Self::InvalidWorkspacesOption => false,
       Self::DuplicateMemberName { .. } => true,
     }
@@ -483,14 +480,10 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::InvalidWorkspacesOption,
         });
       }
-      if config.json.name.is_some() != config.json.exports.is_some() {
+      if config.json.name.is_some() && config.json.exports.is_none() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: config.specifier.clone(),
-          kind: if config.json.name.is_none() {
-            WorkspaceDiagnosticKind::MissingName
-          } else {
-            WorkspaceDiagnosticKind::MissingExports
-          },
+          kind: WorkspaceDiagnosticKind::MissingExports,
         });
       }
     }
@@ -2441,27 +2434,11 @@ mod test {
 
   #[test]
   fn test_workspaces_property() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
-      root_dir().join("deno.json"),
+    run_single_json_diagnostics_test(
       json!({
         "workspaces": ["./member"]
       }),
-    );
-    let workspace = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir()),
-      &WorkspaceDiscoverOptions {
-        fs: &fs,
-        ..Default::default()
-      },
-    )
-    .unwrap();
-    assert_eq!(
-      workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::InvalidWorkspacesOption,
-        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      }]
+      vec![WorkspaceDiagnosticKind::InvalidWorkspacesOption],
     );
   }
 
@@ -2472,16 +2449,6 @@ mod test {
         "name": "@scope/name",
       }),
       vec![WorkspaceDiagnosticKind::MissingExports],
-    );
-  }
-
-  #[test]
-  fn test_workspaces_missing_name() {
-    run_single_json_diagnostics_test(
-      json!({
-        "exports": "./mod.ts"
-      }),
-      vec![WorkspaceDiagnosticKind::MissingName],
     );
   }
 
