@@ -145,6 +145,8 @@ pub enum ResolveWorkspaceMemberError {
   NotFound { dir_url: Url },
   #[error("Could not find package.json for workspace member in '{}'.", .dir_url)]
   NotFoundPackageJson { dir_url: Url },
+  #[error("Could not find config file for workspace member in '{}'. Ensure you specify the directory and not the configuration file in the workspace member.", .dir_url)]
+  NotFoundMaybeSpecifiedFile { dir_url: Url },
   #[error(transparent)]
   ConfigReadError(#[from] ConfigFileReadError),
   #[error(transparent)]
@@ -2693,6 +2695,37 @@ mod test {
   }
 
   #[test]
+  fn test_deno_workspace_member_no_config_file_error() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    // no deno.json in this folder, so should error
+    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    assert_eq!(err.to_string(), normalize_err_text("Could not find config file for workspace member in '[ROOT_DIR_URL]/member/'."));
+  }
+
+  #[test]
+  fn test_deno_workspace_member_deno_json_member_name() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member/deno.json"]
+      }),
+    );
+    // no deno.json in this folder and the name was deno.json so give an error
+    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    assert_eq!(err.to_string(), normalize_err_text(concat!(
+      "Could not find config file for workspace member in '[ROOT_DIR_URL]/member/deno.json/'. ",
+      "Ensure you specify the directory and not the configuration file in the workspace member."
+    )));
+  }
+
+  #[test]
   fn test_deno_member_not_referenced_in_deno_workspace() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
@@ -2779,7 +2812,7 @@ mod test {
   }
 
   #[test]
-  fn test_npm_workspace_deno_json_error() {
+  fn test_npm_workspace_member_deno_json_error() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("package.json"),
@@ -2789,6 +2822,20 @@ mod test {
     );
     // no package.json in this folder, so should error
     fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    assert_eq!(err.to_string(), normalize_err_text("Could not find package.json for workspace member in '[ROOT_DIR_URL]/member/'."));
+  }
+
+  #[test]
+  fn test_npm_workspace_member_no_config_file_error() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member"]
+      }),
+    );
+    // no package.json in this folder, so should error
     let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
     assert_eq!(err.to_string(), normalize_err_text("Could not find package.json for workspace member in '[ROOT_DIR_URL]/member/'."));
   }

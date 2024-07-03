@@ -355,8 +355,19 @@ fn discover_workspace_config_files_for_single_dir(
             root_config_file_path.join(raw_member),
           ))?;
           maybe_config_folder.ok_or_else(|| {
-            ResolveWorkspaceMemberError::NotFound {
-              dir_url: member_dir_url.clone(),
+            // it's fine this doesn't use all the possible config file names
+            // as this is only used to enhance the error message
+            if member_dir_url.as_str().ends_with("/deno.json/")
+              || member_dir_url.as_str().ends_with("/deno.jsonc/")
+              || member_dir_url.as_str().ends_with("/package.json/")
+            {
+              ResolveWorkspaceMemberError::NotFoundMaybeSpecifiedFile {
+                dir_url: member_dir_url.clone(),
+              }
+            } else {
+              ResolveWorkspaceMemberError::NotFound {
+                dir_url: member_dir_url.clone(),
+              }
             }
           })
         };
@@ -408,7 +419,19 @@ fn discover_workspace_config_files_for_single_dir(
 
             let member_dir_url = resolve_member_url(raw_member)?;
             let member_config_folder =
-              find_member_config_folder(raw_member, &member_dir_url)?;
+              match find_member_config_folder(raw_member, &member_dir_url) {
+                Ok(config_folder) => config_folder,
+                Err(ResolveWorkspaceMemberError::NotFound { dir_url }) => {
+                  // enhance the error to say we didn't find a package.json
+                  return Err(
+                    ResolveWorkspaceMemberError::NotFoundPackageJson {
+                      dir_url,
+                    }
+                    .into(),
+                  );
+                }
+                Err(err) => return Err(err.into()),
+              };
             if member_config_folder.pkg_json().is_none() {
               return Err(
                 ResolveWorkspaceMemberError::NotFoundPackageJson {
