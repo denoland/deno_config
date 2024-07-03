@@ -324,7 +324,7 @@ fn discover_workspace_config_files_for_single_dir(
           // try to find the config folder in memory from the configs we already
           // found on the file system
           if let Some(config_folder) =
-            found_config_folders.remove(&member_dir_url)
+            found_config_folders.remove(member_dir_url)
           {
             return Ok(config_folder);
           }
@@ -365,7 +365,7 @@ fn discover_workspace_config_files_for_single_dir(
           for raw_member in members {
             let member_dir_url = resolve_member_url(raw_member)?;
             let member_config_folder =
-              find_member_config_folder(&raw_member, &member_dir_url)?;
+              find_member_config_folder(raw_member, &member_dir_url)?;
             add_member(raw_member, member_dir_url, member_config_folder)?;
           }
         }

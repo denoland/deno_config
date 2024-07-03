@@ -2903,7 +2903,7 @@ mod test {
     fs: &TestFileSystem,
     start_dir: &Path,
   ) -> Result<WorkspaceRc, WorkspaceDiscoverError> {
-    workspace_at_start_dirs(fs, &vec![start_dir.to_path_buf()])
+    workspace_at_start_dirs(fs, &[start_dir.to_path_buf()])
   }
 
   fn workspace_at_start_dirs(
