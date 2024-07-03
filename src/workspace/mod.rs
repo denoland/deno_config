@@ -2703,7 +2703,6 @@ mod test {
     );
     fs.insert_json(root_dir().join("member/deno.json"), json!({}));
     fs.insert_json(root_dir().join("package/deno.json"), json!({}));
-    // npm package needs to be a member of the deno workspace
     let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
     assert_eq!(
       err.to_string(),
