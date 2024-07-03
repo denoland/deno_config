@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 use url::Url;
 
@@ -202,6 +203,18 @@ fn discover_workspace_config_files_for_single_dir(
   opts: &WorkspaceDiscoverOptions,
   mut checked: Option<&mut CheckedSet<Path>>,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
+  fn strip_up_to_node_modules(path: &Path) -> PathBuf {
+    path
+      .components()
+      .take_while(|component| match component {
+        std::path::Component::Normal(name) => {
+          name.to_string_lossy() != "node_modules"
+        }
+        _ => true,
+      })
+      .collect()
+  }
+
   let start_dir: &Path;
   let mut first_config_folder_url: Option<Url> = None;
   let mut found_config_folders: HashMap<_, ConfigFolder> = HashMap::new();
@@ -215,7 +228,13 @@ fn discover_workspace_config_files_for_single_dir(
         opts.fs,
         opts.pkg_json_cache,
       ) {
-        Ok(pkg_json) => Ok(Some(pkg_json)),
+        Ok(pkg_json) => {
+          log::debug!(
+            "package.json file found at '{}'",
+            pkg_json_path.display()
+          );
+          Ok(Some(pkg_json))
+        }
         Err(PackageJsonLoadError::Io { source, .. })
           if is_skippable_io_error(&source) =>
         {
@@ -270,6 +289,9 @@ fn discover_workspace_config_files_for_single_dir(
       first_config_folder_url = Some(parent_dir_url);
     }
   }
+  // do not auto-discover inside the node_modules folder (ex. when a
+  // user is running something directly within there)
+  let start_dir = strip_up_to_node_modules(start_dir);
   for current_dir in start_dir.ancestors() {
     if let Some(checked) = checked.as_mut() {
       if !checked.insert(current_dir) {

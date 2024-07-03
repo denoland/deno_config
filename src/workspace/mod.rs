@@ -326,6 +326,10 @@ impl Workspace {
         start_dir,
       },
       ConfigFileDiscovery::Single(config_folder) => {
+        if config_folder.pkg_json().is_none() {
+          // this is used in some cli tests
+          log::debug!("No package.json file found");
+        }
         let root_dir = new_rc(config_folder.folder_url());
         Workspace {
           config_folders: IndexMap::from([(
@@ -2670,6 +2674,26 @@ mod test {
     let jsr_pkgs = workspace.jsr_packages_for_publish();
     let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
+  }
+
+  #[test]
+  fn test_no_auto_discovery_node_modules_dir() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(root_dir().join("deno.json"), json!({}));
+    fs.insert_json(
+      root_dir().join("node_modules/package/package.json"),
+      json!({
+        "name": "@scope/pkg",
+        "version": "1.0.0"
+      }),
+    );
+    let workspace = workspace_at_start_dir(
+      &fs,
+      &root_dir().join("node_modules/package/sub_dir"),
+    );
+    assert_eq!(workspace.diagnostics(), vec![]);
+    assert_eq!(workspace.package_jsons().count(), 0);
+    assert_eq!(workspace.deno_jsons().count(), 1);
   }
 
   #[test]
