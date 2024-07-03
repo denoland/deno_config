@@ -468,6 +468,30 @@ fn discover_workspace_config_files_for_single_dir(
         }
       }
 
+      // ensure no duplicate names in deno configuration files
+      let mut seen_names: HashMap<&str, &Url> =
+        HashMap::with_capacity(final_members.len() + 1);
+      for folder in
+        std::iter::once(&root_config_folder).chain(final_members.values())
+      {
+        if let Some(deno_json) = folder.deno_json() {
+          if let Some(name) = deno_json.json.name.as_deref() {
+            if let Some(other_member_url) = seen_names.get(name) {
+              return Err(
+                ResolveWorkspaceMemberError::DuplicatePackageName {
+                  name: name.to_string(),
+                  deno_json_url: deno_json.specifier.clone(),
+                  other_deno_json_url: (*other_member_url).clone(),
+                }
+                .into(),
+              );
+            } else {
+              seen_names.insert(name, &deno_json.specifier);
+            }
+          }
+        }
+      }
+
       return Ok(ConfigFileDiscovery::Workspace {
         root: root_config_folder,
         members: final_members,
