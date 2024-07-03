@@ -326,10 +326,6 @@ impl Workspace {
         start_dir,
       },
       ConfigFileDiscovery::Single(config_folder) => {
-        if config_folder.pkg_json().is_none() {
-          // this is used in some cli tests
-          log::debug!("No package.json file found");
-        }
         let root_dir = new_rc(config_folder.folder_url());
         Workspace {
           config_folders: IndexMap::from([(
