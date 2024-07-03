@@ -1,7 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::path::Path;
@@ -111,25 +110,10 @@ pub enum WorkspaceDiagnosticKind {
   RootOnlyOption(&'static str),
   #[error("The '{0}' field can only be specified in a workspace member deno.json file and not the root workspace file.")]
   MemberOnlyOption(&'static str),
-  #[error("The '{name}' member cannot have the same name as the member at '{other_member}'.")]
-  DuplicateMemberName { name: String, other_member: Url },
   #[error("The 'workspaces' field was ignored. Maybe you mean 'workspace'?")]
   InvalidWorkspacesOption,
   #[error("The 'exports' field should be specified when specifying a 'name'.")]
   MissingExports,
-}
-
-impl WorkspaceDiagnosticKind {
-  /// If the diagnostic should cause the process to shut down.
-  pub fn is_fatal(&self) -> bool {
-    match self {
-      Self::RootOnlyOption { .. }
-      | Self::MemberOnlyOption { .. }
-      | Self::MissingExports
-      | Self::InvalidWorkspacesOption => false,
-      Self::DuplicateMemberName { .. } => true,
-    }
-  }
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -155,6 +139,12 @@ pub enum ResolveWorkspaceMemberError {
   NonDescendant { workspace_url: Url, member_url: Url },
   #[error("Cannot specify a workspace member twice ('{}').", .member)]
   Duplicate { member: String },
+  #[error("The '{name}' package ('{deno_json_url}') cannot have the same name as the package at '{other_deno_json_url}'.")]
+  DuplicatePackageName {
+    name: String,
+    deno_json_url: Url,
+    other_deno_json_url: Url,
+  },
   #[error("Remove the reference to the current config file (\"{}\") in \"workspaces\".", .member)]
   InvalidSelfReference { member: String },
   #[error("Invalid workspace member '{}' for config '{}'.", member, base)]
@@ -373,10 +363,9 @@ impl Workspace {
   }
 
   pub fn diagnostics(&self) -> Vec<WorkspaceDiagnostic> {
-    fn check_member_diagnostics<'a>(
-      member_config: &'a ConfigFile,
+    fn check_member_diagnostics(
+      member_config: &ConfigFile,
       diagnostics: &mut Vec<WorkspaceDiagnostic>,
-      seen_names: &mut HashMap<&'a str, &'a Url>,
     ) {
       if member_config.json.compiler_options.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
@@ -434,19 +423,6 @@ impl Workspace {
           });
         }
       }
-      if let Some(name) = member_config.json.name.as_deref() {
-        if let Some(other_member_url) = seen_names.get(name) {
-          diagnostics.push(WorkspaceDiagnostic {
-            config_url: member_config.specifier.clone(),
-            kind: WorkspaceDiagnosticKind::DuplicateMemberName {
-              name: name.to_string(),
-              other_member: (*other_member_url).clone(),
-            },
-          });
-        } else {
-          seen_names.insert(name, &member_config.specifier);
-        }
-      }
     }
 
     fn check_all_configs(
@@ -472,12 +448,11 @@ impl Workspace {
     let is_deno_workspace = root_deno_json
       .map(|d| d.json.workspace.is_some())
       .unwrap_or(false);
-    let mut seen_names = HashMap::with_capacity(self.config_folders.len());
     for (url, folder) in &self.config_folders {
       if let Some(config) = &folder.deno_json {
         let is_root = url == &self.root_dir;
         if is_deno_workspace && !is_root {
-          check_member_diagnostics(config, &mut diagnostics, &mut seen_names);
+          check_member_diagnostics(config, &mut diagnostics);
         }
 
         check_all_configs(config, &mut diagnostics);
@@ -2477,30 +2452,36 @@ mod test {
     });
     fs.insert_json(root_dir().join("member1").join("deno.json"), pkg.clone());
     fs.insert_json(root_dir().join("member2").join("deno.json"), pkg.clone());
-    let workspace = Workspace::discover(
+    let err = Workspace::discover(
       WorkspaceDiscoverStart::Dirs(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
       },
     )
-    .unwrap();
-    assert_eq!(
-      workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::DuplicateMemberName {
-          name: "@scope/pkg".to_string(),
-          other_member: Url::from_file_path(
-            root_dir().join("member1").join("deno.json")
-          )
-          .unwrap(),
+    .unwrap_err();
+    match err.into_kind() {
+      WorkspaceDiscoverErrorKind::ResolveMember(
+        ResolveWorkspaceMemberError::DuplicatePackageName {
+          name,
+          deno_json_url,
+          other_deno_json_url,
         },
-        config_url: Url::from_file_path(
-          root_dir().join("member2").join("deno.json")
-        )
-        .unwrap(),
-      }]
-    );
+      ) => {
+        assert_eq!(name, "@scope/pkg");
+        assert_eq!(
+          deno_json_url,
+          Url::from_file_path(root_dir().join("member2").join("deno.json"))
+            .unwrap()
+        );
+        assert_eq!(
+          other_deno_json_url,
+          Url::from_file_path(root_dir().join("member1").join("deno.json"))
+            .unwrap()
+        );
+      }
+      _ => unreachable!(),
+    }
   }
 
   #[test]
