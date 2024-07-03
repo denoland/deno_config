@@ -157,7 +157,7 @@ pub fn discover_workspace_config_files(
       }
       _ => {
         let mut checked = CheckedSet::default();
-        let mut discovered_workspace = ConfigFileDiscovery::None;
+        let mut final_workspace = ConfigFileDiscovery::None;
         for dir in dirs {
           let workspace = discover_workspace_config_files_for_single_dir(
             DirOrConfigFile::Dir(dir),
@@ -166,22 +166,22 @@ pub fn discover_workspace_config_files(
           )?;
           if let Some(root_config_specifier) = workspace.root_config_specifier()
           {
-            if let Some(discovered_root_config_specifier) =
-              discovered_workspace.root_config_specifier()
+            if let Some(final_workspace_config_specifier) =
+              final_workspace.root_config_specifier()
             {
               return Err(WorkspaceDiscoverError(
                 WorkspaceDiscoverErrorKind::MultipleWorkspaces {
-                  base_workspace_url: root_config_specifier.into_owned(),
-                  other_workspace_url: discovered_root_config_specifier
+                  base_workspace_url: final_workspace_config_specifier
                     .into_owned(),
+                  other_workspace_url: root_config_specifier.into_owned(),
                 }
                 .into(),
               ));
             }
-            discovered_workspace = workspace;
+            final_workspace = workspace;
           }
         }
-        Ok(discovered_workspace)
+        Ok(final_workspace)
       }
     },
     WorkspaceDiscoverStart::ConfigFile(file) => {
@@ -317,30 +317,31 @@ fn discover_workspace_config_files_for_single_dir(
           }
           Ok(member_dir_url)
         };
-      let mut add_member = |raw_member: &str,
-                            member_dir_url: Url|
-       -> Result<(), ResolveWorkspaceMemberError> {
-        let mut find_member_config_folder =
-          || -> Result<_, ResolveWorkspaceMemberError> {
-            // try to find the config folder in memory from the configs we already
-            // found on the file system
-            if let Some(config_folder) =
-              found_config_folders.remove(&member_dir_url)
-            {
-              return Ok(config_folder);
+      let mut find_member_config_folder =
+        |raw_member: &str,
+         member_dir_url: &Url|
+         -> Result<_, ResolveWorkspaceMemberError> {
+          // try to find the config folder in memory from the configs we already
+          // found on the file system
+          if let Some(config_folder) =
+            found_config_folders.remove(&member_dir_url)
+          {
+            return Ok(config_folder);
+          }
+
+          let maybe_config_folder = load_config_folder(&normalize_path(
+            root_config_file_path.join(raw_member),
+          ))?;
+          maybe_config_folder.ok_or_else(|| {
+            ResolveWorkspaceMemberError::NotFound {
+              dir_url: member_dir_url.clone(),
             }
-
-            let maybe_config_folder = load_config_folder(&normalize_path(
-              root_config_file_path.join(raw_member),
-            ))?;
-            maybe_config_folder.ok_or_else(|| {
-              ResolveWorkspaceMemberError::NotFound {
-                dir_url: member_dir_url.clone(),
-              }
-            })
-          };
-
-        let member_config_folder = find_member_config_folder()?;
+          })
+        };
+      let mut add_member = |raw_member: &str,
+                            member_dir_url: Url,
+                            member_config_folder: ConfigFolder|
+       -> Result<(), ResolveWorkspaceMemberError> {
         let previous_member =
           final_members.insert(new_rc(member_dir_url), member_config_folder);
         if previous_member.is_some() {
@@ -362,16 +363,18 @@ fn discover_workspace_config_files_for_single_dir(
             );
           }
           for raw_member in members {
-            let member_url = resolve_member_url(raw_member)?;
-            add_member(raw_member, member_url)?;
+            let member_dir_url = resolve_member_url(raw_member)?;
+            let member_config_folder =
+              find_member_config_folder(&raw_member, &member_dir_url)?;
+            add_member(raw_member, member_dir_url, member_config_folder)?;
           }
         }
       }
       if let Some(pkg_json) = root_config_folder.pkg_json() {
         if let Some(members) = &pkg_json.workspaces {
           let mut has_warned = false;
-          for member in members {
-            if member.contains('*') {
+          for raw_member in members {
+            if raw_member.contains('*') {
               if !has_warned {
                 has_warned = true;
                 log::warn!(
@@ -381,8 +384,18 @@ fn discover_workspace_config_files_for_single_dir(
               continue;
             }
 
-            let member_dir_url = resolve_member_url(member)?;
-            match add_member(member, member_dir_url) {
+            let member_dir_url = resolve_member_url(raw_member)?;
+            let member_config_folder =
+              find_member_config_folder(raw_member, &member_dir_url)?;
+            if member_config_folder.pkg_json().is_none() {
+              return Err(
+                ResolveWorkspaceMemberError::NotFoundPackageJson {
+                  dir_url: member_dir_url,
+                }
+                .into(),
+              );
+            }
+            match add_member(raw_member, member_dir_url, member_config_folder) {
               Ok(()) => {}
               Err(ResolveWorkspaceMemberError::Duplicate { .. }) => {
                 // ignore for package.json members

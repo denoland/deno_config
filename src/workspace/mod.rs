@@ -143,6 +143,8 @@ pub struct WorkspaceDiagnostic {
 pub enum ResolveWorkspaceMemberError {
   #[error("Could not find config file for workspace member in '{}'.", .dir_url)]
   NotFound { dir_url: Url },
+  #[error("Could not find package.json for workspace member in '{}'.", .dir_url)]
+  NotFoundPackageJson { dir_url: Url },
   #[error(transparent)]
   ConfigReadError(#[from] ConfigFileReadError),
   #[error(transparent)]
@@ -2646,7 +2648,7 @@ mod test {
   }
 
   #[test]
-  fn test_packages_for_publish_self_reference_root_not_package() {
+  fn test_packages_for_publish_root_not_package() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -2662,13 +2664,201 @@ mod test {
         "exports": "./main.ts",
       }),
     );
-    // the workspace is a self reference, but it's not a jsr package so
-    // publish the members
+    // the workspace is not a jsr package so publish the members
     let workspace = workspace_at_start_dir(&fs, &root_dir());
     assert_eq!(workspace.diagnostics(), vec![]);
     let jsr_pkgs = workspace.jsr_packages_for_publish();
     let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
+  }
+
+  #[test]
+  fn test_deno_member_not_referenced_in_deno_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("package/deno.json"), json!({}));
+    // npm package needs to be a member of the deno workspace
+    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    assert_eq!(
+      err.to_string(),
+      normalize_err_text(
+        "Config file must be a member of the workspace.
+  Config: [ROOT_DIR_URL]/package/deno.json
+  Workspace: [ROOT_DIR_URL]/"
+      )
+    );
+  }
+
+  #[test]
+  fn test_npm_package_not_referenced_in_deno_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    // npm package needs to be a member of the deno workspace
+    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    assert_eq!(
+      err.to_string(),
+      normalize_err_text(
+        "Config file must be a member of the workspace.
+  Config: [ROOT_DIR_URL]/package/package.json
+  Workspace: [ROOT_DIR_URL]/"
+      )
+    );
+  }
+
+  #[test]
+  fn test_multiple_workspaces_npm_package_referenced_in_package_json_workspace()
+  {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./package"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir().join("package"));
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.deno_jsons().count(), 2);
+    assert_eq!(workspace.package_jsons().count(), 2);
+  }
+
+  #[test]
+  fn test_npm_workspace_package_json_and_deno_json_ok() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir().join("package"));
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.deno_jsons().count(), 1);
+    assert_eq!(workspace.package_jsons().count(), 2);
+  }
+
+  #[test]
+  fn test_npm_workspace_deno_json_error() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member"]
+      }),
+    );
+    // no package.json in this folder, so should error
+    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    assert_eq!(err.to_string(), normalize_err_text("Could not find package.json for workspace member in '[ROOT_DIR_URL]/member/'."));
+  }
+
+  #[test]
+  fn test_resolve_multiple_dirs() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("workspace").join("deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("workspace").join("member/deno.json"),
+      json!({
+        "name": "@scope/pkg",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    let workspace = workspace_at_start_dirs(
+      &fs,
+      &[
+        root_dir().join("workspace/member"),
+        root_dir().join("other_dir"), // will be ignored because it's not in the workspace
+      ],
+    )
+    .unwrap();
+    assert_eq!(workspace.diagnostics(), vec![]);
+    let jsr_pkgs = workspace.jsr_packages_for_publish();
+    let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
+    assert_eq!(names, vec!["@scope/pkg"]);
+  }
+
+  #[test]
+  fn test_resolve_multiple_dirs_outside_config() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("workspace/deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("workspace/member/deno.json"), json!({}));
+    // this one will cause issues because it's not in the workspace
+    fs.insert_json(root_dir().join("other_dir/deno.json"), json!({}));
+    let err = workspace_at_start_dirs(
+      &fs,
+      &[
+        root_dir().join("workspace/member"),
+        root_dir().join("other_dir"),
+      ],
+    )
+    .unwrap_err();
+    assert_eq!(err.to_string(), normalize_err_text("Command resolved to multiple config files. Ensure all specified paths are within the same workspace.
+  First: [ROOT_DIR_URL]/workspace/deno.json
+  Second: [ROOT_DIR_URL]/other_dir/deno.json"));
+  }
+
+  #[test]
+  fn test_resolve_multiple_dirs_outside_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("workspace/deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("workspace/member/deno.json"), json!({}));
+    // this one will cause issues because it's not in the workspace
+    fs.insert_json(
+      root_dir().join("other_dir/deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("other_dir/member/deno.json"), json!({}));
+    let err = workspace_at_start_dirs(
+      &fs,
+      &[
+        root_dir().join("workspace/member"),
+        root_dir().join("other_dir"),
+      ],
+    )
+    .unwrap_err();
+    assert_eq!(err.to_string(), normalize_err_text("Command resolved to multiple config files. Ensure all specified paths are within the same workspace.
+  First: [ROOT_DIR_URL]/workspace/deno.json
+  Second: [ROOT_DIR_URL]/other_dir/deno.json"));
   }
 
   fn workspace_for_root_and_member(
@@ -2699,16 +2889,45 @@ mod test {
     fs: &TestFileSystem,
     start_dir: &Path,
   ) -> WorkspaceRc {
-    new_rc(
-      Workspace::discover(
-        WorkspaceDiscoverStart::Dirs(&[start_dir.to_path_buf()]),
-        &WorkspaceDiscoverOptions {
-          fs,
-          discover_pkg_json: true,
-          ..Default::default()
-        },
-      )
-      .unwrap(),
+    workspace_at_start_dir_result(fs, start_dir).unwrap()
+  }
+
+  fn workspace_at_start_dir_err(
+    fs: &TestFileSystem,
+    start_dir: &Path,
+  ) -> WorkspaceDiscoverError {
+    workspace_at_start_dir_result(fs, start_dir).unwrap_err()
+  }
+
+  fn workspace_at_start_dir_result(
+    fs: &TestFileSystem,
+    start_dir: &Path,
+  ) -> Result<WorkspaceRc, WorkspaceDiscoverError> {
+    workspace_at_start_dirs(fs, &vec![start_dir.to_path_buf()])
+  }
+
+  fn workspace_at_start_dirs(
+    fs: &TestFileSystem,
+    start_dirs: &[PathBuf],
+  ) -> Result<WorkspaceRc, WorkspaceDiscoverError> {
+    Workspace::discover(
+      WorkspaceDiscoverStart::Dirs(start_dirs),
+      &WorkspaceDiscoverOptions {
+        fs,
+        discover_pkg_json: true,
+        ..Default::default()
+      },
+    )
+    .map(new_rc)
+  }
+
+  fn normalize_err_text(text: &str) -> String {
+    text.replace(
+      "[ROOT_DIR_URL]",
+      Url::from_directory_path(root_dir())
+        .unwrap()
+        .to_string()
+        .trim_end_matches('/'),
     )
   }
 }
