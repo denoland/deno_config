@@ -7,13 +7,21 @@ use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
 
-#[derive(Default)]
-pub struct CheckedSet<T: std::hash::Hash> {
+pub struct CheckedSet<T: std::hash::Hash + ?Sized> {
   _kind: PhantomData<T>,
   checked: std::collections::HashSet<u64>,
 }
 
-impl<T: std::hash::Hash> CheckedSet<T> {
+impl<T: std::hash::Hash + ?Sized> Default for CheckedSet<T> {
+  fn default() -> Self {
+    Self {
+      _kind: Default::default(),
+      checked: Default::default(),
+    }
+  }
+}
+
+impl<T: std::hash::Hash + ?Sized> CheckedSet<T> {
   pub fn with_capacity(capacity: usize) -> Self {
     Self {
       _kind: PhantomData,
