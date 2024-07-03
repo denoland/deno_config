@@ -2927,6 +2927,32 @@ mod test {
   Second: [ROOT_DIR_URL]/other_dir/deno.json"));
   }
 
+  #[test]
+  fn test_specified_config_file_same_dir_discoverable_config_file() {
+    let mut fs = TestFileSystem::default();
+    // should not start discovering this deno.json because it
+    // should search for a workspace in the parent dir
+    fs.insert_json(root_dir().join("sub_dir/deno.json"), json!({}));
+    let other_deno_json = root_dir().join("sub_dir/deno_other_name.json");
+    fs.insert_json(&other_deno_json, json!({}));
+    let workspace = Workspace::discover(
+      WorkspaceDiscoverStart::ConfigFile(&other_deno_json),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(
+      workspace
+        .deno_jsons()
+        .map(|d| d.specifier.clone())
+        .collect::<Vec<_>>(),
+      vec![Url::from_file_path(&other_deno_json).unwrap()]
+    );
+  }
+
   fn workspace_for_root_and_member(
     root: serde_json::Value,
     member: serde_json::Value,

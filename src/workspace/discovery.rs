@@ -215,7 +215,7 @@ fn discover_workspace_config_files_for_single_dir(
       .collect()
   }
 
-  let start_dir: &Path;
+  let start_dir: Option<&Path>;
   let mut first_config_folder_url: Option<Url> = None;
   let mut found_config_folders: HashMap<_, ConfigFolder> = HashMap::new();
   let config_file_names =
@@ -262,17 +262,9 @@ fn discover_workspace_config_files_for_single_dir(
     };
   match start {
     DirOrConfigFile::Dir(dir) => {
-      start_dir = dir;
+      start_dir = Some(dir);
     }
     DirOrConfigFile::ConfigFile(file) => {
-      start_dir = file.parent().ok_or_else(|| {
-        WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
-          anyhow::anyhow!(
-            "Provided config file path ('{}') had no parent directory.",
-            file.display()
-          ),
-        )
-      })?;
       let specifier = Url::from_file_path(file).unwrap();
       let config_file = new_rc(ConfigFile::from_specifier(
         opts.fs,
@@ -287,12 +279,14 @@ fn discover_workspace_config_files_for_single_dir(
           .unwrap(),
       );
       first_config_folder_url = Some(parent_dir_url);
+      // start searching for a workspace in the parent directory
+      start_dir = file.parent().and_then(|p| p.parent());
     }
   }
   // do not auto-discover inside the node_modules folder (ex. when a
   // user is running something directly within there)
-  let start_dir = strip_up_to_node_modules(start_dir);
-  for current_dir in start_dir.ancestors() {
+  let start_dir = start_dir.map(strip_up_to_node_modules);
+  for current_dir in start_dir.iter().flat_map(|p| p.ancestors()) {
     if let Some(checked) = checked.as_mut() {
       if !checked.insert(current_dir) {
         // already visited here, so exit
