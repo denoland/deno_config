@@ -14,11 +14,10 @@ use deno_semver::package::PackageNv;
 use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
 use deno_semver::VersionReq;
-use discovery::discover_with_npm;
 use discovery::discover_workspace_config_files;
 use discovery::ConfigFileDiscovery;
+use discovery::ConfigFolder;
 use discovery::DenoOrPkgJson;
-use discovery::PackageJsonDiscovery;
 use indexmap::IndexMap;
 use thiserror::Error;
 use url::Url;
@@ -35,7 +34,6 @@ use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonLoadError;
 use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
-use crate::util::specifier_to_file_path;
 use crate::util::CheckedSet;
 use crate::BenchConfig;
 use crate::ConfigFileRc;
@@ -155,6 +153,13 @@ pub enum ResolveWorkspaceMemberError {
   Duplicate { member: String },
   #[error("Remove the reference to the current config file (\"{}\") in \"workspaces\".", .member)]
   InvalidSelfReference { member: String },
+  #[error("Invalid workspace member '{}' for config '{}'.", member, base)]
+  InvalidMember {
+    base: Url,
+    member: String,
+    #[source]
+    source: url::ParseError,
+  },
 }
 
 #[derive(Error, Debug)]
@@ -182,6 +187,8 @@ where
 
 #[derive(Debug, Error)]
 pub enum WorkspaceDiscoverErrorKind {
+  #[error("Failed resolving start directory.")]
+  FailedResolvingStartDirectory(#[source] anyhow::Error),
   #[error(transparent)]
   ConfigRead(#[from] ConfigFileReadError),
   #[error(transparent)]
@@ -190,12 +197,10 @@ pub enum WorkspaceDiscoverErrorKind {
   MembersEmpty(Url),
   #[error(transparent)]
   ResolveMember(#[from] ResolveWorkspaceMemberError),
-  #[error("Invalid workspace member '{}' for config '{}'.", member, base)]
-  InvalidMember {
-    base: Url,
-    member: String,
-    #[source]
-    source: url::ParseError,
+  #[error("Command resolved to multiple config files. Ensure all specified paths are within the same workspace.\n  First: {base_workspace_url}\n  Second: {other_workspace_url}")]
+  MultipleWorkspaces {
+    base_workspace_url: Url,
+    other_workspace_url: Url,
   },
   #[error(transparent)]
   SpecifierToFilePath(#[from] SpecifierToFilePathError),
@@ -205,17 +210,8 @@ pub enum WorkspaceDiscoverErrorKind {
 
 #[derive(Debug, Clone, Copy)]
 pub enum WorkspaceDiscoverStart<'a> {
-  Dir(&'a Path),
+  Dirs(&'a [PathBuf]),
   ConfigFile(&'a Path),
-}
-
-impl<'a> WorkspaceDiscoverStart<'a> {
-  pub fn dir_path(&self) -> &Path {
-    match self {
-      Self::Dir(dir) => dir,
-      Self::ConfigFile(file) => file.parent().unwrap(),
-    }
-  }
 }
 
 #[derive(Default)]
@@ -232,6 +228,30 @@ pub struct WorkspaceDiscoverOptions<'a> {
 pub struct FolderConfigs {
   pub deno_json: Option<ConfigFileRc>,
   pub pkg_json: Option<PackageJsonRc>,
+}
+
+impl FolderConfigs {
+  fn from_config_folder(config_folder: ConfigFolder) -> Self {
+    match config_folder {
+      ConfigFolder::Single(deno_or_pkg_json) => match deno_or_pkg_json {
+        DenoOrPkgJson::Deno(deno_json) => FolderConfigs {
+          deno_json: Some(deno_json),
+          pkg_json: None,
+        },
+        DenoOrPkgJson::PkgJson(pkg_json) => FolderConfigs {
+          deno_json: None,
+          pkg_json: Some(pkg_json),
+        },
+      },
+      ConfigFolder::Both {
+        deno_json,
+        pkg_json,
+      } => FolderConfigs {
+        deno_json: Some(deno_json),
+        pkg_json: Some(pkg_json),
+      },
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -258,15 +278,43 @@ impl Workspace {
     start: WorkspaceDiscoverStart,
     opts: &WorkspaceDiscoverOptions,
   ) -> Result<Self, WorkspaceDiscoverError> {
-    let start_dir = new_rc(Url::from_directory_path(start.dir_path()).unwrap());
-    let config_file_discovery = discover_workspace_config_files(start, opts)?;
-    let maybe_npm_discovery = if opts.discover_pkg_json {
-      discover_with_npm(start, &config_file_discovery, opts)?
-    } else {
-      PackageJsonDiscovery::None
-    };
+    fn resolve_start_dir(
+      start: &WorkspaceDiscoverStart,
+    ) -> Result<Url, WorkspaceDiscoverError> {
+      match start {
+        WorkspaceDiscoverStart::Dirs(dirs) => {
+          if dirs.is_empty() {
+            Err(
+              WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
+                anyhow::anyhow!("No directories provided."),
+              )
+              .into(),
+            )
+          } else {
+            // just select the first one... this doesn't matter too much
+            // at the moment because we only use this for lint and fmt,
+            // so this is ok for now
+            Ok(Url::from_directory_path(&dirs[0]).unwrap())
+          }
+        }
+        WorkspaceDiscoverStart::ConfigFile(path) => {
+          let parent = path.parent().ok_or_else(|| {
+            WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
+              anyhow::anyhow!(
+                "Provided config file path ('{}') had no parent directory.",
+                path.display()
+              ),
+            )
+          })?;
+          Ok(Url::from_directory_path(parent).unwrap())
+        }
+      }
+    }
 
-    let mut workspace = match config_file_discovery {
+    let start_dir = new_rc(resolve_start_dir(&start)?);
+    let config_file_discovery = discover_workspace_config_files(start, opts)?;
+
+    let workspace = match config_file_discovery {
       ConfigFileDiscovery::None => Workspace {
         config_folders: IndexMap::from([(
           start_dir.clone(),
@@ -275,48 +323,27 @@ impl Workspace {
         root_dir: start_dir.clone(),
         start_dir,
       },
-      ConfigFileDiscovery::Single(config) => {
-        let config_file_path = specifier_to_file_path(&config.specifier)?;
-        let root_dir = config_file_path.parent().unwrap();
-        let root_dir = new_rc(Url::from_directory_path(root_dir).unwrap());
+      ConfigFileDiscovery::Single(config_folder) => {
+        let root_dir = new_rc(config_folder.folder_url());
         Workspace {
           config_folders: IndexMap::from([(
             root_dir.clone(),
-            FolderConfigs {
-              deno_json: Some(config),
-              pkg_json: None,
-            },
+            FolderConfigs::from_config_folder(config_folder),
           )]),
           start_dir,
           root_dir,
         }
       }
       ConfigFileDiscovery::Workspace { root, members } => {
-        let root_config_file_path = specifier_to_file_path(&root.specifier)?;
-        let root_dir = root_config_file_path.parent().unwrap();
-        let root_dir = new_rc(Url::from_directory_path(root_dir).unwrap());
+        let root_dir = new_rc(root.folder_url());
         let mut config_folders = members
           .into_iter()
-          .map(|(folder_url, config)| {
-            (
-              folder_url,
-              match config {
-                DenoOrPkgJson::Deno(config_file) => FolderConfigs {
-                  deno_json: Some(config_file),
-                  pkg_json: None,
-                },
-                DenoOrPkgJson::PkgJson(pkg_json) => FolderConfigs {
-                  deno_json: None,
-                  pkg_json: Some(pkg_json),
-                },
-              },
-            )
+          .map(|(folder_url, config_folder)| {
+            (folder_url, FolderConfigs::from_config_folder(config_folder))
           })
           .collect::<IndexMap<_, _>>();
         config_folders
-          .entry(root_dir.clone())
-          .or_default()
-          .deno_json = Some(root);
+          .insert(root_dir.clone(), FolderConfigs::from_config_folder(root));
         Workspace {
           root_dir,
           start_dir,
@@ -324,58 +351,6 @@ impl Workspace {
         }
       }
     };
-    match maybe_npm_discovery {
-      PackageJsonDiscovery::Single(pkg_json) => {
-        let pkg_json_dir = new_rc(
-          Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
-        );
-        if workspace
-          .root_dir
-          .as_str()
-          .starts_with(pkg_json_dir.as_str())
-        {
-          // the package.json was in a higher up directory
-          workspace.root_dir = pkg_json_dir.clone();
-        }
-
-        workspace
-          .config_folders
-          .entry(pkg_json_dir)
-          .or_default()
-          .pkg_json = Some(pkg_json);
-      }
-      PackageJsonDiscovery::Workspace { root, members } => {
-        let pkg_json_dir = new_rc(
-          Url::from_directory_path(root.path.parent().unwrap()).unwrap(),
-        );
-        if workspace
-          .root_dir
-          .as_str()
-          .starts_with(pkg_json_dir.as_str())
-        {
-          // the package.json was in a higher up directory
-          workspace.root_dir = pkg_json_dir.clone();
-        }
-
-        workspace
-          .config_folders
-          .entry(pkg_json_dir)
-          .or_default()
-          .pkg_json = Some(root);
-
-        for (member_dir, pkg_json) in members {
-          workspace
-            .config_folders
-            .entry(member_dir)
-            .or_default()
-            .pkg_json = Some(pkg_json);
-        }
-      }
-      PackageJsonDiscovery::None => {
-        // do nothing
-      }
-    }
-
     debug_assert!(
       workspace.config_folders.contains_key(&workspace.root_dir),
       "root should always have a folder"
@@ -1500,7 +1475,7 @@ mod test {
     );
 
     let workspace_config_err = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir()),
+      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -1527,7 +1502,7 @@ mod test {
     fs.insert_json(root_dir().join("member/a/deno.json"), json!({}));
 
     let workspace_config_err = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir()),
+      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -1554,7 +1529,7 @@ mod test {
       );
 
       let workspace_config_err = Workspace::discover(
-        WorkspaceDiscoverStart::Dir(&root_dir().join("sub_dir")),
+        WorkspaceDiscoverStart::Dirs(&[root_dir().join("sub_dir")]),
         &WorkspaceDiscoverOptions {
           fs: &fs,
           ..Default::default()
@@ -1581,7 +1556,7 @@ mod test {
     );
 
     let workspace_config_err = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir()),
+      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -1619,7 +1594,7 @@ mod test {
     fs.insert_json(root_dir().join("b/deno.jsonc"), config_text_b);
 
     let workspace = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir()),
+      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -1662,9 +1637,10 @@ mod test {
     let workspace = new_rc(
       Workspace::discover(
         // start at root for this test
-        WorkspaceDiscoverStart::Dir(&root_dir()),
+        WorkspaceDiscoverStart::Dirs(&[root_dir()]),
         &WorkspaceDiscoverOptions {
           fs: &fs,
+          discover_pkg_json: true,
           ..Default::default()
         },
       )
@@ -2415,7 +2391,7 @@ mod test {
     );
     let workspace = Workspace::discover(
       // start at root for this test
-      WorkspaceDiscoverStart::Dir(&root_dir()),
+      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -2459,7 +2435,7 @@ mod test {
     let mut fs = TestFileSystem::default();
     fs.insert_json(root_dir().join("deno.json"), json);
     let workspace = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir()),
+      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -2498,7 +2474,7 @@ mod test {
     fs.insert_json(root_dir().join("member1").join("deno.json"), pkg.clone());
     fs.insert_json(root_dir().join("member2").join("deno.json"), pkg.clone());
     let workspace = Workspace::discover(
-      WorkspaceDiscoverStart::Dir(&root_dir()),
+      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -2725,7 +2701,7 @@ mod test {
   ) -> WorkspaceRc {
     new_rc(
       Workspace::discover(
-        WorkspaceDiscoverStart::Dir(start_dir),
+        WorkspaceDiscoverStart::Dirs(&[start_dir.to_path_buf()]),
         &WorkspaceDiscoverOptions {
           fs,
           discover_pkg_json: true,

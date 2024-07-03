@@ -650,6 +650,31 @@ impl ConfigFile {
     additional_config_file_names: &[&str],
     parse_options: &ConfigParseOptions,
   ) -> Result<Option<ConfigFile>, ConfigFileReadError> {
+    let config_file_names =
+      Self::resolve_config_file_names(additional_config_file_names);
+
+    debug_assert!(start.is_absolute());
+    for ancestor in start.ancestors() {
+      let maybe_config_file = Self::maybe_find_in_folder(
+        fs,
+        ancestor,
+        &config_file_names,
+        parse_options,
+      )?;
+      if let Some(config_file) = maybe_config_file {
+        return Ok(Some(config_file));
+      }
+    }
+    // No config file found.
+    Ok(None)
+  }
+
+  pub(crate) fn maybe_find_in_folder(
+    fs: &dyn DenoConfigFs,
+    folder: &Path,
+    config_file_names: &[&str],
+    parse_options: &ConfigParseOptions,
+  ) -> Result<Option<Self>, ConfigFileReadError> {
     fn is_skippable_err(e: &ConfigFileReadError) -> bool {
       if let ConfigFileReadError::FailedReading { source: ioerr, .. } = e {
         is_skippable_io_error(ioerr)
@@ -658,28 +683,21 @@ impl ConfigFile {
       }
     }
 
-    let config_file_names =
-      Self::resolve_config_file_names(additional_config_file_names);
-
-    debug_assert!(start.is_absolute());
-    for ancestor in start.ancestors() {
-      for config_filename in config_file_names.iter() {
-        let f = ancestor.join(config_filename);
-        match ConfigFile::read(fs, &f, parse_options) {
-          Ok(cf) => {
-            log::debug!("Config file found at '{}'", f.display());
-            return Ok(Some(cf));
-          }
-          Err(e) if is_skippable_err(&e) => {
-            // ok, keep going
-          }
-          Err(e) => {
-            return Err(e);
-          }
+    for config_filename in config_file_names {
+      let file_path = folder.join(config_filename);
+      match ConfigFile::read(fs, &file_path, parse_options) {
+        Ok(cf) => {
+          log::debug!("Config file found at '{}'", file_path.display());
+          return Ok(Some(cf));
+        }
+        Err(e) if is_skippable_err(&e) => {
+          // ok, keep going
+        }
+        Err(e) => {
+          return Err(e);
         }
       }
     }
-    // No config file found.
     Ok(None)
   }
 
