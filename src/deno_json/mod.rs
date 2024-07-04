@@ -727,7 +727,7 @@ impl ConfigFile {
     config_path: &Path,
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
-    let text = fs.read_to_string_lossy(config_path).map_err(|err| {
+    let text = fs.read_to_string(config_path).map_err(|err| {
       ConfigFileReadError::FailedReading {
         specifier: specifier.clone(),
         source: err,

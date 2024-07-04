@@ -9,7 +9,7 @@ repository = "https://github.com/denoland/deno_config"
 
 [features]
 default = ["workspace"]
-deno_json = ["jsonc-parser", "glob", "ignore", "import_map"]
+deno_json = ["jsonc-parser", "glob", "import_map"]
 package_json = ["deno_semver"]
 sync = []
 workspace = ["deno_json", "package_json"]
@@ -20,7 +20,6 @@ indexmap = { version = "2", features = ["serde"] }
 jsonc-parser = { version = "0.23.0", features = ["serde"], optional = true }
 log = "0.4.20"
 glob = { version = "0.3.1", optional = true }
-ignore = { version = "0.4", optional = true }
 percent-encoding = "2.3.0"
 serde = { version = "1.0.149", features = ["derive"] }
 serde_json = "1.0.85"
