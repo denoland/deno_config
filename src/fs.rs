@@ -204,7 +204,7 @@ impl DenoConfigFs for TestFileSystem {
           .directories
           .get(parent)
           .and_then(|d| d.entries.get(path.file_name()?.to_str()?))
-          .and_then(|e| Some(e.as_metadata()))
+          .map(|e| e.as_metadata())
       })
       .ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "not found")

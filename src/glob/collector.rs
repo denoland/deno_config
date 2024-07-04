@@ -214,6 +214,7 @@ mod test {
   use crate::glob::PathOrPattern;
   use crate::glob::PathOrPatternSet;
 
+  #[allow(clippy::disallowed_methods)] // allow fs methods
   #[test]
   fn test_collect_files() {
     fn create_files(dir_path: &PathBuf, files: &[&str]) {
