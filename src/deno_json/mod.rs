@@ -852,20 +852,8 @@ impl ConfigFile {
     }
   }
 
-  pub fn vendor_dir_path(&self) -> Option<PathBuf> {
-    if self.json.vendor == Some(true) {
-      Some(
-        self
-          .specifier
-          .to_file_path()
-          .unwrap()
-          .parent()
-          .unwrap()
-          .join("vendor"),
-      )
-    } else {
-      None
-    }
+  pub fn vendor(&self) -> Option<bool> {
+    self.json.vendor
   }
 
   /// Resolves the import map potentially resolving the file specified

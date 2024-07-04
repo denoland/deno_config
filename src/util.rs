@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
 
+#[derive(Debug)]
 pub struct CheckedSet<T: std::hash::Hash + ?Sized> {
   _kind: PhantomData<T>,
   checked: std::collections::HashSet<u64>,

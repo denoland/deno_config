@@ -210,13 +210,30 @@ pub enum WorkspaceDiscoverStart<'a> {
   ConfigFile(&'a Path),
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy)]
+pub enum VendorEnablement<'a> {
+  Disable,
+  Enable {
+    /// The cwd, which will be used when no configuration file is
+    /// resolved in order to discover the vendor folder.
+    cwd: &'a Path,
+  },
+}
+
+#[derive(Default, Clone)]
 pub struct WorkspaceDiscoverOptions<'a> {
   pub fs: &'a dyn crate::fs::DenoConfigFs,
   pub pkg_json_cache: Option<&'a dyn crate::package_json::PackageJsonCache>,
   pub config_parse_options: ConfigParseOptions,
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
+  pub maybe_vendor_override: Option<VendorEnablement<'a>>,
+}
+
+#[derive(Clone)]
+pub struct WorkspaceEmptyOptions<'a> {
+  pub root_dir: UrlRc,
+  pub use_vendor_dir: VendorEnablement<'a>,
 }
 
 /// Configuration files found in a specific folder.
@@ -256,17 +273,22 @@ pub struct Workspace {
   /// The directory the user started the workspace discovery from.
   start_dir: UrlRc,
   config_folders: IndexMap<UrlRc, FolderConfigs>,
+  vendor_dir: Option<PathBuf>,
 }
 
 impl Workspace {
-  pub fn empty(root_dir: UrlRc) -> Self {
+  pub fn empty(opts: WorkspaceEmptyOptions) -> Self {
     Workspace {
+      vendor_dir: match opts.use_vendor_dir {
+        VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
+        VendorEnablement::Disable => None,
+      },
       config_folders: IndexMap::from([(
-        root_dir.clone(),
+        opts.root_dir.clone(),
         FolderConfigs::default(),
       )]),
-      start_dir: root_dir.clone(),
-      root_dir,
+      start_dir: opts.root_dir.clone(),
+      root_dir: opts.root_dir,
     }
   }
 
@@ -306,12 +328,34 @@ impl Workspace {
         }
       }
     }
+    let resolve_vendor_dir = |config_folder: &ConfigFolder| {
+      if let Some(vendor_folder_override) = &opts.maybe_vendor_override {
+        match vendor_folder_override {
+          VendorEnablement::Disable => None,
+          VendorEnablement::Enable { cwd } => match config_folder.deno_json() {
+            Some(c) => Some(c.dir_path().join("vendor")),
+            None => Some(cwd.join("vendor")),
+          },
+        }
+      } else {
+        let deno_json = config_folder.deno_json()?;
+        if deno_json.vendor() == Some(true) {
+          Some(deno_json.dir_path().join("vendor"))
+        } else {
+          None
+        }
+      }
+    };
 
     let start_dir = new_rc(resolve_start_dir(&start)?);
     let config_file_discovery = discover_workspace_config_files(start, opts)?;
 
     let workspace = match config_file_discovery {
       ConfigFileDiscovery::None => Workspace {
+        vendor_dir: match opts.maybe_vendor_override {
+          Some(VendorEnablement::Enable { cwd }) => Some(cwd.join("vendor")),
+          _ => None,
+        },
         config_folders: IndexMap::from([(
           start_dir.clone(),
           FolderConfigs::default(),
@@ -322,6 +366,7 @@ impl Workspace {
       ConfigFileDiscovery::Single(config_folder) => {
         let root_dir = new_rc(config_folder.folder_url());
         Workspace {
+          vendor_dir: resolve_vendor_dir(&config_folder),
           config_folders: IndexMap::from([(
             root_dir.clone(),
             FolderConfigs::from_config_folder(config_folder),
@@ -331,6 +376,7 @@ impl Workspace {
         }
       }
       ConfigFileDiscovery::Workspace { root, members } => {
+        let vendor_dir = resolve_vendor_dir(&root);
         let root_dir = new_rc(root.folder_url());
         let mut config_folders = members
           .into_iter()
@@ -341,6 +387,7 @@ impl Workspace {
         config_folders
           .insert(root_dir.clone(), FolderConfigs::from_config_folder(root));
         Workspace {
+          vendor_dir,
           root_dir,
           start_dir,
           config_folders,
@@ -718,10 +765,8 @@ impl Workspace {
       .unwrap_or(None)
   }
 
-  pub fn vendor_dir_path(&self) -> Option<PathBuf> {
-    self
-      .with_root_config_only(|root_config| root_config.vendor_dir_path())
-      .unwrap_or(None)
+  pub fn vendor_dir_path(&self) -> Option<&PathBuf> {
+    self.vendor_dir.as_ref()
   }
 
   pub fn to_compiler_options(
@@ -2313,7 +2358,10 @@ mod test {
       LockConfig::Bool(false),
     );
     assert_eq!(workspace.node_modules_dir(), Some(false));
-    assert_eq!(workspace.vendor_dir_path(), Some(root_dir().join("vendor")));
+    assert_eq!(
+      workspace.vendor_dir_path().unwrap(),
+      &root_dir().join("vendor")
+    );
     assert_eq!(
       workspace.diagnostics(),
       vec![
