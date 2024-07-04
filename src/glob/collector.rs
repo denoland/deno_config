@@ -277,16 +277,18 @@ mod test {
         ignore_dir_path.to_path_buf(),
       )]),
     };
-    let file_collector = FileCollector::new(|e| {
-      // exclude dotfiles
-      e.path
-        .file_name()
-        .and_then(|f| f.to_str())
-        .map(|f| !f.starts_with('.'))
-        .unwrap_or(false)
-    });
+    let new_file_collector = || {
+      FileCollector::new(|e| {
+        // exclude dotfiles
+        e.path
+          .file_name()
+          .and_then(|f| f.to_str())
+          .map(|f| !f.starts_with('.'))
+          .unwrap_or(false)
+      })
+    };
 
-    let result = file_collector
+    let result = new_file_collector()
       .collect_file_patterns(&RealDenoConfigFs, file_patterns.clone())
       .unwrap();
     let expected = [
@@ -309,11 +311,10 @@ mod test {
     assert_eq!(file_names, expected);
 
     // test ignoring the .git and node_modules folder
-    let file_collector = file_collector
+    let result = new_file_collector()
       .ignore_git_folder()
       .ignore_node_modules()
-      .set_vendor_folder(Some(child_dir_path.join("vendor").to_path_buf()));
-    let result = file_collector
+      .set_vendor_folder(Some(child_dir_path.join("vendor").to_path_buf()))
       .collect_file_patterns(&RealDenoConfigFs, file_patterns.clone())
       .unwrap();
     let expected = [
@@ -345,7 +346,10 @@ mod test {
         ignore_dir_path.to_path_buf(),
       )]),
     };
-    let result = file_collector
+    let result = new_file_collector()
+      .ignore_git_folder()
+      .ignore_node_modules()
+      .set_vendor_folder(Some(child_dir_path.join("vendor").to_path_buf()))
       .collect_file_patterns(&RealDenoConfigFs, file_patterns)
       .unwrap();
     let expected = [
