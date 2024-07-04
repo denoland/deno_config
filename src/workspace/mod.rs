@@ -106,13 +106,15 @@ impl NpmPackageConfig {
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum WorkspaceDiagnosticKind {
-  #[error("The '{0}' field can only be specified in the root workspace deno.json file.")]
+  #[error("The \"{0}\" field can only be specified in the root workspace deno.json file.")]
   RootOnlyOption(&'static str),
-  #[error("The '{0}' field can only be specified in a workspace member deno.json file and not the root workspace file.")]
+  #[error("The \"{0}\" field can only be specified in a workspace member deno.json file and not the root workspace file.")]
   MemberOnlyOption(&'static str),
-  #[error("The 'workspaces' field was ignored. Maybe you mean 'workspace'?")]
+  #[error("The \"workspaces\" field was ignored. Use \"workspace\" instead.")]
   InvalidWorkspacesOption,
-  #[error("The 'exports' field should be specified when specifying a 'name'.")]
+  #[error(
+    "The \"exports\" field should be specified when specifying a \"name\"."
+  )]
   MissingExports,
 }
 
