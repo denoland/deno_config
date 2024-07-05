@@ -387,6 +387,10 @@ impl PathOrPatternSet {
     &self.0
   }
 
+  pub fn inner_mut(&mut self) -> &mut Vec<PathOrPattern> {
+    &mut self.0
+  }
+
   pub fn into_path_or_patterns(self) -> Vec<PathOrPattern> {
     self.0
   }
@@ -424,6 +428,10 @@ impl PathOrPatternSet {
       }
     }
     result
+  }
+
+  pub fn push(&mut self, item: PathOrPattern) {
+    self.0.push(item);
   }
 
   pub fn append(&mut self, items: impl Iterator<Item = PathOrPattern>) {

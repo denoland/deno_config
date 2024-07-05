@@ -787,7 +787,7 @@ mod test {
   ) -> WorkspaceRc {
     new_rc(
       Workspace::discover(
-        WorkspaceDiscoverStart::Dirs(&[start_dir.to_path_buf()]),
+        WorkspaceDiscoverStart::Paths(&[start_dir.to_path_buf()]),
         &WorkspaceDiscoverOptions {
           fs,
           discover_pkg_json: true,

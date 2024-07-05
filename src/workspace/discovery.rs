@@ -149,7 +149,7 @@ pub fn discover_workspace_config_files(
   opts: &WorkspaceDiscoverOptions,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
   match start {
-    WorkspaceDiscoverStart::Dirs(dirs) => match dirs.len() {
+    WorkspaceDiscoverStart::Paths(dirs) => match dirs.len() {
       0 => Ok(ConfigFileDiscovery::None),
       1 => {
         let dir = &dirs[0];

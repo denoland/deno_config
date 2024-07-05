@@ -40,6 +40,12 @@ pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
 pub use ts::TsConfig;
 
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub struct ConfigWithFiles<T> {
+  pub config: T,
+  pub files: FilePatterns,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum ConfigFlag {
   #[default]
@@ -149,8 +155,8 @@ fn choose_files(
 #[serde(default, deny_unknown_fields)]
 struct SerializedLintConfig {
   pub rules: LintRulesConfig,
-  pub include: Option<Vec<String>>,
-  pub exclude: Vec<String>,
+  #[serde(flatten)]
+  pub files: SerializedFilesConfig,
 
   #[serde(rename = "files")]
   pub deprecated_files: SerializedFilesConfig,
@@ -161,13 +167,10 @@ impl SerializedLintConfig {
   pub fn into_resolved(
     self,
     config_file_specifier: &Url,
-  ) -> Result<LintConfig, AnyError> {
-    let (include, exclude) = (self.include, self.exclude);
-    let files = SerializedFilesConfig { include, exclude };
-
-    Ok(LintConfig {
-      rules: self.rules,
-      files: choose_files(files, self.deprecated_files)
+  ) -> Result<LintConfigWithFiles, AnyError> {
+    Ok(LintConfigWithFiles {
+      config: LintConfig { rules: self.rules },
+      files: choose_files(self.files, self.deprecated_files)
         .into_resolved(config_file_specifier)?,
     })
   }
@@ -178,11 +181,12 @@ pub struct WorkspaceLintConfig {
   pub report: Option<String>,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq)]
+#[derive(Clone, Debug, Default, Hash, PartialEq)]
 pub struct LintConfig {
   pub rules: LintRulesConfig,
-  pub files: FilePatterns,
 }
+
+pub type LintConfigWithFiles = ConfigWithFiles<LintConfig>;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1162,7 +1166,7 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_lint_config(&self) -> Result<LintConfig, AnyError> {
+  pub fn to_lint_config(&self) -> Result<LintConfigWithFiles, AnyError> {
     match self.json.lint.clone() {
       Some(config) => {
         let mut exclude_patterns = self.resolve_exclude_patterns()?;
@@ -1170,14 +1174,14 @@ impl ConfigFile {
           serde_json::from_value(config)
             .context("Failed to parse \"lint\" configuration")?;
         // top level excludes at the start because they're lower priority
-        exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
-        serialized.exclude = exclude_patterns;
+        exclude_patterns.extend(std::mem::take(&mut serialized.files.exclude));
+        serialized.files.exclude = exclude_patterns;
         serialized
           .into_resolved(&self.specifier)
           .context("Invalid lint config.")
       }
-      None => Ok(LintConfig {
-        rules: Default::default(),
+      None => Ok(LintConfigWithFiles {
+        config: Default::default(),
         files: self.to_exclude_files_config()?,
       }),
     }
@@ -1601,7 +1605,7 @@ mod tests {
     let config_dir_path = specifier_to_file_path(&config_dir).unwrap();
     assert_eq!(
       unpack_object(config_file.to_lint_config(), "lint"),
-      LintConfig {
+      LintConfigWithFiles {
         files: FilePatterns {
           base: config_dir_path.clone(),
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
@@ -1611,11 +1615,13 @@ mod tests {
             PathBuf::from("/deno/src/testdata/")
           )]),
         },
-        rules: LintRulesConfig {
-          include: Some(vec!["ban-untagged-todo".to_string()]),
-          exclude: None,
-          tags: Some(vec!["recommended".to_string()]),
-        },
+        config: LintConfig {
+          rules: LintRulesConfig {
+            include: Some(vec!["ban-untagged-todo".to_string()]),
+            exclude: None,
+            tags: Some(vec!["recommended".to_string()]),
+          },
+        }
       }
     );
     assert_eq!(
