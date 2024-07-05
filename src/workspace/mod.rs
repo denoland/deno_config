@@ -27,7 +27,6 @@ use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::ConfigParseOptions;
 use crate::get_ts_config_for_emit;
 use crate::glob::FilePatterns;
-use crate::glob::PathKind;
 use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
@@ -878,6 +877,15 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
+  pub fn resolve_bench_config_for_members(
+    self: &WorkspaceRc,
+    cli_args: &FilePatterns,
+  ) -> Result<Vec<(WorkspaceMemberContext, BenchConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |ctx, patterns| {
+      ctx.to_bench_config(patterns)
+    })
+  }
+
   pub fn resolve_lint_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
@@ -942,7 +950,7 @@ impl Workspace {
     for pattern in cli_arg_patterns {
       let mut matches = Vec::with_capacity(deno_json_folders.len());
       for (dir_path, v) in deno_json_folders.iter() {
-        if pattern.base.starts_with(&dir_path)
+        if pattern.base.starts_with(dir_path)
           || dir_path.starts_with(&pattern.base)
         {
           matches.push((dir_path, *v));
@@ -1001,33 +1009,6 @@ impl Workspace {
       }
     }
     results
-  }
-
-  #[deprecated] // REMOVE THIS METHOD
-  pub fn resolve_ctxs_from_patterns(
-    self: &WorkspaceRc,
-    patterns: &FilePatterns,
-  ) -> Vec<WorkspaceMemberContext> {
-    let context = self.resolve_start_ctx();
-    let mut ctxs = Vec::with_capacity(self.config_folders.len());
-    ctxs.push(context);
-
-    // sub configs
-    for (dir_url, folder) in self.config_folders.iter() {
-      let config = match &folder.deno_json {
-        Some(c) => c,
-        None => continue,
-      };
-      if *dir_url != self.start_dir
-        && dir_url.as_str().starts_with(self.start_dir.as_str())
-        && patterns.matches_path(&config.dir_path(), PathKind::Directory)
-      {
-        let member_ctx = self.resolve_member_ctx(dir_url);
-        ctxs.push(member_ctx);
-      }
-    }
-
-    ctxs
   }
 
   pub fn resolve_config_excludes(&self) -> Result<PathOrPatternSet, AnyError> {
@@ -1380,8 +1361,12 @@ impl WorkspaceMemberContext {
     })
   }
 
-  pub fn to_bench_config(&self) -> Result<BenchConfig, AnyError> {
+  pub fn to_bench_config(
+    &self,
+    cli_args: FilePatterns,
+  ) -> Result<BenchConfig, AnyError> {
     let mut config = self.to_bench_config_inner()?;
+    combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -1665,6 +1650,7 @@ mod test {
 
   use crate::assert_contains;
   use crate::fs::TestFileSystem;
+  use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
   use crate::TsConfig;
 
@@ -2339,7 +2325,10 @@ mod test {
       }),
     );
     assert_eq!(workspace.diagnostics(), vec![]);
-    let bench_config = workspace.resolve_start_ctx().to_bench_config().unwrap();
+    let start_ctx = workspace.resolve_start_ctx();
+    let bench_config = start_ctx
+      .to_bench_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+      .unwrap();
     assert_eq!(
       bench_config,
       BenchConfig {
@@ -2354,9 +2343,10 @@ mod test {
     );
 
     // check the root context
-    let root_bench_config = workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
-      .to_bench_config()
+    let root_ctx = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+    let root_bench_config = root_ctx
+      .to_bench_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       root_bench_config,
@@ -2505,7 +2495,9 @@ mod test {
 
     for (files, ctx) in [(root_files, root_ctx), (member_files, member_ctx)] {
       assert_eq!(
-        ctx.to_bench_config().unwrap(),
+        ctx
+          .to_bench_config(FilePatterns::new_with_base(ctx.dir_path()))
+          .unwrap(),
         BenchConfig {
           files: files.clone(),
         }
