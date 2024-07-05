@@ -40,12 +40,6 @@ pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
 pub use ts::TsConfig;
 
-#[derive(Clone, Debug, Hash, PartialEq)]
-pub struct ConfigWithFiles<T> {
-  pub config: T,
-  pub files: FilePatterns,
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum ConfigFlag {
   #[default]
@@ -167,9 +161,9 @@ impl SerializedLintConfig {
   pub fn into_resolved(
     self,
     config_file_specifier: &Url,
-  ) -> Result<LintConfigWithFiles, AnyError> {
-    Ok(LintConfigWithFiles {
-      config: LintConfig { rules: self.rules },
+  ) -> Result<LintConfig, AnyError> {
+    Ok(LintConfig {
+      options: LintOptionsConfig { rules: self.rules },
       files: choose_files(self.files, self.deprecated_files)
         .into_resolved(config_file_specifier)?,
     })
@@ -182,11 +176,15 @@ pub struct WorkspaceLintConfig {
 }
 
 #[derive(Clone, Debug, Default, Hash, PartialEq)]
-pub struct LintConfig {
+pub struct LintOptionsConfig {
   pub rules: LintRulesConfig,
 }
 
-pub type LintConfigWithFiles = ConfigWithFiles<LintConfig>;
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub struct LintConfig {
+  pub options: LintOptionsConfig,
+  pub files: FilePatterns,
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1166,7 +1164,7 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_lint_config(&self) -> Result<LintConfigWithFiles, AnyError> {
+  pub fn to_lint_config(&self) -> Result<LintConfig, AnyError> {
     match self.json.lint.clone() {
       Some(config) => {
         let mut exclude_patterns = self.resolve_exclude_patterns()?;
@@ -1180,8 +1178,8 @@ impl ConfigFile {
           .into_resolved(&self.specifier)
           .context("Invalid lint config.")
       }
-      None => Ok(LintConfigWithFiles {
-        config: Default::default(),
+      None => Ok(LintConfig {
+        options: Default::default(),
         files: self.to_exclude_files_config()?,
       }),
     }
@@ -1605,7 +1603,7 @@ mod tests {
     let config_dir_path = specifier_to_file_path(&config_dir).unwrap();
     assert_eq!(
       unpack_object(config_file.to_lint_config(), "lint"),
-      LintConfigWithFiles {
+      LintConfig {
         files: FilePatterns {
           base: config_dir_path.clone(),
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
@@ -1615,7 +1613,7 @@ mod tests {
             PathBuf::from("/deno/src/testdata/")
           )]),
         },
-        config: LintConfig {
+        options: LintOptionsConfig {
           rules: LintRulesConfig {
             include: Some(vec!["ban-untagged-todo".to_string()]),
             exclude: None,

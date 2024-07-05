@@ -42,7 +42,7 @@ use crate::FmtOptionsConfig;
 use crate::IgnoredCompilerOptions;
 use crate::JsxImportSourceConfig;
 use crate::LintConfig;
-use crate::LintConfigWithFiles;
+use crate::LintOptionsConfig;
 use crate::LintRulesConfig;
 use crate::LockConfig;
 use crate::PublishConfig;
@@ -881,13 +881,35 @@ impl Workspace {
   pub fn resolve_lint_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceMemberContext, LintConfigWithFiles)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceMemberContext, LintConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |ctx, patterns| {
+      ctx.to_lint_config(patterns)
+    })
+  }
+
+  pub fn resolve_fmt_config_for_members(
+    self: &WorkspaceRc,
+    cli_args: &FilePatterns,
+  ) -> Result<Vec<(WorkspaceMemberContext, FmtConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |ctx, patterns| {
+      ctx.to_fmt_config(patterns)
+    })
+  }
+
+  fn resolve_config_for_members<TConfig>(
+    self: &WorkspaceRc,
+    cli_args: &FilePatterns,
+    resolve_config: impl Fn(
+      &WorkspaceMemberContext,
+      FilePatterns,
+    ) -> Result<TConfig, AnyError>,
+  ) -> Result<Vec<(WorkspaceMemberContext, TConfig)>, AnyError> {
     let cli_args_by_folder = self.split_cli_args_by_deno_json_folder(cli_args);
     let mut result = Vec::with_capacity(cli_args_by_folder.len());
     for (folder_url, patterns) in cli_args_by_folder {
       let ctx = self.resolve_member_ctx(&folder_url);
-      let lint_config_with_files = ctx.to_lint_config(patterns)?;
-      result.push((ctx, lint_config_with_files));
+      let config = resolve_config(&ctx, patterns)?;
+      result.push((ctx, config));
     }
     Ok(result)
   }
@@ -920,17 +942,21 @@ impl Workspace {
       // remove any non-sub/current folders that start with another folder
       let mut indexes_to_remove = VecDeque::with_capacity(matches.len());
       for (i, (m, _)) in matches.iter().enumerate() {
-        if !m.starts_with(&pattern.base) && matches.iter().any(|(sub, _)| {
-          sub.starts_with(m) && sub != m && pattern.base.starts_with(m)
-        }) {
+        if !m.starts_with(&pattern.base)
+          && matches.iter().any(|(sub, _)| {
+            sub.starts_with(m) && sub != m && pattern.base.starts_with(m)
+          })
+        {
           indexes_to_remove.push_back(i);
         }
       }
-      let mut final_matches = Vec::with_capacity(std::cmp::max(1, matches.len()));
+      let mut final_matches =
+        Vec::with_capacity(std::cmp::max(1, matches.len()));
       if matches.is_empty() {
         final_matches.push(&self.start_dir);
       }
-      for (i, (_dir_path, (folder_url, _config))) in matches.iter().enumerate() {
+      for (i, (_dir_path, (folder_url, _config))) in matches.iter().enumerate()
+      {
         if let Some(skip_index) = indexes_to_remove.front() {
           if i == *skip_index {
             indexes_to_remove.pop_front();
@@ -968,6 +994,7 @@ impl Workspace {
     results
   }
 
+  #[deprecated] // REMOVE THIS METHOD
   pub fn resolve_ctxs_from_patterns(
     self: &WorkspaceRc,
     patterns: &FilePatterns,
@@ -1239,17 +1266,17 @@ impl WorkspaceMemberContext {
   pub fn to_lint_config(
     &self,
     cli_args: FilePatterns,
-  ) -> Result<LintConfigWithFiles, AnyError> {
+  ) -> Result<LintConfig, AnyError> {
     let mut config = self.to_lint_config_inner()?;
     combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
 
-  fn to_lint_config_inner(&self) -> Result<LintConfigWithFiles, AnyError> {
+  fn to_lint_config_inner(&self) -> Result<LintConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
-      return Ok(LintConfigWithFiles {
-        config: Default::default(),
+      return Ok(LintConfig {
+        options: Default::default(),
         files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
       });
     };
@@ -1259,28 +1286,28 @@ impl WorkspaceMemberContext {
       None => return Ok(member_config),
     };
     // combine the configs
-    Ok(LintConfigWithFiles {
-      config: LintConfig {
+    Ok(LintConfig {
+      options: LintOptionsConfig {
         rules: {
-          let root_config = root_config.config;
-          let member_config = member_config.config;
+          let root_opts = root_config.options;
+          let member_opts = member_config.options;
           LintRulesConfig {
             tags: combine_option_vecs(
-              root_config.rules.tags,
-              member_config.rules.tags,
+              root_opts.rules.tags,
+              member_opts.rules.tags,
             ),
             include: combine_option_vecs_with_override(
               CombineOptionVecsWithOverride {
-                root: root_config.rules.include,
-                member: member_config.rules.include.as_ref().map(Cow::Borrowed),
-                member_override_root: member_config.rules.exclude.as_ref(),
+                root: root_opts.rules.include,
+                member: member_opts.rules.include.as_ref().map(Cow::Borrowed),
+                member_override_root: member_opts.rules.exclude.as_ref(),
               },
             ),
             exclude: combine_option_vecs_with_override(
               CombineOptionVecsWithOverride {
-                root: root_config.rules.exclude,
-                member: member_config.rules.exclude.map(Cow::Owned),
-                member_override_root: member_config.rules.include.as_ref(),
+                root: root_opts.rules.exclude,
+                member: member_opts.rules.exclude.map(Cow::Owned),
+                member_override_root: member_opts.rules.include.as_ref(),
               },
             ),
           }
@@ -1290,8 +1317,12 @@ impl WorkspaceMemberContext {
     })
   }
 
-  pub fn to_fmt_config(&self) -> Result<FmtConfig, AnyError> {
+  pub fn to_fmt_config(
+    &self,
+    cli_args: FilePatterns,
+  ) -> Result<FmtConfig, AnyError> {
     let mut config = self.to_fmt_config_inner()?;
+    combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -2156,8 +2187,8 @@ mod test {
       .unwrap();
     assert_eq!(
       lint_config,
-      LintConfigWithFiles {
-        config: LintConfig {
+      LintConfig {
+        options: LintOptionsConfig {
           rules: LintRulesConfig {
             tags: Some(vec!["tag1".to_string()]),
             include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
@@ -2175,15 +2206,15 @@ mod test {
     );
 
     // check the root context
-    let member_ctx = workspace
+    let root_ctx = workspace
       .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
-    let root_lint_config = member_ctx
-      .to_lint_config(FilePatterns::new_with_base(member_ctx.dir_path()))
+    let root_lint_config = root_ctx
+      .to_lint_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       root_lint_config,
-      LintConfigWithFiles {
-        config: LintConfig {
+      LintConfig {
+        options: LintOptionsConfig {
           rules: LintRulesConfig {
             tags: Some(vec!["tag1".to_string()]),
             include: Some(vec!["rule1".to_string()]),
@@ -2229,7 +2260,10 @@ mod test {
       }),
     );
     assert_eq!(workspace.diagnostics(), vec![]);
-    let fmt_config = workspace.resolve_start_ctx().to_fmt_config().unwrap();
+    let start_ctx = workspace.resolve_start_ctx();
+    let fmt_config = start_ctx
+      .to_fmt_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+      .unwrap();
     assert_eq!(
       fmt_config,
       FmtConfig {
@@ -2252,9 +2286,10 @@ mod test {
     );
 
     // check the root context
-    let root_fmt_config = workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
-      .to_fmt_config()
+    let root_ctx = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+    let root_fmt_config = root_ctx
+      .to_fmt_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       root_fmt_config,
@@ -2459,7 +2494,9 @@ mod test {
         }
       );
       assert_eq!(
-        ctx.to_fmt_config().unwrap(),
+        ctx
+          .to_fmt_config(FilePatterns::new_with_base(ctx.dir_path()))
+          .unwrap(),
         FmtConfig {
           options: Default::default(),
           files: files.clone(),
@@ -2469,9 +2506,9 @@ mod test {
         ctx
           .to_lint_config(FilePatterns::new_with_base(ctx.dir_path()))
           .unwrap(),
-        LintConfigWithFiles {
+        LintConfig {
           files: files.clone(),
-          config: Default::default(),
+          options: Default::default(),
         }
       );
       assert_eq!(
