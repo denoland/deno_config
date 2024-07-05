@@ -387,10 +387,6 @@ impl PathOrPatternSet {
     &self.0
   }
 
-  pub fn inner_mut(&mut self) -> &mut Vec<PathOrPattern> {
-    &mut self.0
-  }
-
   pub fn into_path_or_patterns(self) -> Vec<PathOrPattern> {
     self.0
   }
