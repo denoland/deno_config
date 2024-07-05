@@ -408,14 +408,14 @@ impl Workspace {
       ConfigFileDiscovery::Workspace { root, members } => {
         let vendor_dir = resolve_vendor_dir(&root);
         let root_dir = new_rc(root.folder_url());
-        let mut config_folders = members
-          .into_iter()
-          .map(|(folder_url, config_folder)| {
-            (folder_url, FolderConfigs::from_config_folder(config_folder))
-          })
-          .collect::<IndexMap<_, _>>();
+        let mut config_folders = IndexMap::with_capacity(members.len() + 1);
         config_folders
           .insert(root_dir.clone(), FolderConfigs::from_config_folder(root));
+        config_folders.extend(members.into_iter().map(
+          |(folder_url, config_folder)| {
+            (folder_url, FolderConfigs::from_config_folder(config_folder))
+          },
+        ));
         Workspace {
           vendor_dir,
           root_dir,
@@ -893,6 +893,15 @@ impl Workspace {
   ) -> Result<Vec<(WorkspaceMemberContext, FmtConfig)>, AnyError> {
     self.resolve_config_for_members(cli_args, |ctx, patterns| {
       ctx.to_fmt_config(patterns)
+    })
+  }
+
+  pub fn resolve_test_config_for_members(
+    self: &WorkspaceRc,
+    cli_args: &FilePatterns,
+  ) -> Result<Vec<(WorkspaceMemberContext, TestConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |ctx, patterns| {
+      ctx.to_test_config(patterns)
     })
   }
 
@@ -1465,8 +1474,12 @@ impl WorkspaceMemberContext {
     })
   }
 
-  pub fn to_test_config(&self) -> Result<TestConfig, AnyError> {
+  pub fn to_test_config(
+    &self,
+    cli_args: FilePatterns,
+  ) -> Result<TestConfig, AnyError> {
     let mut config = self.to_test_config_inner()?;
+    combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -2372,7 +2385,10 @@ mod test {
       }),
     );
     assert_eq!(workspace.diagnostics(), vec![]);
-    let config = workspace.resolve_start_ctx().to_test_config().unwrap();
+    let start_ctx = workspace.resolve_start_ctx();
+    let config = start_ctx
+      .to_test_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+      .unwrap();
     assert_eq!(
       config,
       TestConfig {
@@ -2387,9 +2403,10 @@ mod test {
     );
 
     // check the root context
-    let root_test_config = workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
-      .to_test_config()
+    let root_ctx = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+    let root_test_config = root_ctx
+      .to_test_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       root_test_config,
@@ -2512,7 +2529,9 @@ mod test {
         }
       );
       assert_eq!(
-        ctx.to_test_config().unwrap(),
+        ctx
+          .to_test_config(FilePatterns::new_with_base(ctx.dir_path()))
+          .unwrap(),
         TestConfig {
           files: files.clone(),
         }
