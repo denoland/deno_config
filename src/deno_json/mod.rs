@@ -1259,7 +1259,8 @@ impl ConfigFile {
   /// If the configuration file contains "extra" modules (like TypeScript
   /// `"types"`) options, return them as imports to be added to a module graph.
   pub fn to_maybe_imports(&self) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
-    let Some(compiler_options_value) = self.json.compiler_options.as_ref() else {
+    let Some(compiler_options_value) = self.json.compiler_options.as_ref()
+    else {
       return Ok(Vec::new());
     };
     let Some(types) = compiler_options_value.get("types") else {
@@ -1279,13 +1280,16 @@ impl ConfigFile {
   pub fn to_maybe_jsx_import_source_config(
     &self,
   ) -> Result<Option<JsxImportSourceConfig>, AnyError> {
-    let Some(compiler_options_value) = self.json.compiler_options.as_ref() else {
+    let Some(compiler_options_value) = self.json.compiler_options.as_ref()
+    else {
       return Ok(None);
     };
     let Some(compiler_options) =
-      serde_json::from_value::<CompilerOptions>(compiler_options_value.clone()).ok() else {
-        return Ok(None);
-      };
+      serde_json::from_value::<CompilerOptions>(compiler_options_value.clone())
+        .ok()
+    else {
+      return Ok(None);
+    };
     let module = match compiler_options.jsx.as_deref() {
       Some("react-jsx") => "jsx-runtime".to_string(),
       Some("react-jsxdev") => "jsx-dev-runtime".to_string(),

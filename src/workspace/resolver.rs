@@ -426,7 +426,10 @@ impl WorkspaceResolver {
       .package_jsons()
       .find(|p| p.name.as_deref() == Some(name));
     let Some(pkg_json) = pkg_json else {
-      return Err(WorkspaceResolvePkgJsonFolderErrorKind::NotFound(name.to_string()).into());
+      return Err(
+        WorkspaceResolvePkgJsonFolderErrorKind::NotFound(name.to_string())
+          .into(),
+      );
     };
     match version_req.inner() {
       RangeSetOrTag::RangeSet(set) => {
