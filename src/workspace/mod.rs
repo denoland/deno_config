@@ -998,7 +998,7 @@ impl Workspace {
                 }
               }
               None => {
-                entry.include = pattern.include.clone();
+                entry.include.clone_from(&pattern.include);
               }
             }
           }
@@ -1267,7 +1267,9 @@ impl WorkspaceMemberContext {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(LintConfig {
         options: Default::default(),
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
       });
     };
     let member_config = deno_json.member.to_lint_config()?;
@@ -1320,7 +1322,9 @@ impl WorkspaceMemberContext {
   fn to_fmt_config_inner(&self) -> Result<FmtConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(FmtConfig {
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
         options: Default::default(),
       });
     };
@@ -1374,7 +1378,9 @@ impl WorkspaceMemberContext {
   fn to_bench_config_inner(&self) -> Result<BenchConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(BenchConfig {
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
       });
     };
     let member_config = deno_json.member.to_bench_config()?;
@@ -1446,7 +1452,9 @@ impl WorkspaceMemberContext {
   fn to_publish_config_inner(&self) -> Result<PublishConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(PublishConfig {
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
       });
     };
     let member_config = deno_json.member.to_publish_config()?;
@@ -1472,8 +1480,10 @@ impl WorkspaceMemberContext {
   fn to_test_config_inner(&self) -> Result<TestConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(TestConfig {
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
-    });
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
+      });
     };
     let member_config = deno_json.member.to_test_config()?;
     let root_config = match &deno_json.root {
@@ -1577,10 +1587,9 @@ fn combine_option_vecs_with_override<T: Eq + std::hash::Hash + Clone>(
     (Some(root), Some(member)) => {
       let capacity = root.len() + member.len();
       Some(match member {
-        Cow::Owned(m) => remove_duplicates_iterator(
-          root.into_iter().chain(m.into_iter()),
-          capacity,
-        ),
+        Cow::Owned(m) => {
+          remove_duplicates_iterator(root.into_iter().chain(m), capacity)
+        }
         Cow::Borrowed(m) => remove_duplicates_iterator(
           root.into_iter().chain(m.iter().map(|c| (*c).clone())),
           capacity,
