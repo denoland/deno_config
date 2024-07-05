@@ -87,7 +87,7 @@ impl PackageJson {
     if let Some(item) = maybe_cache.and_then(|c| c.get(path)) {
       Ok(item)
     } else {
-      match fs.read_to_string(path) {
+      match fs.read_to_string_lossy(path) {
         Ok(file_text) => {
           let pkg_json =
             PackageJson::load_from_string(path.to_path_buf(), file_text)?;

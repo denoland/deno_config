@@ -12,6 +12,12 @@ use url::Url;
 use crate::util::normalize_path;
 use crate::util::specifier_to_file_path;
 
+mod collector;
+mod gitignore;
+
+pub use collector::FileCollector;
+pub use collector::WalkEntry;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FilePatternsMatch {
   /// File passes as matching, but further exclude matching (ex. .gitignore)
