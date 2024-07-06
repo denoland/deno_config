@@ -935,6 +935,14 @@ impl Workspace {
     &self,
     cli_args: &FilePatterns,
   ) -> IndexMap<UrlRc, FilePatterns> {
+    fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
+      a.components()
+        .zip(b.components())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a)
+        .collect()
+    }
+
     let cli_arg_patterns = cli_args.split_by_base();
     let deno_json_folders = self
       .config_folders
@@ -967,10 +975,13 @@ impl Workspace {
           indexes_to_remove.push_back(i);
         }
       }
-      let mut final_matches =
+      let mut matched_folder_urls =
         Vec::with_capacity(std::cmp::max(1, matches.len()));
       if matches.is_empty() {
-        final_matches.push(&self.start_dir);
+        // This will occur when someone specifies a file that's outside
+        // the workspace directory. In this case, use the root directory's config
+        // so that it's consistent across the workspace.
+        matched_folder_urls.push(&self.root_dir);
       }
       for (i, (_dir_path, (folder_url, _config))) in matches.iter().enumerate()
       {
@@ -980,13 +991,20 @@ impl Workspace {
             continue;
           }
         }
-        final_matches.push(folder_url);
+        matched_folder_urls.push(folder_url);
       }
-      for folder_url in final_matches {
+      for folder_url in matched_folder_urls {
         let entry = results.entry((*folder_url).clone());
+        let folder_path = folder_url.to_file_path().unwrap();
         match entry {
           indexmap::map::Entry::Occupied(entry) => {
             let entry = entry.into_mut();
+            let common_base = common_ancestor(&pattern.base, &entry.base);
+            if common_base.starts_with(&folder_path)
+              && entry.base.starts_with(&common_base)
+            {
+              entry.base = common_base;
+            }
             match &mut entry.include {
               Some(set) => {
                 if let Some(includes) = &pattern.include {
@@ -1003,7 +1021,15 @@ impl Workspace {
             }
           }
           indexmap::map::Entry::Vacant(entry) => {
-            entry.insert(pattern.clone());
+            entry.insert(FilePatterns {
+              base: if pattern.base.starts_with(&folder_path) {
+                pattern.base.clone()
+              } else {
+                folder_path.clone()
+              },
+              include: pattern.include.clone(),
+              exclude: pattern.exclude.clone(),
+            });
           }
         }
       }
@@ -1659,8 +1685,10 @@ mod test {
 
   use crate::assert_contains;
   use crate::fs::TestFileSystem;
+  use crate::glob::GlobPattern;
   use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
+  use crate::util::normalize_path;
   use crate::TsConfig;
 
   use super::*;
@@ -3195,6 +3223,295 @@ mod test {
         .collect::<Vec<_>>(),
       vec![Url::from_file_path(&other_deno_json).unwrap()]
     );
+  }
+
+  #[test]
+  fn test_split_cli_args_by_deno_json_folder() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member-a", "./member-b"],
+      }),
+    );
+    fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    // single member
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+          root_dir().join("member-a"),
+        )])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(
+            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+          ),
+          FilePatterns {
+            base: root_dir().join("member-a"),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("member-a")
+            )])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+    // root and in single member
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(root_dir().join("member-a").join("sub")),
+          PathOrPattern::Path(root_dir().join("file")),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-a/sub"),
+              include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+                root_dir().join("member-a").join("sub")
+              )])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            FilePatterns {
+              base: root_dir().join("file"),
+              include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+                root_dir().join("file")
+              )])),
+              exclude: Default::default(),
+            }
+          ),
+        ])
+      );
+    }
+    // multiple members (one with glob) and outside folder
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(root_dir().join("member-a")),
+          PathOrPattern::Pattern(
+            GlobPattern::from_relative(&root_dir().join("member-b"), "**/*")
+              .unwrap(),
+          ),
+          PathOrPattern::Path(root_dir().join("other_dir")),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([
+          (
+            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            FilePatterns {
+              base: root_dir().join("other_dir"),
+              include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+                root_dir().join("other_dir")
+              )])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-a"),
+              include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+                root_dir().join("member-a")
+              )])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-b")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-b"),
+              include: Some(PathOrPatternSet::new(vec![
+                PathOrPattern::Pattern(
+                  GlobPattern::from_relative(
+                    &root_dir().join("member-b"),
+                    "**/*"
+                  )
+                  .unwrap(),
+                )
+              ])),
+              exclude: Default::default(),
+            }
+          ),
+        ])
+      );
+    }
+    // glob at root dir
+    {
+      let root_glob = PathOrPattern::Pattern(
+        GlobPattern::from_relative(&root_dir(), "**/*").unwrap(),
+      );
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![root_glob.clone()])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([
+          (
+            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            FilePatterns {
+              base: root_dir(),
+              include: Some(PathOrPatternSet::new(vec![root_glob.clone()])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-a"),
+              include: Some(PathOrPatternSet::new(vec![root_glob.clone()])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-b")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-b"),
+              include: Some(PathOrPatternSet::new(vec![root_glob])),
+              exclude: Default::default(),
+            }
+          ),
+        ])
+      );
+    }
+    // single path in descendant of member
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+          root_dir().join("member-a/sub-dir/descendant/further"),
+        )])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(
+            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+          ),
+          FilePatterns {
+            base: root_dir().join("member-a/sub-dir/descendant/further"),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("member-a/sub-dir/descendant/further"),
+            )])),
+            exclude: Default::default(),
+          }
+        ),])
+      );
+    }
+    // path in descendant of member then second path that goes to a parent folder
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(
+            root_dir().join("member-a/sub-dir/descendant/further"),
+          ),
+          PathOrPattern::Path(root_dir().join("member-a/sub-dir/other")),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(
+            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+          ),
+          FilePatterns {
+            // should use common base here
+            base: root_dir().join("member-a/sub-dir"),
+            include: Some(PathOrPatternSet::new(vec![
+              PathOrPattern::Path(
+                root_dir().join("member-a/sub-dir/descendant/further"),
+              ),
+              PathOrPattern::Path(root_dir().join("member-a/sub-dir/other"),)
+            ])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+    // path outside the root directory
+    {
+      let dir_outside = normalize_path(root_dir().join("../dir_outside"));
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+          dir_outside.clone(),
+        )])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          FilePatterns {
+            base: root_dir(),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              dir_outside.clone(),
+            ),])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+    // multiple paths outside the root directory
+    {
+      let dir_outside_1 = normalize_path(root_dir().join("../dir_outside_1"));
+      let dir_outside_2 = normalize_path(root_dir().join("../dir_outside_2"));
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(dir_outside_1.clone()),
+          PathOrPattern::Path(dir_outside_2.clone()),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          FilePatterns {
+            base: root_dir(),
+            include: Some(PathOrPatternSet::new(vec![
+              PathOrPattern::Path(dir_outside_1.clone()),
+              PathOrPattern::Path(dir_outside_2.clone()),
+            ])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
   }
 
   fn workspace_for_root_and_member(
