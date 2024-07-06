@@ -1175,8 +1175,8 @@ impl ConfigFile {
           serde_json::from_value(config)
             .context("Failed to parse \"lint\" configuration")?;
         // top level excludes at the start because they're lower priority
-        exclude_patterns.extend(std::mem::take(&mut serialized.files.exclude));
-        serialized.files.exclude = exclude_patterns;
+        exclude_patterns.extend(std::mem::take(&mut serialized.exclude));
+        serialized.exclude = exclude_patterns;
         serialized
           .into_resolved(&self.specifier)
           .context("Invalid lint config.")
