@@ -33,7 +33,6 @@ use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonLoadError;
 use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
-use crate::util::CheckedSet;
 use crate::BenchConfig;
 use crate::ConfigFileRc;
 use crate::FmtConfig;
@@ -1631,7 +1630,7 @@ fn combine_option_vecs_with_override<T: Eq + std::hash::Hash + Clone>(
   }
 }
 
-fn combine_option_vecs<T: Eq + std::hash::Hash>(
+fn combine_option_vecs<T: Eq + std::hash::Hash + Clone>(
   root_option: Option<Vec<T>>,
   member_option: Option<Vec<T>>,
 ) -> Option<Vec<T>> {
@@ -1655,14 +1654,14 @@ fn combine_option_vecs<T: Eq + std::hash::Hash>(
   }
 }
 
-fn remove_duplicates_iterator<T: Eq + std::hash::Hash>(
+fn remove_duplicates_iterator<T: Eq + std::hash::Hash + Clone>(
   iterator: impl IntoIterator<Item = T>,
   capacity: usize,
 ) -> Vec<T> {
-  let mut seen = CheckedSet::with_capacity(capacity);
+  let mut seen = HashSet::with_capacity(capacity);
   let mut result = Vec::with_capacity(capacity);
   for item in iterator {
-    if seen.insert(&item) {
+    if seen.insert(item.clone()) {
       result.push(item);
     }
   }
