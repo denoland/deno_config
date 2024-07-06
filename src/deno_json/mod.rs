@@ -152,7 +152,8 @@ struct SerializedLintConfig {
   pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
 
-  pub files: SerializedFilesConfig,
+  #[serde(rename = "files")]
+  pub deprecated_files: SerializedFilesConfig,
   pub report: Option<String>,
 }
 
@@ -166,7 +167,7 @@ impl SerializedLintConfig {
 
     Ok(LintConfig {
       options: LintOptionsConfig { rules: self.rules },
-      files: choose_files(files, self.files)
+      files: choose_files(files, self.deprecated_files)
         .into_resolved(config_file_specifier)?,
     })
   }
