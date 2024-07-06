@@ -3513,6 +3513,41 @@ mod test {
     }
   }
 
+  #[test]
+  fn test_split_cli_args_by_deno_json_folder_no_config() {
+    let mut fs = TestFileSystem::default();
+    fs.insert(root_dir().join("path"), ""); // create the root directory
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    // two paths, looped to ensure that the order is maintained on
+    // the output and not sorted
+    let path1 = normalize_path(root_dir().join("./path-longer"));
+    let path2 = normalize_path(root_dir().join("./path"));
+    for (path1, path2) in [(&path1, &path2), (&path2, &path1)] {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(path1.clone()),
+          PathOrPattern::Path(path2.clone()),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          FilePatterns {
+            base: root_dir(),
+            include: Some(PathOrPatternSet::new(vec![
+              PathOrPattern::Path(path1.clone()),
+              PathOrPattern::Path(path2.clone()),
+            ])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+  }
+
   fn workspace_for_root_and_member(
     root: serde_json::Value,
     member: serde_json::Value,
