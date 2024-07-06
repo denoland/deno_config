@@ -149,11 +149,10 @@ fn choose_files(
 #[serde(default, deny_unknown_fields)]
 struct SerializedLintConfig {
   pub rules: LintRulesConfig,
-  #[serde(flatten)]
-  pub files: SerializedFilesConfig,
+  pub include: Option<Vec<String>>,
+  pub exclude: Vec<String>,
 
-  #[serde(rename = "files")]
-  pub deprecated_files: SerializedFilesConfig,
+  pub files: SerializedFilesConfig,
   pub report: Option<String>,
 }
 
@@ -162,9 +161,12 @@ impl SerializedLintConfig {
     self,
     config_file_specifier: &Url,
   ) -> Result<LintConfig, AnyError> {
+    let (include, exclude) = (self.include, self.exclude);
+    let files = SerializedFilesConfig { include, exclude };
+
     Ok(LintConfig {
       options: LintOptionsConfig { rules: self.rules },
-      files: choose_files(self.files, self.deprecated_files)
+      files: choose_files(files, self.files)
         .into_resolved(config_file_specifier)?,
     })
   }
