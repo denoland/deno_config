@@ -28,6 +28,7 @@ use crate::get_ts_config_for_emit;
 use crate::glob::FilePatterns;
 use crate::glob::PathKind;
 use crate::glob::PathOrPattern;
+use crate::glob::PathOrPatternParseError;
 use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonLoadError;
@@ -156,6 +157,18 @@ pub enum ResolveWorkspaceMemberError {
     #[source]
     source: url::ParseError,
   },
+  #[error(
+    "Failed converting npm workspace member '{}' to pattern for config '{}'.",
+    member,
+    base
+  )]
+  NpmMemberToPattern {
+    base: Url,
+    member: String,
+    // this error has the text that failed
+    #[source]
+    source: PathOrPatternParseError,
+  },
 }
 
 #[derive(Error, Debug)]
@@ -202,6 +215,14 @@ pub enum WorkspaceDiscoverErrorKind {
   SpecifierToFilePath(#[from] SpecifierToFilePathError),
   #[error("Config file must be a member of the workspace.\n  Config: {config_url}\n  Workspace: {workspace_url}")]
   ConfigNotWorkspaceMember { workspace_url: Url, config_url: Url },
+  #[error(
+    "Failed collecting npm workspace members.\n  Config: {package_json_url}"
+  )]
+  FailedCollectingNpmMembers {
+    package_json_url: Url,
+    #[source]
+    source: AnyError,
+  },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -328,34 +349,15 @@ impl Workspace {
         }
       }
     }
-    let resolve_vendor_dir = |config_folder: &ConfigFolder| {
-      if let Some(vendor_folder_override) = &opts.maybe_vendor_override {
-        match vendor_folder_override {
-          VendorEnablement::Disable => None,
-          VendorEnablement::Enable { cwd } => match config_folder.deno_json() {
-            Some(c) => Some(c.dir_path().join("vendor")),
-            None => Some(cwd.join("vendor")),
-          },
-        }
-      } else {
-        let deno_json = config_folder.deno_json()?;
-        if deno_json.vendor() == Some(true) {
-          Some(deno_json.dir_path().join("vendor"))
-        } else {
-          None
-        }
-      }
-    };
 
     let start_dir = new_rc(resolve_start_dir(&start)?);
     let config_file_discovery = discover_workspace_config_files(start, opts)?;
 
     let workspace = match config_file_discovery {
-      ConfigFileDiscovery::None => Workspace {
-        vendor_dir: match opts.maybe_vendor_override {
-          Some(VendorEnablement::Enable { cwd }) => Some(cwd.join("vendor")),
-          _ => None,
-        },
+      ConfigFileDiscovery::None {
+        maybe_vendor_dir: vendor_dir,
+      } => Workspace {
+        vendor_dir,
         config_folders: IndexMap::from([(
           start_dir.clone(),
           FolderConfigs::default(),
@@ -363,20 +365,26 @@ impl Workspace {
         root_dir: start_dir.clone(),
         start_dir,
       },
-      ConfigFileDiscovery::Single(config_folder) => {
-        let root_dir = new_rc(config_folder.folder_url());
+      ConfigFileDiscovery::Single {
+        config_folder: folder,
+        maybe_vendor_dir: vendor_dir,
+      } => {
+        let root_dir = new_rc(folder.folder_url());
         Workspace {
-          vendor_dir: resolve_vendor_dir(&config_folder),
+          vendor_dir,
           config_folders: IndexMap::from([(
             root_dir.clone(),
-            FolderConfigs::from_config_folder(config_folder),
+            FolderConfigs::from_config_folder(folder),
           )]),
           start_dir,
           root_dir,
         }
       }
-      ConfigFileDiscovery::Workspace { root, members } => {
-        let vendor_dir = resolve_vendor_dir(&root);
+      ConfigFileDiscovery::Workspace {
+        root,
+        members,
+        maybe_vendor_dir: vendor_dir,
+      } => {
         let root_dir = new_rc(root.folder_url());
         let mut config_folders = members
           .into_iter()
@@ -2869,6 +2877,93 @@ mod test {
     // no package.json in this folder, so should error
     let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
     assert_eq!(err.to_string(), normalize_err_text("Could not find package.json for workspace member in '[ROOT_DIR_URL]/member/'."));
+  }
+
+  #[test]
+  fn test_npm_workspace_globs() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./packages/*"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("packages/package-a/package.json"),
+      json!({}),
+    );
+    fs.insert_json(
+      root_dir().join("packages/package-b/package.json"),
+      json!({}),
+    );
+    let workspace = workspace_at_start_dir(&fs, &root_dir().join("packages"));
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.package_jsons().count(), 3);
+  }
+
+  #[test]
+  fn test_npm_workspace_ignores_vendor_folder() {
+    for (is_vendor, expected_count) in [(true, 3), (false, 4)] {
+      let mut fs = TestFileSystem::default();
+      fs.insert_json(
+        root_dir().join("deno.json"),
+        json!({
+          "vendor": is_vendor,
+        }),
+      );
+      fs.insert_json(
+        root_dir().join("package.json"),
+        json!({
+          "workspaces": ["./**/*"]
+        }),
+      );
+      fs.insert_json(
+        root_dir().join("packages/package-a/package.json"),
+        json!({}),
+      );
+      fs.insert_json(
+        root_dir().join("packages/package-b/package.json"),
+        json!({}),
+      );
+      fs.insert_json(
+        root_dir().join("vendor/package-c/package.json"),
+        json!({}),
+      );
+      let workspace = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace.diagnostics(), Vec::new());
+      assert_eq!(workspace.package_jsons().count(), expected_count);
+    }
+  }
+
+  #[test]
+  fn test_npm_workspace_negations() {
+    for negation in ["!ignored/package-c", "!ignored/**"] {
+      let mut fs = TestFileSystem::default();
+      fs.insert_json(
+        root_dir().join("package.json"),
+        json!({
+          "workspaces": [
+            "**/*",
+            negation,
+          ]
+        }),
+      );
+      fs.insert_json(
+        root_dir().join("packages/package-a/package.json"),
+        json!({}),
+      );
+      fs.insert_json(
+        root_dir().join("packages/package-b/package.json"),
+        json!({}),
+      );
+      fs.insert_json(
+        root_dir().join("ignored/package-c/package.json"),
+        json!({}),
+      );
+      let workspace = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace.diagnostics(), Vec::new());
+      assert_eq!(workspace.package_jsons().count(), 3);
+    }
   }
 
   #[test]
