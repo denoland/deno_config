@@ -49,6 +49,7 @@ use crate::Task;
 use crate::TestConfig;
 use crate::TsConfigForEmit;
 use crate::TsConfigType;
+use crate::WorkspaceConfigParseError;
 use crate::WorkspaceLintConfig;
 
 mod discovery;
@@ -189,6 +190,8 @@ pub enum WorkspaceDiscoverErrorKind {
   ConfigRead(#[from] ConfigFileReadError),
   #[error(transparent)]
   PackageJsonReadError(#[from] PackageJsonLoadError),
+  #[error(transparent)]
+  WorkspaceConfigParse(#[from] WorkspaceConfigParseError),
   #[error("Workspace members cannot be empty.\n  Workspace: {0}")]
   MembersEmpty(Url),
   #[error(transparent)]
@@ -2908,7 +2911,9 @@ mod test {
     fs.insert_json(
       root_dir().join("workspace/deno.json"),
       json!({
-        "workspace": ["./member"]
+        "workspace": {
+          "members": ["./member"]
+        },
       }),
     );
     fs.insert_json(root_dir().join("workspace/member/deno.json"), json!({}));
