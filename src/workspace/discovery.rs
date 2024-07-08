@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -20,7 +21,6 @@ use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_parent;
-use crate::util::CheckedSet;
 use crate::ConfigFile;
 use crate::ConfigFileRc;
 
@@ -162,7 +162,7 @@ pub fn discover_workspace_config_files(
   opts: &WorkspaceDiscoverOptions,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
   match start {
-    WorkspaceDiscoverStart::Dirs(dirs) => match dirs.len() {
+    WorkspaceDiscoverStart::Paths(dirs) => match dirs.len() {
       0 => Ok(ConfigFileDiscovery::None {
         maybe_vendor_dir: resolve_vendor_dir(
           None,
@@ -175,7 +175,7 @@ pub fn discover_workspace_config_files(
         discover_workspace_config_files_for_single_dir(start, opts, None)
       }
       _ => {
-        let mut checked = CheckedSet::default();
+        let mut checked = HashSet::default();
         let mut final_workspace = ConfigFileDiscovery::None {
           maybe_vendor_dir: resolve_vendor_dir(
             None,
@@ -224,7 +224,7 @@ enum DirOrConfigFile<'a> {
 fn discover_workspace_config_files_for_single_dir(
   start: DirOrConfigFile,
   opts: &WorkspaceDiscoverOptions,
-  mut checked: Option<&mut CheckedSet<Path>>,
+  mut checked: Option<&mut HashSet<PathBuf>>,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
   fn strip_up_to_node_modules(path: &Path) -> PathBuf {
     path
@@ -311,7 +311,7 @@ fn discover_workspace_config_files_for_single_dir(
   let start_dir = start_dir.map(strip_up_to_node_modules);
   for current_dir in start_dir.iter().flat_map(|p| p.ancestors()) {
     if let Some(checked) = checked.as_mut() {
-      if !checked.insert(current_dir) {
+      if !checked.insert(current_dir.to_path_buf()) {
         // already visited here, so exit
         return Ok(ConfigFileDiscovery::None {
           maybe_vendor_dir: resolve_vendor_dir(

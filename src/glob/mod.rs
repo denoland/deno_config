@@ -285,8 +285,17 @@ impl FilePatterns {
     // Sort by the longest base path first. This ensures that we visit opted into
     // nested directories first before visiting the parent directory. The directory
     // traverser will handle not going into directories it's already been in.
-    result
-      .sort_by(|a, b| b.base.as_os_str().len().cmp(&a.base.as_os_str().len()));
+    result.sort_by(|a, b| {
+      // try looking at the parents first so that files in the same
+      // folder are kept in the same order that they're provided
+      let (a, b) =
+        if let (Some(a), Some(b)) = (a.base.parent(), b.base.parent()) {
+          (a, b)
+        } else {
+          (a.base.as_path(), b.base.as_path())
+        };
+      b.as_os_str().len().cmp(&a.as_os_str().len())
+    });
 
     result
   }
@@ -388,6 +397,10 @@ impl PathOrPatternSet {
     &self.0
   }
 
+  pub fn inner_mut(&mut self) -> &mut Vec<PathOrPattern> {
+    &mut self.0
+  }
+
   pub fn into_path_or_patterns(self) -> Vec<PathOrPattern> {
     self.0
   }
@@ -425,6 +438,10 @@ impl PathOrPatternSet {
       }
     }
     result
+  }
+
+  pub fn push(&mut self, item: PathOrPattern) {
+    self.0.push(item);
   }
 
   pub fn append(&mut self, items: impl Iterator<Item = PathOrPattern>) {

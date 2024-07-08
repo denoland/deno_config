@@ -1,5 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -11,7 +12,6 @@ use crate::glob::FilePatternsMatch;
 use crate::glob::PathKind;
 use crate::glob::PathOrPattern;
 use crate::util::normalize_path;
-use crate::util::CheckedSet;
 
 use super::FilePatterns;
 
@@ -118,7 +118,7 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
       None
     };
     let mut target_files = Vec::new();
-    let mut visited_paths: CheckedSet<Path> = CheckedSet::default();
+    let mut visited_paths: HashSet<PathBuf> = HashSet::default();
     let file_patterns_by_base = file_patterns.split_by_base();
     for file_patterns in file_patterns_by_base {
       let specified_path = normalize_path(&file_patterns.base);
@@ -147,14 +147,14 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
             let opt_out_ignore = specified_path == path;
             let should_ignore_dir =
               !opt_out_ignore && self.is_ignored_dir(&path);
-            if !should_ignore_dir && visited_paths.insert(&path) {
+            if !should_ignore_dir && visited_paths.insert(path.clone()) {
               pending_dirs.push_back(path);
             }
           } else if (self.file_filter)(WalkEntry {
             path: &path,
             metadata,
             patterns: &file_patterns,
-          }) && visited_paths.insert(&path)
+          }) && visited_paths.insert(path.clone())
           {
             target_files.push(path);
           }
