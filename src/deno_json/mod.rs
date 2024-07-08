@@ -166,7 +166,7 @@ impl SerializedLintConfig {
     let files = SerializedFilesConfig { include, exclude };
 
     Ok(LintConfig {
-      rules: self.rules,
+      options: LintOptionsConfig { rules: self.rules },
       files: choose_files(files, self.deprecated_files)
         .into_resolved(config_file_specifier)?,
     })
@@ -178,9 +178,14 @@ pub struct WorkspaceLintConfig {
   pub report: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Hash, PartialEq)]
+pub struct LintOptionsConfig {
+  pub rules: LintRulesConfig,
+}
+
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct LintConfig {
-  pub rules: LintRulesConfig,
+  pub options: LintOptionsConfig,
   pub files: FilePatterns,
 }
 
@@ -1177,7 +1182,7 @@ impl ConfigFile {
           .context("Invalid lint config.")
       }
       None => Ok(LintConfig {
-        rules: Default::default(),
+        options: Default::default(),
         files: self.to_exclude_files_config()?,
       }),
     }
@@ -1257,7 +1262,8 @@ impl ConfigFile {
   /// If the configuration file contains "extra" modules (like TypeScript
   /// `"types"`) options, return them as imports to be added to a module graph.
   pub fn to_maybe_imports(&self) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
-    let Some(compiler_options_value) = self.json.compiler_options.as_ref() else {
+    let Some(compiler_options_value) = self.json.compiler_options.as_ref()
+    else {
       return Ok(Vec::new());
     };
     let Some(types) = compiler_options_value.get("types") else {
@@ -1277,13 +1283,16 @@ impl ConfigFile {
   pub fn to_maybe_jsx_import_source_config(
     &self,
   ) -> Result<Option<JsxImportSourceConfig>, AnyError> {
-    let Some(compiler_options_value) = self.json.compiler_options.as_ref() else {
+    let Some(compiler_options_value) = self.json.compiler_options.as_ref()
+    else {
       return Ok(None);
     };
     let Some(compiler_options) =
-      serde_json::from_value::<CompilerOptions>(compiler_options_value.clone()).ok() else {
-        return Ok(None);
-      };
+      serde_json::from_value::<CompilerOptions>(compiler_options_value.clone())
+        .ok()
+    else {
+      return Ok(None);
+    };
     let module = match compiler_options.jsx.as_deref() {
       Some("react-jsx") => "jsx-runtime".to_string(),
       Some("react-jsxdev") => "jsx-dev-runtime".to_string(),
@@ -1611,11 +1620,13 @@ mod tests {
             PathBuf::from("/deno/src/testdata/")
           )]),
         },
-        rules: LintRulesConfig {
-          include: Some(vec!["ban-untagged-todo".to_string()]),
-          exclude: None,
-          tags: Some(vec!["recommended".to_string()]),
-        },
+        options: LintOptionsConfig {
+          rules: LintRulesConfig {
+            include: Some(vec!["ban-untagged-todo".to_string()]),
+            exclude: None,
+            tags: Some(vec!["recommended".to_string()]),
+          },
+        }
       }
     );
     assert_eq!(

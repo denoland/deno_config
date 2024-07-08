@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -26,14 +27,12 @@ use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::ConfigParseOptions;
 use crate::get_ts_config_for_emit;
 use crate::glob::FilePatterns;
-use crate::glob::PathKind;
 use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonLoadError;
 use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
-use crate::util::CheckedSet;
 use crate::BenchConfig;
 use crate::ConfigFileRc;
 use crate::FmtConfig;
@@ -41,6 +40,7 @@ use crate::FmtOptionsConfig;
 use crate::IgnoredCompilerOptions;
 use crate::JsxImportSourceConfig;
 use crate::LintConfig;
+use crate::LintOptionsConfig;
 use crate::LintRulesConfig;
 use crate::LockConfig;
 use crate::PublishConfig;
@@ -206,7 +206,7 @@ pub enum WorkspaceDiscoverErrorKind {
 
 #[derive(Debug, Clone, Copy)]
 pub enum WorkspaceDiscoverStart<'a> {
-  Dirs(&'a [PathBuf]),
+  Paths(&'a [PathBuf]),
   ConfigFile(&'a Path),
 }
 
@@ -298,13 +298,14 @@ impl Workspace {
   ) -> Result<Self, WorkspaceDiscoverError> {
     fn resolve_start_dir(
       start: &WorkspaceDiscoverStart,
+      fs: &dyn crate::fs::DenoConfigFs,
     ) -> Result<Url, WorkspaceDiscoverError> {
       match start {
-        WorkspaceDiscoverStart::Dirs(dirs) => {
-          if dirs.is_empty() {
+        WorkspaceDiscoverStart::Paths(paths) => {
+          if paths.is_empty() {
             Err(
               WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
-                anyhow::anyhow!("No directories provided."),
+                anyhow::anyhow!("No paths provided."),
               )
               .into(),
             )
@@ -312,7 +313,34 @@ impl Workspace {
             // just select the first one... this doesn't matter too much
             // at the moment because we only use this for lint and fmt,
             // so this is ok for now
-            Ok(Url::from_directory_path(&dirs[0]).unwrap())
+            let path = &paths[0];
+            match fs.stat_sync(path) {
+              Ok(info) => {
+                return Ok(
+                  Url::from_directory_path(if info.is_directory {
+                    path
+                  } else {
+                    path.parent().unwrap()
+                  })
+                  .unwrap(),
+                )
+              }
+              Err(_err) => {
+                // assume the parent is a directory
+                match path.parent() {
+                  Some(parent) => Ok(Url::from_directory_path(parent).unwrap()),
+                  None => Err(
+                    WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
+                      anyhow::anyhow!(
+                        "Could not resolve path: '{}'",
+                        path.display()
+                      ),
+                    )
+                    .into(),
+                  ),
+                }
+              }
+            }
           }
         }
         WorkspaceDiscoverStart::ConfigFile(path) => {
@@ -347,7 +375,7 @@ impl Workspace {
       }
     };
 
-    let start_dir = new_rc(resolve_start_dir(&start)?);
+    let start_dir = new_rc(resolve_start_dir(&start, opts.fs)?);
     let config_file_discovery = discover_workspace_config_files(start, opts)?;
 
     let workspace = match config_file_discovery {
@@ -378,14 +406,14 @@ impl Workspace {
       ConfigFileDiscovery::Workspace { root, members } => {
         let vendor_dir = resolve_vendor_dir(&root);
         let root_dir = new_rc(root.folder_url());
-        let mut config_folders = members
-          .into_iter()
-          .map(|(folder_url, config_folder)| {
-            (folder_url, FolderConfigs::from_config_folder(config_folder))
-          })
-          .collect::<IndexMap<_, _>>();
+        let mut config_folders = IndexMap::with_capacity(members.len() + 1);
         config_folders
           .insert(root_dir.clone(), FolderConfigs::from_config_folder(root));
+        config_folders.extend(members.into_iter().map(
+          |(folder_url, config_folder)| {
+            (folder_url, FolderConfigs::from_config_folder(config_folder))
+          },
+        ));
         Workspace {
           vendor_dir,
           root_dir,
@@ -848,30 +876,164 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
-  pub fn resolve_ctxs_from_patterns(
+  pub fn resolve_bench_config_for_members(
     self: &WorkspaceRc,
-    patterns: &FilePatterns,
-  ) -> Vec<WorkspaceMemberContext> {
-    let context = self.resolve_start_ctx();
-    let mut ctxs = Vec::with_capacity(self.config_folders.len());
-    ctxs.push(context);
+    cli_args: &FilePatterns,
+  ) -> Result<Vec<(WorkspaceMemberContext, BenchConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |ctx, patterns| {
+      ctx.to_bench_config(patterns)
+    })
+  }
 
-    // sub configs
-    for (dir_url, folder) in self.config_folders.iter() {
-      let config = match &folder.deno_json {
-        Some(c) => c,
-        None => continue,
-      };
-      if *dir_url != self.start_dir
-        && dir_url.as_str().starts_with(self.start_dir.as_str())
-        && patterns.matches_path(&config.dir_path(), PathKind::Directory)
-      {
-        let member_ctx = self.resolve_member_ctx(dir_url);
-        ctxs.push(member_ctx);
-      }
+  pub fn resolve_lint_config_for_members(
+    self: &WorkspaceRc,
+    cli_args: &FilePatterns,
+  ) -> Result<Vec<(WorkspaceMemberContext, LintConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |ctx, patterns| {
+      ctx.to_lint_config(patterns)
+    })
+  }
+
+  pub fn resolve_fmt_config_for_members(
+    self: &WorkspaceRc,
+    cli_args: &FilePatterns,
+  ) -> Result<Vec<(WorkspaceMemberContext, FmtConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |ctx, patterns| {
+      ctx.to_fmt_config(patterns)
+    })
+  }
+
+  pub fn resolve_test_config_for_members(
+    self: &WorkspaceRc,
+    cli_args: &FilePatterns,
+  ) -> Result<Vec<(WorkspaceMemberContext, TestConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |ctx, patterns| {
+      ctx.to_test_config(patterns)
+    })
+  }
+
+  fn resolve_config_for_members<TConfig>(
+    self: &WorkspaceRc,
+    cli_args: &FilePatterns,
+    resolve_config: impl Fn(
+      &WorkspaceMemberContext,
+      FilePatterns,
+    ) -> Result<TConfig, AnyError>,
+  ) -> Result<Vec<(WorkspaceMemberContext, TConfig)>, AnyError> {
+    let cli_args_by_folder = self.split_cli_args_by_deno_json_folder(cli_args);
+    let mut result = Vec::with_capacity(cli_args_by_folder.len());
+    for (folder_url, patterns) in cli_args_by_folder {
+      let ctx = self.resolve_member_ctx(&folder_url);
+      let config = resolve_config(&ctx, patterns)?;
+      result.push((ctx, config));
+    }
+    Ok(result)
+  }
+
+  fn split_cli_args_by_deno_json_folder(
+    &self,
+    cli_args: &FilePatterns,
+  ) -> IndexMap<UrlRc, FilePatterns> {
+    fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
+      a.components()
+        .zip(b.components())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a)
+        .collect()
     }
 
-    ctxs
+    let cli_arg_patterns = cli_args.split_by_base();
+    let deno_json_folders = self
+      .config_folders
+      .iter()
+      .filter(|(_, folder)| folder.deno_json.is_some())
+      .map(|(url, folder)| {
+        let dir_path = url.to_file_path().unwrap();
+        (dir_path, (url, folder))
+      })
+      .collect::<Vec<_>>();
+    let mut results: IndexMap<_, FilePatterns> =
+      IndexMap::with_capacity(deno_json_folders.len() + 1);
+    for pattern in cli_arg_patterns {
+      let mut matches = Vec::with_capacity(deno_json_folders.len());
+      for (dir_path, v) in deno_json_folders.iter() {
+        if pattern.base.starts_with(dir_path)
+          || dir_path.starts_with(&pattern.base)
+        {
+          matches.push((dir_path, *v));
+        }
+      }
+      // remove any non-sub/current folders that start with another folder
+      let mut indexes_to_remove = VecDeque::with_capacity(matches.len());
+      for (i, (m, _)) in matches.iter().enumerate() {
+        if !m.starts_with(&pattern.base)
+          && matches.iter().any(|(sub, _)| {
+            sub.starts_with(m) && sub != m && pattern.base.starts_with(m)
+          })
+        {
+          indexes_to_remove.push_back(i);
+        }
+      }
+      let mut matched_folder_urls =
+        Vec::with_capacity(std::cmp::max(1, matches.len()));
+      if matches.is_empty() {
+        // This will occur when someone specifies a file that's outside
+        // the workspace directory. In this case, use the root directory's config
+        // so that it's consistent across the workspace.
+        matched_folder_urls.push(&self.root_dir);
+      }
+      for (i, (_dir_path, (folder_url, _config))) in matches.iter().enumerate()
+      {
+        if let Some(skip_index) = indexes_to_remove.front() {
+          if i == *skip_index {
+            indexes_to_remove.pop_front();
+            continue;
+          }
+        }
+        matched_folder_urls.push(folder_url);
+      }
+      for folder_url in matched_folder_urls {
+        let entry = results.entry((*folder_url).clone());
+        let folder_path = folder_url.to_file_path().unwrap();
+        match entry {
+          indexmap::map::Entry::Occupied(entry) => {
+            let entry = entry.into_mut();
+            let common_base = common_ancestor(&pattern.base, &entry.base);
+            if common_base.starts_with(&folder_path)
+              && entry.base.starts_with(&common_base)
+            {
+              entry.base = common_base;
+            }
+            match &mut entry.include {
+              Some(set) => {
+                if let Some(includes) = &pattern.include {
+                  for include in includes.inner() {
+                    if !set.inner().contains(include) {
+                      set.push(include.clone())
+                    }
+                  }
+                }
+              }
+              None => {
+                entry.include.clone_from(&pattern.include);
+              }
+            }
+          }
+          indexmap::map::Entry::Vacant(entry) => {
+            entry.insert(FilePatterns {
+              base: if pattern.base.starts_with(&folder_path) {
+                pattern.base.clone()
+              } else {
+                folder_path.clone()
+              },
+              include: pattern.include.clone(),
+              exclude: pattern.exclude.clone(),
+            });
+          }
+        }
+      }
+    }
+    results
   }
 
   pub fn resolve_config_excludes(&self) -> Result<PathOrPatternSet, AnyError> {
@@ -1116,8 +1278,13 @@ impl WorkspaceMemberContext {
     })
   }
 
-  pub fn to_lint_config(&self) -> Result<LintConfig, AnyError> {
+  pub fn to_lint_config(
+    &self,
+    cli_args: FilePatterns,
+  ) -> Result<LintConfig, AnyError> {
     let mut config = self.to_lint_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
+    combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -1125,8 +1292,10 @@ impl WorkspaceMemberContext {
   fn to_lint_config_inner(&self) -> Result<LintConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(LintConfig {
-        rules: Default::default(),
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
+        options: Default::default(),
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
       });
     };
     let member_config = deno_json.member.to_lint_config()?;
@@ -1136,32 +1305,43 @@ impl WorkspaceMemberContext {
     };
     // combine the configs
     Ok(LintConfig {
-      rules: LintRulesConfig {
-        tags: combine_option_vecs(
-          root_config.rules.tags,
-          member_config.rules.tags,
-        ),
-        include: combine_option_vecs_with_override(
-          CombineOptionVecsWithOverride {
-            root: root_config.rules.include,
-            member: member_config.rules.include.as_ref().map(Cow::Borrowed),
-            member_override_root: member_config.rules.exclude.as_ref(),
-          },
-        ),
-        exclude: combine_option_vecs_with_override(
-          CombineOptionVecsWithOverride {
-            root: root_config.rules.exclude,
-            member: member_config.rules.exclude.map(Cow::Owned),
-            member_override_root: member_config.rules.include.as_ref(),
-          },
-        ),
+      options: LintOptionsConfig {
+        rules: {
+          let root_opts = root_config.options;
+          let member_opts = member_config.options;
+          LintRulesConfig {
+            tags: combine_option_vecs(
+              root_opts.rules.tags,
+              member_opts.rules.tags,
+            ),
+            include: combine_option_vecs_with_override(
+              CombineOptionVecsWithOverride {
+                root: root_opts.rules.include,
+                member: member_opts.rules.include.as_ref().map(Cow::Borrowed),
+                member_override_root: member_opts.rules.exclude.as_ref(),
+              },
+            ),
+            exclude: combine_option_vecs_with_override(
+              CombineOptionVecsWithOverride {
+                root: root_opts.rules.exclude,
+                member: member_opts.rules.exclude.map(Cow::Owned),
+                member_override_root: member_opts.rules.include.as_ref(),
+              },
+            ),
+          }
+        },
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
   }
 
-  pub fn to_fmt_config(&self) -> Result<FmtConfig, AnyError> {
+  pub fn to_fmt_config(
+    &self,
+    cli_args: FilePatterns,
+  ) -> Result<FmtConfig, AnyError> {
     let mut config = self.to_fmt_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
+    combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -1169,7 +1349,9 @@ impl WorkspaceMemberContext {
   fn to_fmt_config_inner(&self) -> Result<FmtConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(FmtConfig {
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
         options: Default::default(),
       });
     };
@@ -1210,8 +1392,13 @@ impl WorkspaceMemberContext {
     })
   }
 
-  pub fn to_bench_config(&self) -> Result<BenchConfig, AnyError> {
+  pub fn to_bench_config(
+    &self,
+    cli_args: FilePatterns,
+  ) -> Result<BenchConfig, AnyError> {
     let mut config = self.to_bench_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
+    combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -1219,7 +1406,9 @@ impl WorkspaceMemberContext {
   fn to_bench_config_inner(&self) -> Result<BenchConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(BenchConfig {
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
       });
     };
     let member_config = deno_json.member.to_bench_config()?;
@@ -1284,6 +1473,7 @@ impl WorkspaceMemberContext {
 
   pub fn to_publish_config(&self) -> Result<PublishConfig, AnyError> {
     let mut config = self.to_publish_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -1291,7 +1481,9 @@ impl WorkspaceMemberContext {
   fn to_publish_config_inner(&self) -> Result<PublishConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(PublishConfig {
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
       });
     };
     let member_config = deno_json.member.to_publish_config()?;
@@ -1304,8 +1496,13 @@ impl WorkspaceMemberContext {
     })
   }
 
-  pub fn to_test_config(&self) -> Result<TestConfig, AnyError> {
+  pub fn to_test_config(
+    &self,
+    cli_args: FilePatterns,
+  ) -> Result<TestConfig, AnyError> {
     let mut config = self.to_test_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
+    combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -1313,8 +1510,10 @@ impl WorkspaceMemberContext {
   fn to_test_config_inner(&self) -> Result<TestConfig, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(TestConfig {
-        files: FilePatterns::new_with_base(self.dir_url.to_file_path().unwrap()),
-    });
+        files: FilePatterns::new_with_base(
+          self.dir_url.to_file_path().unwrap(),
+        ),
+      });
     };
     let member_config = deno_json.member.to_test_config()?;
     let root_config = match &deno_json.root {
@@ -1327,19 +1526,52 @@ impl WorkspaceMemberContext {
     })
   }
 
+  /// Removes any "include" patterns from the root files that have
+  /// a base in another workspace member.
+  fn exclude_includes_with_member_for_base_for_root(
+    &self,
+    files: &mut FilePatterns,
+  ) {
+    let Some(include) = &mut files.include else {
+      return;
+    };
+    let (root_url, folder_configs) = self.workspace.root_folder();
+    if self.dir_url != *root_url {
+      return; // only do this for the root config
+    }
+
+    let maybe_root_deno_json = folder_configs.deno_json.as_ref();
+    let non_root_deno_jsons = match maybe_root_deno_json {
+      Some(root_deno_json) => self
+        .workspace
+        .deno_jsons()
+        .filter(|d| d.specifier != root_deno_json.specifier)
+        .collect::<Vec<_>>(),
+      None => self.workspace.deno_jsons().collect::<Vec<_>>(),
+    };
+
+    let include = include.inner_mut();
+    for i in (0..include.len()).rev() {
+      let Some(path) = include[i].base_path() else {
+        continue;
+      };
+      for deno_json in non_root_deno_jsons.iter() {
+        if path.starts_with(deno_json.dir_path()) {
+          include.remove(i);
+          break;
+        }
+      }
+    }
+  }
+
   fn append_workspace_members_to_exclude(&self, files: &mut FilePatterns) {
-    let maybe_root_dir = self.maybe_deno_json().map(|d| d.dir_path());
     files.exclude.append(
       self
         .workspace
         .deno_jsons()
         .filter(|member_deno_json| {
-          if let Some(root_dir) = &maybe_root_dir {
-            let member_dir = member_deno_json.dir_path();
-            member_dir != *root_dir && member_dir.starts_with(root_dir)
-          } else {
-            true // ok, this is just a perf optimization
-          }
+          let member_dir = member_deno_json.dir_path();
+          member_dir != files.base && member_dir.starts_with(&files.base)
         })
         .map(|d| PathOrPattern::Path(d.dir_path())),
     );
@@ -1361,24 +1593,66 @@ fn combine_patterns(
                 None => true,
               }
             });
-          Some(PathOrPatternSet::new(match member_patterns.include {
-            Some(member) => filtered_root
-              .chain(member.into_path_or_patterns())
-              .collect(),
-            None => filtered_root.collect(),
-          }))
+          match member_patterns.include {
+            Some(member) => Some(
+              filtered_root
+                .chain(member.into_path_or_patterns())
+                .collect(),
+            ),
+            None => {
+              let matching_root = filtered_root.collect::<Vec<_>>();
+              if matching_root.is_empty() {
+                // member was None and nothing in the root include list
+                // has a base within this member, so use None to discover
+                // files in here
+                None
+              } else {
+                Some(matching_root)
+              }
+            }
+          }
+          .map(PathOrPatternSet::new)
         }
         None => member_patterns.include,
       }
     },
     exclude: {
       // have the root excludes at the front because they're lower priority
-      let mut root_excludes = root_patterns.exclude.into_path_or_patterns();
-      let member_excludes = member_patterns.exclude.into_path_or_patterns();
-      root_excludes.extend(member_excludes);
-      PathOrPatternSet::new(root_excludes)
+      let patterns = root_patterns
+        .exclude
+        .into_path_or_patterns()
+        .into_iter()
+        .filter(|p| match p {
+            PathOrPattern::Path(path) |
+            PathOrPattern::NegatedPath(path) => path.starts_with(&member_patterns.base),
+            PathOrPattern::RemoteUrl(_) |
+            // always include patterns because they may be something like ./**/*.ts in the root
+            PathOrPattern::Pattern(_) => true,
+        })
+        .chain(member_patterns.exclude.into_path_or_patterns())
+        .collect::<Vec<_>>();
+      PathOrPatternSet::new(patterns)
     },
     base: member_patterns.base,
+  }
+}
+
+fn combine_files_config_with_cli_args(
+  files_config: &mut FilePatterns,
+  cli_arg_patterns: FilePatterns,
+) {
+  if cli_arg_patterns.base.starts_with(&files_config.base)
+    || !files_config.base.starts_with(&cli_arg_patterns.base)
+  {
+    files_config.base = cli_arg_patterns.base;
+  }
+  if let Some(include) = cli_arg_patterns.include {
+    if !include.inner().is_empty() {
+      files_config.include = Some(include);
+    }
+  }
+  if !cli_arg_patterns.exclude.inner().is_empty() {
+    files_config.exclude = cli_arg_patterns.exclude;
   }
 }
 
@@ -1404,10 +1678,9 @@ fn combine_option_vecs_with_override<T: Eq + std::hash::Hash + Clone>(
     (Some(root), Some(member)) => {
       let capacity = root.len() + member.len();
       Some(match member {
-        Cow::Owned(m) => remove_duplicates_iterator(
-          root.into_iter().chain(m.into_iter()),
-          capacity,
-        ),
+        Cow::Owned(m) => {
+          remove_duplicates_iterator(root.into_iter().chain(m), capacity)
+        }
         Cow::Borrowed(m) => remove_duplicates_iterator(
           root.into_iter().chain(m.iter().map(|c| (*c).clone())),
           capacity,
@@ -1423,7 +1696,7 @@ fn combine_option_vecs_with_override<T: Eq + std::hash::Hash + Clone>(
   }
 }
 
-fn combine_option_vecs<T: Eq + std::hash::Hash>(
+fn combine_option_vecs<T: Eq + std::hash::Hash + Clone>(
   root_option: Option<Vec<T>>,
   member_option: Option<Vec<T>>,
 ) -> Option<Vec<T>> {
@@ -1447,14 +1720,14 @@ fn combine_option_vecs<T: Eq + std::hash::Hash>(
   }
 }
 
-fn remove_duplicates_iterator<T: Eq + std::hash::Hash>(
+fn remove_duplicates_iterator<T: Eq + std::hash::Hash + Clone>(
   iterator: impl IntoIterator<Item = T>,
   capacity: usize,
 ) -> Vec<T> {
-  let mut seen = CheckedSet::with_capacity(capacity);
+  let mut seen = HashSet::with_capacity(capacity);
   let mut result = Vec::with_capacity(capacity);
   for item in iterator {
-    if seen.insert(&item) {
+    if seen.insert(item.clone()) {
       result.push(item);
     }
   }
@@ -1477,7 +1750,11 @@ mod test {
 
   use crate::assert_contains;
   use crate::fs::TestFileSystem;
+  use crate::glob::FileCollector;
+  use crate::glob::GlobPattern;
+  use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
+  use crate::util::normalize_path;
   use crate::TsConfig;
 
   use super::*;
@@ -1501,7 +1778,7 @@ mod test {
     );
 
     let workspace_config_err = Workspace::discover(
-      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -1528,7 +1805,7 @@ mod test {
     fs.insert_json(root_dir().join("member/a/deno.json"), json!({}));
 
     let workspace_config_err = Workspace::discover(
-      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -1555,7 +1832,7 @@ mod test {
       );
 
       let workspace_config_err = Workspace::discover(
-        WorkspaceDiscoverStart::Dirs(&[root_dir().join("sub_dir")]),
+        WorkspaceDiscoverStart::Paths(&[root_dir().join("sub_dir")]),
         &WorkspaceDiscoverOptions {
           fs: &fs,
           ..Default::default()
@@ -1582,7 +1859,7 @@ mod test {
     );
 
     let workspace_config_err = Workspace::discover(
-      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -1620,7 +1897,7 @@ mod test {
     fs.insert_json(root_dir().join("b/deno.jsonc"), config_text_b);
 
     let workspace = Workspace::discover(
-      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -1663,7 +1940,7 @@ mod test {
     let workspace = new_rc(
       Workspace::discover(
         // start at root for this test
-        WorkspaceDiscoverStart::Dirs(&[root_dir()]),
+        WorkspaceDiscoverStart::Paths(&[root_dir()]),
         &WorkspaceDiscoverOptions {
           fs: &fs,
           discover_pkg_json: true,
@@ -1931,7 +2208,8 @@ mod test {
       json!({
         "exclude": [
           "./root",
-          "./member/vendor"
+          "./member/vendor",
+          "./**/*.js"
         ]
       }),
       json!({
@@ -1944,16 +2222,19 @@ mod test {
     );
     assert_eq!(workspace.diagnostics(), vec![]);
     let ctx = workspace.resolve_start_ctx();
-    let lint_config = ctx.to_lint_config().unwrap();
+    let lint_config = ctx
+      .to_lint_config(FilePatterns::new_with_base(ctx.dir_path()))
+      .unwrap();
     assert_eq!(
       lint_config.files,
       FilePatterns {
         base: root_dir().join("member"),
         include: None,
         exclude: PathOrPatternSet::new(vec![
-          // maybe this shouldn't contain excludes in a root directory, but this is ok
-          PathOrPattern::Path(root_dir().join("root")),
           PathOrPattern::Path(root_dir().join("member").join("vendor")),
+          PathOrPattern::Pattern(
+            GlobPattern::from_relative(&root_dir(), "./**/*.js").unwrap()
+          ),
           PathOrPattern::Path(root_dir().join("member").join("member_exclude")),
           PathOrPattern::NegatedPath(root_dir().join("member").join("vendor")),
         ]),
@@ -2004,14 +2285,19 @@ mod test {
         report: Some("json".to_string()),
       }
     );
-    let lint_config = workspace.resolve_start_ctx().to_lint_config().unwrap();
+    let start_ctx = workspace.resolve_start_ctx();
+    let lint_config = start_ctx
+      .to_lint_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+      .unwrap();
     assert_eq!(
       lint_config,
       LintConfig {
-        rules: LintRulesConfig {
-          tags: Some(vec!["tag1".to_string()]),
-          include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
-          exclude: Some(vec![])
+        options: LintOptionsConfig {
+          rules: LintRulesConfig {
+            tags: Some(vec!["tag1".to_string()]),
+            include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
+            exclude: Some(vec![])
+          },
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -2024,17 +2310,20 @@ mod test {
     );
 
     // check the root context
-    let root_lint_config = workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
-      .to_lint_config()
+    let root_ctx = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+    let root_lint_config = root_ctx
+      .to_lint_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       root_lint_config,
       LintConfig {
-        rules: LintRulesConfig {
-          tags: Some(vec!["tag1".to_string()]),
-          include: Some(vec!["rule1".to_string()]),
-          exclude: Some(vec!["rule2".to_string()])
+        options: LintOptionsConfig {
+          rules: LintRulesConfig {
+            tags: Some(vec!["tag1".to_string()]),
+            include: Some(vec!["rule1".to_string()]),
+            exclude: Some(vec!["rule2".to_string()])
+          },
         },
         files: FilePatterns {
           base: root_dir(),
@@ -2075,7 +2364,10 @@ mod test {
       }),
     );
     assert_eq!(workspace.diagnostics(), vec![]);
-    let fmt_config = workspace.resolve_start_ctx().to_fmt_config().unwrap();
+    let start_ctx = workspace.resolve_start_ctx();
+    let fmt_config = start_ctx
+      .to_fmt_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+      .unwrap();
     assert_eq!(
       fmt_config,
       FmtConfig {
@@ -2098,9 +2390,10 @@ mod test {
     );
 
     // check the root context
-    let root_fmt_config = workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
-      .to_fmt_config()
+    let root_ctx = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+    let root_fmt_config = root_ctx
+      .to_fmt_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       root_fmt_config,
@@ -2137,7 +2430,10 @@ mod test {
       }),
     );
     assert_eq!(workspace.diagnostics(), vec![]);
-    let bench_config = workspace.resolve_start_ctx().to_bench_config().unwrap();
+    let start_ctx = workspace.resolve_start_ctx();
+    let bench_config = start_ctx
+      .to_bench_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+      .unwrap();
     assert_eq!(
       bench_config,
       BenchConfig {
@@ -2152,9 +2448,10 @@ mod test {
     );
 
     // check the root context
-    let root_bench_config = workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
-      .to_bench_config()
+    let root_ctx = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+    let root_bench_config = root_ctx
+      .to_bench_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       root_bench_config,
@@ -2183,7 +2480,10 @@ mod test {
       }),
     );
     assert_eq!(workspace.diagnostics(), vec![]);
-    let config = workspace.resolve_start_ctx().to_test_config().unwrap();
+    let start_ctx = workspace.resolve_start_ctx();
+    let config = start_ctx
+      .to_test_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+      .unwrap();
     assert_eq!(
       config,
       TestConfig {
@@ -2198,9 +2498,10 @@ mod test {
     );
 
     // check the root context
-    let root_test_config = workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
-      .to_test_config()
+    let root_ctx = workspace
+      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+    let root_test_config = root_ctx
+      .to_test_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       root_test_config,
@@ -2245,10 +2546,9 @@ mod test {
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
             root_dir().join("member").join("subdir")
           )])),
-          exclude: PathOrPatternSet::new(vec![
-            PathOrPattern::Path(root_dir().join("other")),
-            PathOrPattern::Path(root_dir().join("member").join("exclude_dir")),
-          ]),
+          exclude: PathOrPatternSet::new(vec![PathOrPattern::Path(
+            root_dir().join("member").join("exclude_dir")
+          ),]),
         },
       }
     );
@@ -2279,7 +2579,7 @@ mod test {
   fn test_root_member_empty_config_resolves_excluded_members() {
     let workspace = workspace_for_root_and_member(json!({}), json!({}));
     assert_eq!(workspace.diagnostics(), vec![]);
-    let root_files = FilePatterns {
+    let expected_root_files = FilePatterns {
       base: root_dir(),
       include: None,
       // the workspace member will be excluded because that needs
@@ -2290,44 +2590,55 @@ mod test {
     };
     let root_ctx = workspace
       .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
-    let member_files = FilePatterns {
+    let expected_member_files = FilePatterns {
       base: root_dir().join("member"),
       include: None,
       exclude: Default::default(),
     };
     let member_ctx = workspace.resolve_start_ctx();
 
-    for (files, ctx) in [(root_files, root_ctx), (member_files, member_ctx)] {
+    for (expected_files, ctx) in [
+      (expected_root_files, root_ctx),
+      (expected_member_files, member_ctx),
+    ] {
       assert_eq!(
-        ctx.to_bench_config().unwrap(),
+        ctx
+          .to_bench_config(FilePatterns::new_with_base(ctx.dir_path()))
+          .unwrap(),
         BenchConfig {
-          files: files.clone(),
+          files: expected_files.clone(),
         }
       );
       assert_eq!(
-        ctx.to_fmt_config().unwrap(),
+        ctx
+          .to_fmt_config(FilePatterns::new_with_base(ctx.dir_path()))
+          .unwrap(),
         FmtConfig {
           options: Default::default(),
-          files: files.clone(),
+          files: expected_files.clone(),
         }
       );
       assert_eq!(
-        ctx.to_lint_config().unwrap(),
+        ctx
+          .to_lint_config(FilePatterns::new_with_base(ctx.dir_path()))
+          .unwrap(),
         LintConfig {
-          files: files.clone(),
-          rules: Default::default(),
+          files: expected_files.clone(),
+          options: Default::default(),
         }
       );
       assert_eq!(
-        ctx.to_test_config().unwrap(),
+        ctx
+          .to_test_config(FilePatterns::new_with_base(ctx.dir_path()))
+          .unwrap(),
         TestConfig {
-          files: files.clone(),
+          files: expected_files.clone(),
         }
       );
       assert_eq!(
         ctx.to_publish_config().unwrap(),
         PublishConfig {
-          files: files.clone(),
+          files: expected_files.clone(),
         }
       );
     }
@@ -2420,7 +2731,7 @@ mod test {
     );
     let workspace = Workspace::discover(
       // start at root for this test
-      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -2464,7 +2775,7 @@ mod test {
     let mut fs = TestFileSystem::default();
     fs.insert_json(root_dir().join("deno.json"), json);
     let workspace = Workspace::discover(
-      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -2503,7 +2814,7 @@ mod test {
     fs.insert_json(root_dir().join("member1").join("deno.json"), pkg.clone());
     fs.insert_json(root_dir().join("member2").join("deno.json"), pkg.clone());
     let err = Workspace::discover(
-      WorkspaceDiscoverStart::Dirs(&[root_dir()]),
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
@@ -2984,6 +3295,574 @@ mod test {
     );
   }
 
+  #[test]
+  fn test_split_cli_args_by_deno_json_folder() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member-a", "./member-b"],
+      }),
+    );
+    fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    // single member
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+          root_dir().join("member-a"),
+        )])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(
+            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+          ),
+          FilePatterns {
+            base: root_dir().join("member-a"),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("member-a")
+            )])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+    // root and in single member
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(root_dir().join("member-a").join("sub")),
+          PathOrPattern::Path(root_dir().join("file")),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-a/sub"),
+              include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+                root_dir().join("member-a").join("sub")
+              )])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            FilePatterns {
+              base: root_dir().join("file"),
+              include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+                root_dir().join("file")
+              )])),
+              exclude: Default::default(),
+            }
+          ),
+        ])
+      );
+    }
+    // multiple members (one with glob) and outside folder
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(root_dir().join("member-a")),
+          PathOrPattern::Pattern(
+            GlobPattern::from_relative(&root_dir().join("member-b"), "**/*")
+              .unwrap(),
+          ),
+          PathOrPattern::Path(root_dir().join("other_dir")),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([
+          (
+            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            FilePatterns {
+              base: root_dir().join("other_dir"),
+              include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+                root_dir().join("other_dir")
+              )])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-a"),
+              include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+                root_dir().join("member-a")
+              )])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-b")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-b"),
+              include: Some(PathOrPatternSet::new(vec![
+                PathOrPattern::Pattern(
+                  GlobPattern::from_relative(
+                    &root_dir().join("member-b"),
+                    "**/*"
+                  )
+                  .unwrap(),
+                )
+              ])),
+              exclude: Default::default(),
+            }
+          ),
+        ])
+      );
+    }
+    // glob at root dir
+    {
+      let root_glob = PathOrPattern::Pattern(
+        GlobPattern::from_relative(&root_dir(), "**/*").unwrap(),
+      );
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![root_glob.clone()])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([
+          (
+            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            FilePatterns {
+              base: root_dir(),
+              include: Some(PathOrPatternSet::new(vec![root_glob.clone()])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-a"),
+              include: Some(PathOrPatternSet::new(vec![root_glob.clone()])),
+              exclude: Default::default(),
+            }
+          ),
+          (
+            new_rc(
+              Url::from_directory_path(root_dir().join("member-b")).unwrap()
+            ),
+            FilePatterns {
+              base: root_dir().join("member-b"),
+              include: Some(PathOrPatternSet::new(vec![root_glob])),
+              exclude: Default::default(),
+            }
+          ),
+        ])
+      );
+    }
+    // single path in descendant of member
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+          root_dir().join("member-a/sub-dir/descendant/further"),
+        )])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(
+            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+          ),
+          FilePatterns {
+            base: root_dir().join("member-a/sub-dir/descendant/further"),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("member-a/sub-dir/descendant/further"),
+            )])),
+            exclude: Default::default(),
+          }
+        ),])
+      );
+    }
+    // path in descendant of member then second path that goes to a parent folder
+    {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(
+            root_dir().join("member-a/sub-dir/descendant/further"),
+          ),
+          PathOrPattern::Path(root_dir().join("member-a/sub-dir/other")),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(
+            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+          ),
+          FilePatterns {
+            // should use common base here
+            base: root_dir().join("member-a/sub-dir"),
+            include: Some(PathOrPatternSet::new(vec![
+              PathOrPattern::Path(
+                root_dir().join("member-a/sub-dir/descendant/further"),
+              ),
+              PathOrPattern::Path(root_dir().join("member-a/sub-dir/other"),)
+            ])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+    // path outside the root directory
+    {
+      let dir_outside = normalize_path(root_dir().join("../dir_outside"));
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+          dir_outside.clone(),
+        )])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          FilePatterns {
+            base: root_dir(),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              dir_outside.clone(),
+            ),])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+    // multiple paths outside the root directory
+    {
+      let dir_outside_1 = normalize_path(root_dir().join("../dir_outside_1"));
+      let dir_outside_2 = normalize_path(root_dir().join("../dir_outside_2"));
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(dir_outside_1.clone()),
+          PathOrPattern::Path(dir_outside_2.clone()),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          FilePatterns {
+            base: root_dir(),
+            include: Some(PathOrPatternSet::new(vec![
+              PathOrPattern::Path(dir_outside_1.clone()),
+              PathOrPattern::Path(dir_outside_2.clone()),
+            ])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+  }
+
+  #[test]
+  fn test_split_cli_args_by_deno_json_folder_no_config() {
+    let mut fs = TestFileSystem::default();
+    fs.insert(root_dir().join("path"), ""); // create the root directory
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    // two paths, looped to ensure that the order is maintained on
+    // the output and not sorted
+    let path1 = normalize_path(root_dir().join("./path-longer"));
+    let path2 = normalize_path(root_dir().join("./path"));
+    for (path1, path2) in [(&path1, &path2), (&path2, &path1)] {
+      let split = workspace.split_cli_args_by_deno_json_folder(&FilePatterns {
+        base: root_dir(),
+        include: Some(PathOrPatternSet::new(vec![
+          PathOrPattern::Path(path1.clone()),
+          PathOrPattern::Path(path2.clone()),
+        ])),
+        exclude: Default::default(),
+      });
+      assert_eq!(
+        split,
+        IndexMap::from([(
+          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          FilePatterns {
+            base: root_dir(),
+            include: Some(PathOrPatternSet::new(vec![
+              PathOrPattern::Path(path1.clone()),
+              PathOrPattern::Path(path2.clone()),
+            ])),
+            exclude: Default::default(),
+          }
+        )])
+      );
+    }
+  }
+
+  #[test]
+  fn test_resolve_config_for_members_include_root_and_sub_member() {
+    fn run_test(
+      config_key: &str,
+      workspace_to_file_patterns: impl Fn(&WorkspaceRc) -> Vec<FilePatterns>,
+    ) {
+      let mut fs = TestFileSystem::default();
+      fs.insert_json(
+        root_dir().join("deno.json"),
+        json!({
+          "workspace": ["./member-a", "./member-b", "member-c"],
+          config_key: {
+            "include": ["./file.ts", "./member-c/file.ts"]
+          }
+        }),
+      );
+      fs.insert_json(
+        root_dir().join("member-a/deno.json"),
+        json!({
+          config_key: {
+            "include": ["./member-a-file.ts"]
+          }
+        }),
+      );
+      fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
+      fs.insert_json(root_dir().join("member-c/deno.json"), json!({}));
+      let workspace = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(
+        workspace_to_file_patterns(&workspace),
+        vec![
+          FilePatterns {
+            base: root_dir(),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("file.ts")
+            )])),
+            exclude: PathOrPatternSet::new(vec![
+              PathOrPattern::Path(root_dir().join("member-a")),
+              PathOrPattern::Path(root_dir().join("member-b")),
+              PathOrPattern::Path(root_dir().join("member-c")),
+            ])
+          },
+          FilePatterns {
+            base: root_dir().join("member-a"),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("member-a").join("member-a-file.ts")
+            )])),
+            exclude: Default::default(),
+          },
+          FilePatterns {
+            base: root_dir().join("member-b"),
+            include: None,
+            exclude: Default::default(),
+          },
+          FilePatterns {
+            base: root_dir().join("member-c"),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("member-c").join("file.ts")
+            )])),
+            exclude: Default::default(),
+          }
+        ]
+      );
+    }
+
+    run_test("bench", |workspace| {
+      let config_for_members = workspace
+        .resolve_bench_config_for_members(&FilePatterns::new_with_base(
+          root_dir(),
+        ))
+        .unwrap();
+      config_for_members
+        .into_iter()
+        .map(|(_ctx, config)| config.files)
+        .collect::<Vec<_>>()
+    });
+
+    run_test("fmt", |workspace| {
+      let config_for_members = workspace
+        .resolve_fmt_config_for_members(
+          &FilePatterns::new_with_base(root_dir()),
+        )
+        .unwrap();
+      config_for_members
+        .into_iter()
+        .map(|(_ctx, config)| config.files)
+        .collect::<Vec<_>>()
+    });
+
+    run_test("lint", |workspace| {
+      let config_for_members = workspace
+        .resolve_lint_config_for_members(&FilePatterns::new_with_base(
+          root_dir(),
+        ))
+        .unwrap();
+      config_for_members
+        .into_iter()
+        .map(|(_ctx, config)| config.files)
+        .collect::<Vec<_>>()
+    });
+
+    run_test("test", |workspace| {
+      let config_for_members = workspace
+        .resolve_test_config_for_members(&FilePatterns::new_with_base(
+          root_dir(),
+        ))
+        .unwrap();
+      config_for_members
+        .into_iter()
+        .map(|(_ctx, config)| config.files)
+        .collect::<Vec<_>>()
+    });
+  }
+
+  #[test]
+  fn test_resolve_config_for_members_excluded_member() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member-a", "./member-b"],
+        "lint": {
+          "exclude": ["./member-a"]
+        }
+      }),
+    );
+    fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let config_for_members = workspace
+      .resolve_lint_config_for_members(&FilePatterns::new_with_base(root_dir()))
+      .unwrap();
+    let mut file_patterns = config_for_members
+      .into_iter()
+      .map(|(_ctx, config)| config.files)
+      .collect::<Vec<_>>();
+    assert_eq!(
+      file_patterns,
+      vec![
+        FilePatterns {
+          base: root_dir(),
+          include: None,
+          exclude: PathOrPatternSet::new(vec![
+            PathOrPattern::Path(root_dir().join("member-a")),
+            // It will be in here twice because it's excluded from being
+            // traversed for this set of FilePatterns and also it's excluded
+            // in the "exclude". This is not a big deal because it's an edge
+            // case and the end behaviour is the same. It's probably not worth
+            // the complexity and perf to ensure only unique items are in here
+            PathOrPattern::Path(root_dir().join("member-a")),
+            PathOrPattern::Path(root_dir().join("member-b")),
+          ])
+        },
+        // This item is effectively a no-op as it excludes itself.
+        // It would be nice to have this not even included as a member,
+        // but doing that in a maintainable way would require a bit of
+        // refactoring to get resolve_config_for_members to understand
+        // that configs return FilePatterns.
+        FilePatterns {
+          base: root_dir().join("member-a"),
+          include: None,
+          exclude: PathOrPatternSet::new(vec![PathOrPattern::Path(
+            root_dir().join("member-a")
+          ),]),
+        },
+        FilePatterns {
+          base: root_dir().join("member-b"),
+          include: None,
+          exclude: Default::default(),
+        },
+      ]
+    );
+
+    // ensure the second file patterns is a no-op
+    fs.insert(root_dir().join("member-a/file.ts"), "");
+    fs.insert(root_dir().join("member-a/sub-dir/file.ts"), "");
+    let files = FileCollector::new(|_| true)
+      .collect_file_patterns(&fs, file_patterns.remove(1))
+      .unwrap();
+    assert!(files.is_empty());
+  }
+
+  #[test]
+  fn test_resolve_config_for_members_excluded_member_unexcluded_sub_dir() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member-a"],
+        "lint": {
+          "exclude": ["./member-a"]
+        }
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member-a/deno.json"),
+      json!({
+        "lint": {
+          // unexclude this sub dir so it's linted
+          "exclude": ["!./sub-dir"]
+        }
+      }),
+    );
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let config_for_members = workspace
+      .resolve_lint_config_for_members(&FilePatterns::new_with_base(root_dir()))
+      .unwrap();
+    let mut file_patterns = config_for_members
+      .into_iter()
+      .map(|(_ctx, config)| config.files)
+      .collect::<Vec<_>>();
+    assert_eq!(
+      file_patterns,
+      vec![
+        FilePatterns {
+          base: root_dir(),
+          include: None,
+          exclude: PathOrPatternSet::new(vec![
+            PathOrPattern::Path(root_dir().join("member-a")),
+            // see note in previous test about this being here twice
+            PathOrPattern::Path(root_dir().join("member-a")),
+          ])
+        },
+        FilePatterns {
+          base: root_dir().join("member-a"),
+          include: None,
+          exclude: PathOrPatternSet::new(vec![
+            // self will be excluded, but then sub dir will be unexcluded
+            PathOrPattern::Path(root_dir().join("member-a")),
+            PathOrPattern::NegatedPath(
+              root_dir().join("member-a").join("sub-dir")
+            ),
+          ]),
+        },
+      ]
+    );
+    fs.insert(root_dir().join("member-a/file.ts"), "");
+    fs.insert(root_dir().join("member-a/sub-dir/file.ts"), "");
+    let files = FileCollector::new(|_| true)
+      .collect_file_patterns(&fs, file_patterns.remove(1))
+      .unwrap();
+    // should only have member-a/sub-dir/file.ts and not member-a/file.ts
+    assert_eq!(files, vec![root_dir().join("member-a/sub-dir/file.ts")]);
+  }
+
   fn workspace_for_root_and_member(
     root: serde_json::Value,
     member: serde_json::Value,
@@ -3034,7 +3913,7 @@ mod test {
     start_dirs: &[PathBuf],
   ) -> Result<WorkspaceRc, WorkspaceDiscoverError> {
     Workspace::discover(
-      WorkspaceDiscoverStart::Dirs(start_dirs),
+      WorkspaceDiscoverStart::Paths(start_dirs),
       &WorkspaceDiscoverOptions {
         fs,
         discover_pkg_json: true,
