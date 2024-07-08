@@ -3278,6 +3278,26 @@ mod test {
   }
 
   #[test]
+  fn test_npm_workspace_self_reference_and_duplicate_references_ok() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": [
+          ".",
+          "./member",
+          "./member",
+          "**/*"
+        ]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.package_jsons().count(), 2);
+  }
+
+  #[test]
   fn test_resolve_multiple_dirs() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(

@@ -345,15 +345,8 @@ fn discover_workspace_config_files_for_single_dir(
             })?;
           Ok(member_dir_url)
         };
-      let validate_member_url =
-        |raw_member: &str,
-         member_dir_url: &Url|
-         -> Result<(), ResolveWorkspaceMemberError> {
-          if *member_dir_url == root_config_file_directory_url {
-            return Err(ResolveWorkspaceMemberError::InvalidSelfReference {
-              member: raw_member.to_string(),
-            });
-          }
+      let validate_member_url_is_descendant =
+        |member_dir_url: &Url| -> Result<(), ResolveWorkspaceMemberError> {
           if !member_dir_url
             .as_str()
             .starts_with(root_config_file_directory_url.as_str())
@@ -394,20 +387,6 @@ fn discover_workspace_config_files_for_single_dir(
             }
           })
         };
-      let mut add_member = |raw_member: &str,
-                            member_dir_url: Url,
-                            member_config_folder: ConfigFolder|
-       -> Result<(), ResolveWorkspaceMemberError> {
-        let previous_member =
-          final_members.insert(new_rc(member_dir_url), member_config_folder);
-        if previous_member.is_some() {
-          Err(ResolveWorkspaceMemberError::Duplicate {
-            member: raw_member.to_string(),
-          })
-        } else {
-          Ok(())
-        }
-      };
       if let Some(deno_json) = root_config_folder.deno_json() {
         if let Some(members) = &deno_json.json.workspace {
           if members.is_empty() {
@@ -420,10 +399,27 @@ fn discover_workspace_config_files_for_single_dir(
           }
           for raw_member in members {
             let member_dir_url = resolve_member_url(raw_member)?;
-            validate_member_url(raw_member, &member_dir_url)?;
+            if member_dir_url == root_config_file_directory_url {
+              return Err(
+                ResolveWorkspaceMemberError::InvalidSelfReference {
+                  member: raw_member.to_string(),
+                }
+                .into(),
+              );
+            }
+            validate_member_url_is_descendant(&member_dir_url)?;
             let member_config_folder =
               find_member_config_folder(&member_dir_url)?;
-            add_member(raw_member, member_dir_url, member_config_folder)?;
+            let previous_member = final_members
+              .insert(new_rc(member_dir_url), member_config_folder);
+            if previous_member.is_some() {
+              return Err(
+                ResolveWorkspaceMemberError::Duplicate {
+                  member: raw_member.to_string(),
+                }
+                .into(),
+              );
+            }
           }
         }
       }
@@ -485,7 +481,10 @@ fn discover_workspace_config_files_for_single_dir(
           }
 
           for member_dir_url in member_dir_urls {
-            validate_member_url("<npm workspace member>", &member_dir_url)?;
+            if member_dir_url == root_config_file_directory_url {
+              continue; // ignore self references
+            }
+            validate_member_url_is_descendant(&member_dir_url)?;
             let member_config_folder =
               match find_member_config_folder(&member_dir_url) {
                 Ok(config_folder) => config_folder,
@@ -508,17 +507,9 @@ fn discover_workspace_config_files_for_single_dir(
                 .into(),
               );
             }
-            match add_member(
-              "<npm workspace member>",
-              member_dir_url,
-              member_config_folder,
-            ) {
-              Ok(()) => {}
-              Err(ResolveWorkspaceMemberError::Duplicate { .. }) => {
-                // ignore for package.json members
-              }
-              Err(err) => return Err(err.into()),
-            }
+            // don't surface errors about duplicate members for
+            // package.json workspace members
+            final_members.insert(new_rc(member_dir_url), member_config_folder);
           }
         }
       }
