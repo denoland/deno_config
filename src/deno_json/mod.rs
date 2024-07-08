@@ -1259,8 +1259,6 @@ impl ConfigFile {
     }
   }
 
-  /// If the configuration file contains "extra" modules (like TypeScript
-  /// `"types"`) options, return them as imports to be added to a module graph.
   pub fn to_compiler_option_types(
     &self,
   ) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
