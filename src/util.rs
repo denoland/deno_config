@@ -41,7 +41,7 @@ pub fn specifier_parent(specifier: &Url) -> Url {
 
 #[derive(Debug, Error)]
 #[error("Could not convert specifier to file path.\n  Specifier: {0}")]
-pub struct SpecifierToFilePathError(Url);
+pub struct SpecifierToFilePathError(pub Url);
 
 /// Attempts to convert a specifier to a file path. By default, uses the Url
 /// crate's `to_file_path()` method, but falls back to try and resolve unix-style

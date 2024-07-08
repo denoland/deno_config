@@ -7,21 +7,26 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+use indexmap::IndexSet;
 use url::Url;
 
+use crate::glob::is_glob_pattern;
+use crate::glob::FileCollector;
+use crate::glob::FilePatterns;
+use crate::glob::PathOrPattern;
+use crate::glob::PathOrPatternSet;
 use crate::package_json::PackageJson;
 use crate::package_json::PackageJsonLoadError;
 use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
-use crate::util::normalize_path;
 use crate::util::specifier_parent;
-use crate::util::specifier_to_file_path;
 use crate::ConfigFile;
 use crate::ConfigFileRc;
 
 use super::ResolveWorkspaceMemberError;
 use super::UrlRc;
+use super::VendorEnablement;
 use super::WorkspaceDiscoverError;
 use super::WorkspaceDiscoverErrorKind;
 use super::WorkspaceDiscoverOptions;
@@ -117,19 +122,27 @@ impl ConfigFolder {
 
 #[derive(Debug)]
 pub enum ConfigFileDiscovery {
-  None,
-  Single(ConfigFolder),
+  None {
+    maybe_vendor_dir: Option<PathBuf>,
+  },
+  Single {
+    config_folder: ConfigFolder,
+    maybe_vendor_dir: Option<PathBuf>,
+  },
   Workspace {
     root: ConfigFolder,
     members: BTreeMap<UrlRc, ConfigFolder>,
+    maybe_vendor_dir: Option<PathBuf>,
   },
 }
 
 impl ConfigFileDiscovery {
   fn root_config_specifier(&self) -> Option<Cow<Url>> {
     match self {
-      Self::None => None,
-      Self::Single(res) => Some(config_folder_config_specifier(res)),
+      Self::None { .. } => None,
+      Self::Single { config_folder, .. } => {
+        Some(config_folder_config_specifier(config_folder))
+      }
       Self::Workspace { root, .. } => {
         Some(config_folder_config_specifier(root))
       }
@@ -150,7 +163,12 @@ pub fn discover_workspace_config_files(
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
   match start {
     WorkspaceDiscoverStart::Paths(dirs) => match dirs.len() {
-      0 => Ok(ConfigFileDiscovery::None),
+      0 => Ok(ConfigFileDiscovery::None {
+        maybe_vendor_dir: resolve_vendor_dir(
+          None,
+          opts.maybe_vendor_override.as_ref(),
+        ),
+      }),
       1 => {
         let dir = &dirs[0];
         let start = DirOrConfigFile::Dir(dir);
@@ -158,7 +176,12 @@ pub fn discover_workspace_config_files(
       }
       _ => {
         let mut checked = HashSet::default();
-        let mut final_workspace = ConfigFileDiscovery::None;
+        let mut final_workspace = ConfigFileDiscovery::None {
+          maybe_vendor_dir: resolve_vendor_dir(
+            None,
+            opts.maybe_vendor_override.as_ref(),
+          ),
+        };
         for dir in dirs {
           let workspace = discover_workspace_config_files_for_single_dir(
             DirOrConfigFile::Dir(dir),
@@ -290,7 +313,12 @@ fn discover_workspace_config_files_for_single_dir(
     if let Some(checked) = checked.as_mut() {
       if !checked.insert(current_dir.to_path_buf()) {
         // already visited here, so exit
-        return Ok(ConfigFileDiscovery::None);
+        return Ok(ConfigFileDiscovery::None {
+          maybe_vendor_dir: resolve_vendor_dir(
+            None,
+            opts.maybe_vendor_override.as_ref(),
+          ),
+        });
       }
     }
 
@@ -299,17 +327,15 @@ fn discover_workspace_config_files_for_single_dir(
       continue;
     };
     if root_config_folder.is_workspace() {
+      let maybe_vendor_dir = resolve_vendor_dir(
+        Some(&root_config_folder),
+        opts.maybe_vendor_override.as_ref(),
+      );
       let mut final_members = BTreeMap::new();
       let root_config_file_directory_url = root_config_folder.folder_url();
-      let root_config_file_path =
-        specifier_to_file_path(&root_config_file_directory_url).unwrap();
       let resolve_member_url =
         |raw_member: &str| -> Result<Url, ResolveWorkspaceMemberError> {
-          let member = if !raw_member.ends_with('/') {
-            Cow::Owned(format!("{}/", raw_member))
-          } else {
-            Cow::Borrowed(raw_member)
-          };
+          let member = ensure_trailing_slash(raw_member);
           let member_dir_url = root_config_file_directory_url
             .join(&member)
             .map_err(|err| ResolveWorkspaceMemberError::InvalidMember {
@@ -317,26 +343,23 @@ fn discover_workspace_config_files_for_single_dir(
               member: raw_member.to_owned(),
               source: err,
             })?;
-          if member_dir_url == root_config_file_directory_url {
-            return Err(ResolveWorkspaceMemberError::InvalidSelfReference {
-              member: raw_member.to_string(),
-            });
-          }
+          Ok(member_dir_url)
+        };
+      let validate_member_url_is_descendant =
+        |member_dir_url: &Url| -> Result<(), ResolveWorkspaceMemberError> {
           if !member_dir_url
             .as_str()
             .starts_with(root_config_file_directory_url.as_str())
           {
             return Err(ResolveWorkspaceMemberError::NonDescendant {
               workspace_url: root_config_file_directory_url.clone(),
-              member_url: member_dir_url,
+              member_url: member_dir_url.clone(),
             });
           }
-          Ok(member_dir_url)
+          Ok(())
         };
       let mut find_member_config_folder =
-        |raw_member: &str,
-         member_dir_url: &Url|
-         -> Result<_, ResolveWorkspaceMemberError> {
+        |member_dir_url: &Url| -> Result<_, ResolveWorkspaceMemberError> {
           // try to find the config folder in memory from the configs we already
           // found on the file system
           if let Some(config_folder) =
@@ -345,9 +368,8 @@ fn discover_workspace_config_files_for_single_dir(
             return Ok(config_folder);
           }
 
-          let maybe_config_folder = load_config_folder(&normalize_path(
-            root_config_file_path.join(raw_member),
-          ))?;
+          let maybe_config_folder =
+            load_config_folder(&member_dir_url.to_file_path().unwrap())?;
           maybe_config_folder.ok_or_else(|| {
             // it's fine this doesn't use all the possible config file names
             // as this is only used to enhance the error message
@@ -365,20 +387,6 @@ fn discover_workspace_config_files_for_single_dir(
             }
           })
         };
-      let mut add_member = |raw_member: &str,
-                            member_dir_url: Url,
-                            member_config_folder: ConfigFolder|
-       -> Result<(), ResolveWorkspaceMemberError> {
-        let previous_member =
-          final_members.insert(new_rc(member_dir_url), member_config_folder);
-        if previous_member.is_some() {
-          Err(ResolveWorkspaceMemberError::Duplicate {
-            member: raw_member.to_string(),
-          })
-        } else {
-          Ok(())
-        }
-      };
       if let Some(deno_json) = root_config_folder.deno_json() {
         if let Some(members) = &deno_json.json.workspace {
           if members.is_empty() {
@@ -391,29 +399,94 @@ fn discover_workspace_config_files_for_single_dir(
           }
           for raw_member in members {
             let member_dir_url = resolve_member_url(raw_member)?;
+            if member_dir_url == root_config_file_directory_url {
+              return Err(
+                ResolveWorkspaceMemberError::InvalidSelfReference {
+                  member: raw_member.to_string(),
+                }
+                .into(),
+              );
+            }
+            validate_member_url_is_descendant(&member_dir_url)?;
             let member_config_folder =
-              find_member_config_folder(raw_member, &member_dir_url)?;
-            add_member(raw_member, member_dir_url, member_config_folder)?;
+              find_member_config_folder(&member_dir_url)?;
+            let previous_member = final_members
+              .insert(new_rc(member_dir_url), member_config_folder);
+            if previous_member.is_some() {
+              return Err(
+                ResolveWorkspaceMemberError::Duplicate {
+                  member: raw_member.to_string(),
+                }
+                .into(),
+              );
+            }
           }
         }
       }
       if let Some(pkg_json) = root_config_folder.pkg_json() {
         if let Some(members) = &pkg_json.workspaces {
-          let mut has_warned = false;
-          for raw_member in members {
-            if raw_member.contains('*') {
-              if !has_warned {
-                has_warned = true;
-                log::warn!(
-                  "Wildcards in npm workspaces are not yet supported. Ignoring."
-                );
-              }
-              continue;
-            }
+          let (pattern_members, path_members): (Vec<_>, Vec<_>) =
+            members.iter().partition(|member| {
+              is_glob_pattern(member) || member.starts_with('!')
+            });
+          let patterns = pattern_members
+            .iter()
+            .map(|raw_member| {
+              PathOrPattern::from_relative(
+                pkg_json.dir_path(),
+                &format!("{}package.json", ensure_trailing_slash(raw_member)),
+              )
+              .map_err(|err| {
+                ResolveWorkspaceMemberError::NpmMemberToPattern {
+                  base: root_config_file_directory_url.clone(),
+                  member: raw_member.to_string(),
+                  source: err,
+                }
+              })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+          let pkg_json_paths = if patterns.is_empty() {
+            Vec::new()
+          } else {
+            FileCollector::new(|_| true)
+              .ignore_git_folder()
+              .ignore_node_modules()
+              .set_vendor_folder(maybe_vendor_dir.clone())
+              .collect_file_patterns(
+                opts.fs,
+                FilePatterns {
+                  base: pkg_json.dir_path().to_path_buf(),
+                  include: Some(PathOrPatternSet::new(patterns)),
+                  exclude: PathOrPatternSet::new(Vec::new()),
+                },
+              )
+              .map_err(|err| {
+                WorkspaceDiscoverErrorKind::FailedCollectingNpmMembers {
+                  package_json_url: pkg_json.specifier(),
+                  source: err,
+                }
+              })?
+          };
+          let mut member_dir_urls =
+            IndexSet::with_capacity(path_members.len() + pkg_json_paths.len());
+          for path_member in path_members {
+            let member_dir_url = resolve_member_url(path_member)?;
+            member_dir_urls.insert(member_dir_url);
+          }
+          for pkg_json_path in pkg_json_paths {
+            let member_dir_url =
+              Url::from_directory_path(pkg_json_path.parent().unwrap())
+                .unwrap();
+            member_dir_urls.insert(member_dir_url);
+          }
 
-            let member_dir_url = resolve_member_url(raw_member)?;
+          for member_dir_url in member_dir_urls {
+            if member_dir_url == root_config_file_directory_url {
+              continue; // ignore self references
+            }
+            validate_member_url_is_descendant(&member_dir_url)?;
             let member_config_folder =
-              match find_member_config_folder(raw_member, &member_dir_url) {
+              match find_member_config_folder(&member_dir_url) {
                 Ok(config_folder) => config_folder,
                 Err(ResolveWorkspaceMemberError::NotFound { dir_url }) => {
                   // enhance the error to say we didn't find a package.json
@@ -434,13 +507,9 @@ fn discover_workspace_config_files_for_single_dir(
                 .into(),
               );
             }
-            match add_member(raw_member, member_dir_url, member_config_folder) {
-              Ok(()) => {}
-              Err(ResolveWorkspaceMemberError::Duplicate { .. }) => {
-                // ignore for package.json members
-              }
-              Err(err) => return Err(err.into()),
-            }
+            // don't surface errors about duplicate members for
+            // package.json workspace members
+            final_members.insert(new_rc(member_dir_url), member_config_folder);
           }
         }
       }
@@ -495,6 +564,7 @@ fn discover_workspace_config_files_for_single_dir(
       return Ok(ConfigFileDiscovery::Workspace {
         root: root_config_folder,
         members: final_members,
+        maybe_vendor_dir,
       });
     }
 
@@ -506,11 +576,61 @@ fn discover_workspace_config_files_for_single_dir(
   }
 
   if let Some(first_config_folder_url) = first_config_folder_url {
-    let config = found_config_folders
+    let config_folder = found_config_folders
       .remove(&first_config_folder_url)
       .unwrap();
-    Ok(ConfigFileDiscovery::Single(config))
+    let maybe_vendor_dir = resolve_vendor_dir(
+      Some(&config_folder),
+      opts.maybe_vendor_override.as_ref(),
+    );
+    Ok(ConfigFileDiscovery::Single {
+      config_folder,
+      maybe_vendor_dir,
+    })
   } else {
-    Ok(ConfigFileDiscovery::None)
+    Ok(ConfigFileDiscovery::None {
+      maybe_vendor_dir: resolve_vendor_dir(
+        None,
+        opts.maybe_vendor_override.as_ref(),
+      ),
+    })
+  }
+}
+
+fn resolve_vendor_dir(
+  maybe_config_folder: Option<&ConfigFolder>,
+  maybe_vendor_override: Option<&VendorEnablement>,
+) -> Option<PathBuf> {
+  match maybe_config_folder {
+    Some(config_folder) => {
+      if let Some(vendor_folder_override) = maybe_vendor_override {
+        match vendor_folder_override {
+          VendorEnablement::Disable => None,
+          VendorEnablement::Enable { cwd } => match config_folder.deno_json() {
+            Some(c) => Some(c.dir_path().join("vendor")),
+            None => Some(cwd.join("vendor")),
+          },
+        }
+      } else {
+        let deno_json = config_folder.deno_json()?;
+        if deno_json.vendor() == Some(true) {
+          Some(deno_json.dir_path().join("vendor"))
+        } else {
+          None
+        }
+      }
+    }
+    None => match maybe_vendor_override {
+      Some(VendorEnablement::Enable { cwd }) => Some(cwd.join("vendor")),
+      _ => None,
+    },
+  }
+}
+
+fn ensure_trailing_slash(path: &str) -> Cow<str> {
+  if !path.ends_with('/') {
+    Cow::Owned(format!("{}/", path))
+  } else {
+    Cow::Borrowed(path)
   }
 }
