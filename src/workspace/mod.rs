@@ -1283,6 +1283,7 @@ impl WorkspaceMemberContext {
     cli_args: FilePatterns,
   ) -> Result<LintConfig, AnyError> {
     let mut config = self.to_lint_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
@@ -1339,6 +1340,7 @@ impl WorkspaceMemberContext {
     cli_args: FilePatterns,
   ) -> Result<FmtConfig, AnyError> {
     let mut config = self.to_fmt_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
@@ -1395,6 +1397,7 @@ impl WorkspaceMemberContext {
     cli_args: FilePatterns,
   ) -> Result<BenchConfig, AnyError> {
     let mut config = self.to_bench_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
@@ -1470,6 +1473,7 @@ impl WorkspaceMemberContext {
 
   pub fn to_publish_config(&self) -> Result<PublishConfig, AnyError> {
     let mut config = self.to_publish_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
   }
@@ -1497,6 +1501,7 @@ impl WorkspaceMemberContext {
     cli_args: FilePatterns,
   ) -> Result<TestConfig, AnyError> {
     let mut config = self.to_test_config_inner()?;
+    self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
     self.append_workspace_members_to_exclude(&mut config.files);
     Ok(config)
@@ -1519,6 +1524,44 @@ impl WorkspaceMemberContext {
     Ok(TestConfig {
       files: combine_patterns(root_config.files, member_config.files),
     })
+  }
+
+  /// Removes any "include" patterns from the root files that have
+  /// a base in another workspace member.
+  fn exclude_includes_with_member_for_base_for_root(
+    &self,
+    files: &mut FilePatterns,
+  ) {
+    let Some(include) = &mut files.include else {
+      return;
+    };
+    let (root_url, folder_configs) = self.workspace.root_folder();
+    if self.dir_url != *root_url {
+      return; // only do this for the root config
+    }
+
+    let maybe_root_deno_json = folder_configs.deno_json.as_ref();
+    let non_root_deno_jsons = match maybe_root_deno_json {
+      Some(root_deno_json) => self
+        .workspace
+        .deno_jsons()
+        .filter(|d| d.specifier != root_deno_json.specifier)
+        .collect::<Vec<_>>(),
+      None => self.workspace.deno_jsons().collect::<Vec<_>>(),
+    };
+
+    let include = include.inner_mut();
+    for i in (0..include.len()).rev() {
+      let Some(path) = include[i].base_path() else {
+        continue;
+      };
+      for deno_json in non_root_deno_jsons.iter() {
+        if path.starts_with(deno_json.dir_path()) {
+          include.remove(i);
+          break;
+        }
+      }
+    }
   }
 
   fn append_workspace_members_to_exclude(&self, files: &mut FilePatterns) {
@@ -1550,12 +1593,25 @@ fn combine_patterns(
                 None => true,
               }
             });
-          Some(PathOrPatternSet::new(match member_patterns.include {
-            Some(member) => filtered_root
-              .chain(member.into_path_or_patterns())
-              .collect(),
-            None => filtered_root.collect(),
-          }))
+          match member_patterns.include {
+            Some(member) => Some(
+              filtered_root
+                .chain(member.into_path_or_patterns())
+                .collect(),
+            ),
+            None => {
+              let matching_root = filtered_root.collect::<Vec<_>>();
+              if matching_root.is_empty() {
+                // member was None and nothing in the root include list
+                // has a base within this member, so use None to discover
+                // files in here
+                None
+              } else {
+                Some(matching_root)
+              }
+            }
+          }
+          .map(PathOrPatternSet::new)
         }
         None => member_patterns.include,
       }
@@ -3546,6 +3602,111 @@ mod test {
         )])
       );
     }
+  }
+
+  #[test]
+  fn test_resolve_lint_config_for_members_include_root_and_sub_member() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member-a", "./member-b", "member-c"],
+        "lint": {
+          "rules": {
+            "include": ["some-rule"]
+          },
+          "include": ["./file.ts", "./member-c/file.ts"]
+        }
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member-a/deno.json"),
+      json!({
+        "lint": {
+          "rules": {
+            "tags": ["recommended"]
+          },
+          "include": ["./member-a-file.ts"]
+        }
+      }),
+    );
+    fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("member-c/deno.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let lint_config_for_members = workspace
+      .resolve_lint_config_for_members(&FilePatterns::new_with_base(root_dir()))
+      .unwrap();
+    assert_eq!(
+      lint_config_for_members
+        .into_iter()
+        .map(|(_ctx, config)| config)
+        .collect::<Vec<_>>(),
+      vec![
+        LintConfig {
+          options: LintOptionsConfig {
+            rules: LintRulesConfig {
+              include: Some(vec!["some-rule".to_string()]),
+              ..Default::default()
+            }
+          },
+          files: FilePatterns {
+            base: root_dir(),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("file.ts")
+            )])),
+            exclude: PathOrPatternSet::new(vec![
+              PathOrPattern::Path(root_dir().join("member-a")),
+              PathOrPattern::Path(root_dir().join("member-b")),
+              PathOrPattern::Path(root_dir().join("member-c")),
+            ])
+          }
+        },
+        LintConfig {
+          options: LintOptionsConfig {
+            rules: LintRulesConfig {
+              tags: Some(vec!["recommended".to_string()]),
+              include: Some(vec!["some-rule".to_string()]),
+              exclude: None,
+            }
+          },
+          files: FilePatterns {
+            base: root_dir().join("member-a"),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("member-a").join("member-a-file.ts")
+            )])),
+            exclude: Default::default(),
+          }
+        },
+        LintConfig {
+          options: LintOptionsConfig {
+            rules: LintRulesConfig {
+              include: Some(vec!["some-rule".to_string()]),
+              ..Default::default()
+            }
+          },
+          files: FilePatterns {
+            base: root_dir().join("member-b"),
+            include: None,
+            exclude: Default::default(),
+          }
+        },
+        LintConfig {
+          options: LintOptionsConfig {
+            rules: LintRulesConfig {
+              include: Some(vec!["some-rule".to_string()]),
+              ..Default::default()
+            }
+          },
+          files: FilePatterns {
+            base: root_dir().join("member-c"),
+            include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
+              root_dir().join("member-c").join("file.ts")
+            )])),
+            exclude: Default::default(),
+          }
+        }
+      ]
+    );
   }
 
   fn workspace_for_root_and_member(
