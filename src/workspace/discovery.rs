@@ -388,8 +388,8 @@ fn discover_workspace_config_files_for_single_dir(
           })
         };
       if let Some(deno_json) = root_config_folder.deno_json() {
-        if let Some(members) = &deno_json.json.workspace {
-          if members.is_empty() {
+        if let Some(workspace_config) = deno_json.to_workspace_config()? {
+          if workspace_config.members.is_empty() {
             return Err(
               WorkspaceDiscoverErrorKind::MembersEmpty(
                 deno_json.specifier.clone(),
@@ -397,7 +397,7 @@ fn discover_workspace_config_files_for_single_dir(
               .into(),
             );
           }
-          for raw_member in members {
+          for raw_member in &workspace_config.members {
             let member_dir_url = resolve_member_url(raw_member)?;
             if member_dir_url == root_config_file_directory_url {
               return Err(

@@ -435,6 +435,15 @@ pub enum LockConfig {
   PathBuf(PathBuf),
 }
 
+#[derive(Debug, Error)]
+#[error("Failed to parse \"workspace\" configuration.")]
+pub struct WorkspaceConfigParseError(#[source] serde_json::Error);
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct WorkspaceConfig {
+  pub members: Vec<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Task {
@@ -512,7 +521,7 @@ pub struct ConfigFileJson {
 
   pub name: Option<String>,
   pub version: Option<String>,
-  pub workspace: Option<Vec<String>>,
+  pub workspace: Option<Value>,
   #[serde(rename = "workspaces")]
   pub(crate) deprecated_workspaces: Option<Vec<String>>,
   pub exports: Option<Value>,
@@ -1225,6 +1234,27 @@ impl ConfigFile {
       None => Ok(PublishConfig {
         files: self.to_exclude_files_config()?,
       }),
+    }
+  }
+
+  pub fn to_workspace_config(
+    &self,
+  ) -> Result<Option<WorkspaceConfig>, WorkspaceConfigParseError> {
+    match self.json.workspace.clone() {
+      Some(config) => match config {
+        Value::Null => Ok(None),
+        Value::Array(_) => {
+          let members: Vec<String> = serde_json::from_value(config)
+            .map_err(WorkspaceConfigParseError)?;
+          Ok(Some(WorkspaceConfig { members }))
+        }
+        _ => {
+          let config: WorkspaceConfig = serde_json::from_value(config)
+            .map_err(WorkspaceConfigParseError)?;
+          Ok(Some(config))
+        }
+      },
+      None => Ok(None),
     }
   }
 
