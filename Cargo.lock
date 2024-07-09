@@ -108,7 +108,7 @@ checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
 
 [[package]]
 name = "deno_config"
-version = "0.20.3"
+version = "0.20.4"
 dependencies = [
  "anyhow",
  "deno_semver",
