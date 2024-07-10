@@ -1,5 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
@@ -190,40 +191,40 @@ impl WorkspaceResolver {
           (base_url, import_map)
         }
         None => {
-          let Some(config) = root_folder.deno_json.as_ref() else {
+          if !deno_jsons.iter().any(|p| p.is_package())
+            && !deno_jsons.iter().any(|c| {
+              c.json.import_map.is_some()
+                || c.json.scopes.is_some()
+                || c.json.imports.is_some()
+            })
+          {
+            // no configs have an import map and none are a package, so exit
             return Ok(None);
-          };
-          let config_specified_import_map = config
-            .to_import_map_value(fetch_text)
-            .await
-            .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
-              referrer: config.specifier.clone(),
-              source,
-            })?;
-          let base_import_map_config = match config_specified_import_map {
-            Some((base_url, import_map_value)) => {
-              import_map::ext::ImportMapConfig {
-                base_url: base_url.into_owned(),
-                import_map_value,
-              }
-            }
-            None => {
-              if !deno_jsons.iter().any(|p| p.is_package())
-                && !deno_jsons.iter().any(|c| {
-                  c.json.import_map.is_some()
-                    || c.json.scopes.is_some()
-                    || c.json.imports.is_some()
-                })
-              {
-                // no configs have an import map and none are a package, so exit
-                return Ok(None);
-              }
+          }
 
-              import_map::ext::ImportMapConfig {
-                base_url: config.specifier.clone(),
-                import_map_value: serde_json::Value::Object(Default::default()),
-              }
-            }
+          let config_specified_import_map = match root_folder.deno_json.as_ref()
+          {
+            Some(deno_json) => deno_json
+              .to_import_map_value(fetch_text)
+              .await
+              .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
+                referrer: deno_json.specifier.clone(),
+                source,
+              })?
+              .unwrap_or_else(|| {
+                (
+                  Cow::Borrowed(&deno_json.specifier),
+                  serde_json::Value::Object(Default::default()),
+                )
+              }),
+            None => (
+              Cow::Owned(workspace.root_dir.join("deno.json").unwrap()),
+              serde_json::Value::Object(Default::default()),
+            ),
+          };
+          let base_import_map_config = import_map::ext::ImportMapConfig {
+            base_url: config_specified_import_map.0.into_owned(),
+            import_map_value: config_specified_import_map.1,
           };
           let child_import_map_configs = deno_jsons
             .iter()
@@ -700,6 +701,47 @@ mod test {
       assert_eq!(resolve("@scope/a@workspace").unwrap(), root_dir().join("a"));
       // difference is here, it won't match for a non-workspace tag for an npm specifier
       assert_eq!(resolve("@scope/a@latest"), None);
+    }
+  }
+
+  #[tokio::test]
+  async fn resolve_workspace_pkg_json_workspace_deno_json_import_map() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["*"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("a/package.json"),
+      json!({
+        "name": "@scope/a",
+        "version": "1.0.0",
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("a/deno.json"),
+      json!({
+        "name": "@scope/jsr-pkg",
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = create_resolver(&workspace).await;
+    let resolution = resolver
+      .resolve(
+        "@scope/jsr-pkg",
+        &Url::from_file_path(root_dir().join("b.ts")).unwrap(),
+      )
+      .unwrap();
+    match resolution {
+      MappedResolution::ImportMap(specifier) => {
+        assert_eq!(specifier, Url::parse("jsr:@scope/jsr-pkg@^1.0.0").unwrap());
+      }
+      _ => unreachable!(),
     }
   }
 
