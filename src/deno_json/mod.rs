@@ -440,6 +440,7 @@ pub enum LockConfig {
 pub struct WorkspaceConfigParseError(#[source] serde_json::Error);
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct WorkspaceConfig {
   pub members: Vec<String>,
 }
