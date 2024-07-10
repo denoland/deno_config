@@ -1289,9 +1289,9 @@ impl ConfigFile {
     }
   }
 
-  /// If the configuration file contains "extra" modules (like TypeScript
-  /// `"types"`) options, return them as imports to be added to a module graph.
-  pub fn to_maybe_imports(&self) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
+  pub fn to_compiler_option_types(
+    &self,
+  ) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
     let Some(compiler_options_value) = self.json.compiler_options.as_ref()
     else {
       return Ok(Vec::new());

@@ -869,9 +869,13 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
-  pub fn to_maybe_imports(&self) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
+  pub fn to_compiler_option_types(
+    &self,
+  ) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
     self
-      .with_root_config_only(|root_config| root_config.to_maybe_imports())
+      .with_root_config_only(|root_config| {
+        root_config.to_compiler_option_types()
+      })
       .unwrap_or(Ok(Vec::new()))
   }
 
@@ -2068,7 +2072,7 @@ mod test {
       })
     );
     assert_eq!(
-      workspace.to_maybe_imports().unwrap(),
+      workspace.to_compiler_option_types().unwrap(),
       vec![(
         Url::from_file_path(root_dir().join("deno.json")).unwrap(),
         vec!["./types.d.ts".to_string()]
