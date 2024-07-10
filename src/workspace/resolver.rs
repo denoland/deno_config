@@ -734,7 +734,7 @@ mod test {
     let resolution = resolver
       .resolve(
         "@scope/jsr-pkg",
-        &Url::from_file_path(&root_dir().join("b.ts")).unwrap(),
+        &Url::from_file_path(root_dir().join("b.ts")).unwrap(),
       )
       .unwrap();
     match resolution {
