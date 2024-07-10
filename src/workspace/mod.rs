@@ -674,27 +674,25 @@ impl Workspace {
 
   pub fn jsr_packages_for_publish(self: &WorkspaceRc) -> Vec<JsrPackageConfig> {
     let ctx = self.resolve_start_ctx();
-    let Some(config) = &ctx.deno_json else {
-      return Vec::new();
-    };
-    let deno_json = &config.member;
+    // only publish the current folder if it's a package
+    if let Some(package_config) = ctx.maybe_package_config() {
+      return vec![package_config];
+    }
     if let Some(pkg_json) = &ctx.pkg_json {
+      let ctx_dir_path = ctx.dir_url.to_file_path().unwrap();
       // don't publish anything if in a package.json only directory within
       // a workspace
-      if pkg_json.member.dir_path().starts_with(deno_json.dir_path())
-        && deno_json.dir_path() != pkg_json.member.dir_path()
+      if pkg_json.member.dir_path().starts_with(&ctx_dir_path)
+        && ctx_dir_path != pkg_json.member.dir_path()
       {
         return Vec::new();
       }
     }
-    if deno_json.dir_path() == self.root_dir.to_file_path().unwrap()
-      && !(deno_json.is_workspace() && deno_json.is_package())
-    {
-      return self.jsr_packages();
-    }
-    match ctx.maybe_package_config() {
-      Some(pkg) => vec![pkg],
-      None => Vec::new(),
+    if ctx.dir_url == self.root_dir {
+      self.jsr_packages()
+    } else {
+      // nothing to publish
+      Vec::new()
     }
   }
 
@@ -3025,6 +3023,86 @@ mod test {
     let jsr_pkgs = workspace.jsr_packages_for_publish();
     let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
+  }
+
+  #[test]
+  fn test_packages_for_publish_npm_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./a", "./b", "./c", "./d"]
+      }),
+    );
+    fs.insert_json(root_dir().join("a/package.json"), json!({}));
+    fs.insert_json(
+      root_dir().join("a/deno.json"),
+      json!({
+        "name": "@scope/a",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    fs.insert_json(root_dir().join("b/package.json"), json!({}));
+    fs.insert_json(
+      root_dir().join("b/deno.json"),
+      json!({
+        "name": "@scope/b",
+        "version": "1.0.0",
+        "exports": "./main.ts",
+      }),
+    );
+    fs.insert_json(root_dir().join("c/package.json"), json!({}));
+    fs.insert_json(
+      root_dir().join("c/deno.json"),
+      // not a package
+      json!({}),
+    );
+    fs.insert_json(
+      root_dir().join("d/package.json"),
+      json!({
+        "name": "pkg",
+        "version": "1.0.0",
+      }),
+    );
+    // root
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
+      assert_eq!(names, vec!["@scope/a", "@scope/b"]);
+    }
+    // member
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir().join("a"));
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
+      assert_eq!(names, vec!["@scope/a"]);
+    }
+    // member, not a package
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir().join("c"));
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      assert!(jsr_pkgs.is_empty());
+    }
+    // package.json
+    {
+      let workspace = workspace_at_start_dir(&fs, &root_dir().join("d"));
+      assert_eq!(workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace.jsr_packages_for_publish();
+      assert!(jsr_pkgs.is_empty());
+      assert_eq!(
+        workspace
+          .npm_packages()
+          .into_iter()
+          .map(|p| p.pkg_json.dir_path().to_path_buf())
+          .collect::<Vec<_>>(),
+        vec![root_dir().join("d")]
+      );
+    }
   }
 
   #[test]
