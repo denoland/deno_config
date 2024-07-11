@@ -205,8 +205,6 @@ pub enum WorkspaceDiscoverErrorKind {
   PackageJsonReadError(#[from] PackageJsonLoadError),
   #[error(transparent)]
   WorkspaceConfigParse(#[from] WorkspaceConfigParseError),
-  #[error("Workspace members cannot be empty.\n  Workspace: {0}")]
-  MembersEmpty(Url),
   #[error(transparent)]
   ResolveMember(#[from] ResolveWorkspaceMemberError),
   #[error("Command resolved to multiple config files. Ensure all specified paths are within the same workspace.\n  First: {base_workspace_url}\n  Second: {other_workspace_url}")]
@@ -1789,20 +1787,28 @@ mod test {
         "workspace": []
       }),
     );
+    fs.insert_json(
+      root_dir().join("sub_dir").join("deno.json"),
+      json!({
+        "workspace": []
+      }),
+    );
 
-    let workspace_config_err = Workspace::discover(
-      WorkspaceDiscoverStart::Paths(&[root_dir()]),
+    let workspace = Workspace::discover(
+      WorkspaceDiscoverStart::Paths(&[root_dir().join("sub_dir")]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
         ..Default::default()
       },
     )
-    .err()
     .unwrap();
 
-    assert_contains!(
-      workspace_config_err.to_string(),
-      "Workspace members cannot be empty"
+    assert_eq!(
+      workspace
+        .deno_jsons()
+        .map(|d| d.specifier.to_file_path().unwrap())
+        .collect::<Vec<_>>(),
+      vec![root_dir().join("sub_dir").join("deno.json")]
     );
   }
 
