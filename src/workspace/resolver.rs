@@ -182,9 +182,7 @@ impl WorkspaceResolver {
         Some(SpecifiedImportMap {
           base_url,
           value: import_map,
-        }) => {
-          (base_url, import_map)
-        }
+        }) => (base_url, import_map),
         None => {
           if !deno_jsons.iter().any(|p| p.is_package())
             && !deno_jsons.iter().any(|c| {
