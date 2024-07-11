@@ -183,11 +183,6 @@ impl WorkspaceResolver {
           base_url,
           value: import_map,
         }) => {
-          if workspace.config_folders.len() > 1 {
-            // We're not entirely sure how this should work, so for now we're just surfacing an error.
-            // Most likely it should just overwrite the import map.
-            return Err(WorkspaceResolverCreateError::WorkspaceSpecifiedImportMapNotImplemented);
-          }
           (base_url, import_map)
         }
         None => {
@@ -790,7 +785,7 @@ mod test {
     );
     fs.insert_json(root_dir().join("a").join("deno.json"), json!({}));
     let workspace = workspace_at_start_dir(&fs, &root_dir());
-    let err = workspace
+    workspace
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
@@ -806,11 +801,7 @@ mod test {
         |_| async move { unreachable!() },
       )
       .await
-      .unwrap_err();
-    assert!(matches!(
-      err,
-      WorkspaceResolverCreateError::WorkspaceSpecifiedImportMapNotImplemented
-    ));
+      .unwrap();
   }
 
   async fn create_resolver(workspace: &WorkspaceRc) -> WorkspaceResolver {
