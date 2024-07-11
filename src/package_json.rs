@@ -61,6 +61,7 @@ pub enum NodeModuleKind {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageJson {
   pub exports: Option<Map<String, Value>>,
   pub imports: Option<Map<String, Value>>,
@@ -69,7 +70,9 @@ pub struct PackageJson {
   module: Option<String>, // use .main(...)
   pub name: Option<String>,
   pub version: Option<String>,
+  #[serde(skip)]
   pub path: PathBuf,
+  #[serde(rename = "type")]
   pub typ: String,
   pub types: Option<String>,
   pub dependencies: Option<IndexMap<String, String>>,
@@ -569,5 +572,40 @@ mod test {
         )
       ])
     );
+  }
+
+  #[test]
+  fn test_deserialize_serialize() {
+    let json_value = serde_json::json!({
+      "name": "test",
+      "version": "1",
+      "exports": {
+        ".": "./main.js",
+      },
+      "bin": "./main.js",
+      "types": "./types.d.ts",
+      "imports": {
+        "#test": "./main.js",
+      },
+      "main": "./main.js",
+      "module": "./module.js",
+      "type": "module",
+      "dependencies": {
+        "name": "1.2",
+      },
+      "devDependencies": {
+        "name": "1.2",
+      },
+      "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1",
+      },
+      "workspaces": ["asdf", "asdf2"]
+    });
+    let package_json = PackageJson::load_from_value(
+      PathBuf::from("/package.json"),
+      json_value.clone(),
+    );
+    let serialized_value = serde_json::to_value(&package_json).unwrap();
+    assert_eq!(serialized_value, json_value);
   }
 }
