@@ -849,7 +849,7 @@ impl Workspace {
   ) -> Result<TsConfigForEmit, AnyError> {
     get_ts_config_for_emit(
       config_type,
-      self.root_folder().1.deno_json.as_deref(),
+      self.get_root_deno_json().map(|c| c.as_ref()),
     )
   }
 
@@ -1072,30 +1072,37 @@ impl Workspace {
 
   pub fn unstable_features(&self) -> &[String] {
     self
-      .root_folder()
-      .1
-      .deno_json
-      .as_ref()
-      .map(|c| (&c.json.unstable) as &[String])
+      .with_root_config_only(|deno_json| {
+        (&deno_json.json.unstable) as &[String]
+      })
       .unwrap_or(&[])
   }
 
   pub fn has_unstable(&self, name: &str) -> bool {
     self
-      .root_folder()
-      .1
-      .deno_json
-      .as_ref()
-      .map(|c| c.has_unstable(name))
+      .with_root_config_only(|deno_json| deno_json.has_unstable(name))
       .unwrap_or(false)
   }
 
-  fn with_root_config_only<R>(
-    &self,
-    with_root: impl Fn(&ConfigFile) -> R,
+  fn with_root_config_only<'a, R>(
+    &'a self,
+    with_root: impl Fn(&'a ConfigFile) -> R,
   ) -> Option<R> {
-    let configs = self.config_folders.get(&self.root_dir).unwrap();
-    configs.deno_json.as_ref().map(|c| with_root(c))
+    self.get_root_deno_json().map(|c| with_root(c))
+  }
+
+  fn get_root_deno_json(&self) -> Option<&ConfigFileRc> {
+    // uses the deno.json in the root folder if it exists, or falls back to the start dir
+    self
+      .config_folders
+      .get(&self.root_dir)
+      .and_then(|c| c.deno_json.as_ref())
+      .or_else(|| {
+        self
+          .config_folders
+          .get(&self.start_dir)
+          .and_then(|c| c.deno_json.as_ref())
+      })
   }
 }
 
@@ -3386,6 +3393,29 @@ mod test {
     let workspace = workspace_at_start_dir(&fs, &root_dir());
     assert_eq!(workspace.diagnostics(), Vec::new());
     assert_eq!(workspace.package_jsons().count(), 2);
+  }
+
+  #[test]
+  fn test_npm_workspace_consider_start_deno_json_root_config() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./package"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "unstable": ["byonm"],
+      }),
+    );
+    fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.deno_jsons().count(), 1);
+    assert_eq!(workspace.package_jsons().count(), 2);
+    assert!(workspace.has_unstable("byonm"));
   }
 
   #[test]
