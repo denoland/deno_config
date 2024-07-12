@@ -769,6 +769,20 @@ impl Workspace {
     )
   }
 
+  pub fn root_deno_json(&self) -> Option<&ConfigFileRc> {
+    // uses the deno.json in the root folder if it exists, or falls back to the start dir
+    self
+      .config_folders
+      .get(&self.root_dir)
+      .and_then(|c| c.deno_json.as_ref())
+      .or_else(|| {
+        self
+          .config_folders
+          .get(&self.start_dir)
+          .and_then(|c| c.deno_json.as_ref())
+      })
+  }
+
   pub fn config_folders(&self) -> &IndexMap<UrlRc, FolderConfigs> {
     &self.config_folders
   }
@@ -857,7 +871,7 @@ impl Workspace {
   ) -> Result<TsConfigForEmit, AnyError> {
     get_ts_config_for_emit(
       config_type,
-      self.get_root_deno_json().map(|c| c.as_ref()),
+      self.root_deno_json().map(|c| c.as_ref()),
     )
   }
 
@@ -1096,21 +1110,7 @@ impl Workspace {
     &'a self,
     with_root: impl Fn(&'a ConfigFile) -> R,
   ) -> Option<R> {
-    self.get_root_deno_json().map(|c| with_root(c))
-  }
-
-  fn get_root_deno_json(&self) -> Option<&ConfigFileRc> {
-    // uses the deno.json in the root folder if it exists, or falls back to the start dir
-    self
-      .config_folders
-      .get(&self.root_dir)
-      .and_then(|c| c.deno_json.as_ref())
-      .or_else(|| {
-        self
-          .config_folders
-          .get(&self.start_dir)
-          .and_then(|c| c.deno_json.as_ref())
-      })
+    self.root_deno_json().map(|c| with_root(c))
   }
 }
 
