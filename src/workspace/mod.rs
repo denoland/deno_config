@@ -3614,6 +3614,55 @@ mod test {
   }
 
   #[test]
+  fn test_npm_workspace_ignore_pkg_json_between_member_and_root() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member/nested"]
+      }),
+    );
+    // will ignore this one
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    fs.insert_json(root_dir().join("member/nested/package.json"), json!({}));
+    // only resolves the member because it's not part of the workspace
+    let workspace =
+      workspace_at_start_dir(&fs, &root_dir().join("member/nested"));
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.deno_jsons().count(), 0);
+    assert_eq!(
+      workspace
+        .package_jsons()
+        .map(|p| p.path.clone())
+        .collect::<Vec<_>>(),
+      vec![
+        root_dir().join("package.json"),
+        root_dir().join("member/nested/package.json"),
+      ]
+    );
+  }
+
+  #[test]
+  fn test_npm_workspace_ignore_deno_json_between_member_and_root() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member/nested"]
+      }),
+    );
+    // will ignore this one
+    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("member/nested/package.json"), json!({}));
+    // only resolves the member because it's not part of the workspace
+    let workspace =
+      workspace_at_start_dir(&fs, &root_dir().join("member/nested"));
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.deno_jsons().count(), 0);
+    assert_eq!(workspace.package_jsons().count(), 2);
+  }
+
+  #[test]
   fn test_resolve_multiple_dirs_outside_config() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
