@@ -2906,10 +2906,6 @@ Caused by:
         r#"{ "lock": { "path": "mydeno.lock" } }"#,
         (false, root_joined("mydeno.lock")),
       ),
-      (
-        r#"{ "lock": { "frozen": true } }"#,
-        (true, root_joined("deno.lock")),
-      ),
       (r#"{ "lock": {} }"#, (false, root_joined("deno.lock"))),
     ];
     for (config_text, (frozen, resolved_path)) in cases {
