@@ -108,16 +108,18 @@ impl NpmPackageConfig {
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum WorkspaceDiagnosticKind {
-  #[error("The \"{0}\" field can only be specified in the root workspace deno.json file.")]
-  RootOnlyOption(&'static str),
-  #[error("The \"{0}\" field can only be specified in a workspace member deno.json file and not the root workspace file.")]
-  MemberOnlyOption(&'static str),
-  #[error("The \"workspaces\" field was ignored. Use \"workspace\" instead.")]
-  InvalidWorkspacesOption,
   #[error(
-    "The \"exports\" field should be specified when specifying a \"name\"."
+    "\"{0}\" field can only be specified in the workspace root deno.json file."
   )]
+  RootOnlyOption(&'static str),
+  #[error("\"{0}\" field can only be specified in a workspace member deno.json file and not the workspace root file.")]
+  MemberOnlyOption(&'static str),
+  #[error("\"workspaces\" field was ignored. Use \"workspace\" instead.")]
+  InvalidWorkspacesOption,
+  #[error("\"exports\" field should be specified when specifying a \"name\".")]
   MissingExports,
+  #[error("\"importMap\" field is ignored when \"imports\" or \"scopes\" are specified in the config file.")]
+  ImportMapReferencingImportMap,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -525,6 +527,12 @@ impl Workspace {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::MissingExports,
+        });
+      }
+      if config.is_an_import_map() && config.json.import_map.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::ImportMapReferencingImportMap,
         });
       }
     }
@@ -2225,6 +2233,31 @@ mod test {
           }
         }
       })
+    );
+  }
+
+  #[test]
+  fn test_imports_with_import_map() {
+    let workspace = workspace_for_root_and_member_with_fs(
+      json!({
+        "imports": {},
+        "importMap": "./other.json",
+      }),
+      json!({}),
+      |fs| {
+        fs.insert_json(root_dir().join("other.json"), json!({}));
+      },
+    );
+    assert_eq!(
+      workspace.to_import_map_specifier().unwrap().unwrap(),
+      Url::from_file_path(root_dir().join("other.json")).unwrap()
+    );
+    assert_eq!(
+      workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::ImportMapReferencingImportMap,
+        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }]
     );
   }
 
