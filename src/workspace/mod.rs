@@ -3429,7 +3429,7 @@ mod test {
   }
 
   #[test]
-  fn test_npm_workspace_consider_start_deno_json_root_config() {
+  fn test_npm_workspace_start_deno_json_not_in_workspace() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("package.json"),
@@ -3444,11 +3444,62 @@ mod test {
       }),
     );
     fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    // only resolves the member because it's not part of the workspace
     let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
     assert_eq!(workspace.diagnostics(), Vec::new());
     assert_eq!(workspace.deno_jsons().count(), 1);
+    assert_eq!(
+      workspace.root_dir.to_file_path().unwrap(),
+      root_dir().join("member")
+    );
+    assert_eq!(workspace.package_jsons().count(), 0);
+    assert!(workspace.has_unstable("byonm"));
+  }
+
+  #[test]
+  fn test_npm_workspace_start_deno_json_part_of_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "unstable": ["byonm"],
+      }),
+    );
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.deno_jsons().count(), 1);
+    assert_eq!(workspace.root_dir.to_file_path().unwrap(), root_dir());
     assert_eq!(workspace.package_jsons().count(), 2);
     assert!(workspace.has_unstable("byonm"));
+  }
+
+  #[test]
+  fn test_npm_workspace_start_package_json_not_in_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./package"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    // only resolves the member because it's not part of the workspace
+    let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace.deno_jsons().count(), 0);
+    assert_eq!(
+      workspace.root_dir.to_file_path().unwrap(),
+      root_dir().join("member")
+    );
+    assert_eq!(workspace.package_jsons().count(), 1);
   }
 
   #[test]

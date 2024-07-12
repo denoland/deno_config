@@ -512,6 +512,25 @@ fn discover_workspace_config_files_for_single_dir(
         .deno_json()
         .map(|d| d.json.workspace.is_some())
         .unwrap_or(false);
+
+      // if the root was an npm workspace that doesn't have the start config
+      // as a member then only resolve the start config
+      if !is_root_deno_json_workspace {
+        if let Some(first_config_folder) = &first_config_folder_url {
+          if let Some(config_folder) =
+            found_config_folders.remove(first_config_folder)
+          {
+            return Ok(ConfigFileDiscovery::Single {
+              maybe_vendor_dir: resolve_vendor_dir(
+                Some(&config_folder),
+                opts.maybe_vendor_override.as_ref(),
+              ),
+              config_folder,
+            });
+          }
+        }
+      }
+
       for (url, config_folder) in found_config_folders {
         if is_root_deno_json_workspace {
           return Err(
