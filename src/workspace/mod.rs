@@ -43,7 +43,6 @@ use crate::JsxImportSourceConfig;
 use crate::LintConfig;
 use crate::LintOptionsConfig;
 use crate::LintRulesConfig;
-use crate::LockConfig;
 use crate::PublishConfig;
 use crate::SpecifierToFilePathError;
 use crate::Task;
@@ -538,14 +537,10 @@ impl Workspace {
     }
 
     let mut diagnostics = Vec::new();
-    let root_deno_json = self.root_folder().1.deno_json.as_ref();
-    let is_deno_workspace = root_deno_json
-      .map(|d| d.json.workspace.is_some())
-      .unwrap_or(false);
     for (url, folder) in &self.config_folders {
       if let Some(config) = &folder.deno_json {
         let is_root = url == &self.root_dir;
-        if is_deno_workspace && !is_root {
+        if !is_root {
           check_member_diagnostics(config, &mut diagnostics);
         }
 
@@ -770,17 +765,11 @@ impl Workspace {
   }
 
   pub fn root_deno_json(&self) -> Option<&ConfigFileRc> {
-    // uses the deno.json in the root folder if it exists, or falls back to the start dir
-    self
-      .config_folders
-      .get(&self.root_dir)
-      .and_then(|c| c.deno_json.as_ref())
-      .or_else(|| {
-        self
-          .config_folders
-          .get(&self.start_dir)
-          .and_then(|c| c.deno_json.as_ref())
-      })
+    self.root_folder().1.deno_json.as_ref()
+  }
+
+  pub fn root_pkg_json(&self) -> Option<&PackageJsonRc> {
+    self.root_folder().1.pkg_json.as_ref()
   }
 
   pub fn config_folders(&self) -> &IndexMap<UrlRc, FolderConfigs> {
@@ -883,10 +872,14 @@ impl Workspace {
       .unwrap_or(Ok(None))
   }
 
-  pub fn to_lock_config(&self) -> Result<Option<LockConfig>, AnyError> {
-    self
-      .with_root_config_only(|root_config| root_config.to_lock_config())
-      .unwrap_or(Ok(None))
+  pub fn resolve_lockfile_path(&self) -> Result<Option<PathBuf>, AnyError> {
+    if let Some(deno_json) = self.root_deno_json() {
+      Ok(deno_json.resolve_lockfile_path()?)
+    } else if let Some(pkg_json) = self.root_pkg_json() {
+      Ok(pkg_json.path.parent().map(|p| p.join("deno.lock")))
+    } else {
+      Ok(None)
+    }
   }
 
   pub fn to_compiler_option_types(
@@ -1071,7 +1064,7 @@ impl Workspace {
 
   pub fn resolve_config_excludes(&self) -> Result<PathOrPatternSet, AnyError> {
     // have the root excludes at the front because they're lower priority
-    let mut excludes = match &self.root_folder().1.deno_json {
+    let mut excludes = match &self.root_deno_json() {
       Some(c) => c.to_exclude_files_config()?.exclude.into_path_or_patterns(),
       None => Default::default(),
     };
@@ -2723,10 +2716,7 @@ mod test {
     assert_eq!(workspace.unstable_features(), &["byonm".to_string()]);
     assert!(workspace.has_unstable("byonm"));
     assert!(!workspace.has_unstable("sloppy-imports"));
-    assert_eq!(
-      workspace.to_lock_config().unwrap().unwrap(),
-      LockConfig::Bool(false),
-    );
+    assert_eq!(workspace.resolve_lockfile_path().unwrap(), None);
     assert_eq!(workspace.node_modules_dir(), Some(false));
     assert_eq!(
       workspace.vendor_dir_path().unwrap(),
@@ -3468,16 +3458,101 @@ mod test {
     fs.insert_json(
       root_dir().join("member/deno.json"),
       json!({
+        "lock": false,
         "unstable": ["byonm"],
       }),
     );
     fs.insert_json(root_dir().join("member/package.json"), json!({}));
     let workspace = workspace_at_start_dir(&fs, &root_dir().join("member"));
-    assert_eq!(workspace.diagnostics(), Vec::new());
+    assert_eq!(
+      workspace
+        .diagnostics()
+        .into_iter()
+        .map(|d| d.kind)
+        .collect::<Vec<_>>(),
+      vec![
+        WorkspaceDiagnosticKind::RootOnlyOption("lock"),
+        WorkspaceDiagnosticKind::RootOnlyOption("unstable")
+      ]
+    );
     assert_eq!(workspace.deno_jsons().count(), 1);
     assert_eq!(workspace.root_dir.to_file_path().unwrap(), root_dir());
     assert_eq!(workspace.package_jsons().count(), 2);
-    assert!(workspace.has_unstable("byonm"));
+    assert!(!workspace.has_unstable("byonm"));
+    assert_eq!(
+      workspace.resolve_lockfile_path().unwrap(),
+      Some(root_dir().join("deno.lock"))
+    );
+  }
+
+  #[test]
+  fn test_npm_workspace_start_deno_json_part_of_workspace_sub_folder() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "unstable": ["byonm"],
+      }),
+    );
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    fs.insert("member/sub/sub_folder/sub/file.ts", "");
+    let workspace = workspace_at_start_dir(
+      &fs,
+      // note how we're starting in a sub folder of the member
+      &root_dir().join("member/sub/sub_folder/sub/"),
+    );
+    assert_eq!(
+      workspace
+        .diagnostics()
+        .into_iter()
+        .map(|d| d.kind)
+        .collect::<Vec<_>>(),
+      vec![WorkspaceDiagnosticKind::RootOnlyOption("unstable")]
+    );
+    assert_eq!(workspace.deno_jsons().count(), 1);
+    assert_eq!(workspace.root_dir.to_file_path().unwrap(), root_dir());
+    assert_eq!(workspace.package_jsons().count(), 2);
+    assert!(!workspace.has_unstable("byonm"));
+  }
+
+  #[test]
+  fn test_npm_workspace_start_deno_json_part_of_workspace_sub_folder_other_deno_json(
+  ) {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member", "./member/sub"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("member/deno.json"),
+      json!({ "unstable": ["sloppy-imports"] }),
+    );
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    fs.insert_json(
+      root_dir().join("member/sub/deno.json"),
+      json!({ "unstable": ["byonm"] }),
+    );
+    fs.insert_json(root_dir().join("member/sub/package.json"), json!({}));
+    fs.insert("member/sub/sub_folder/sub/file.ts", "");
+    let workspace = workspace_at_start_dir(
+      &fs,
+      // note how we're starting in a sub folder of the member
+      &root_dir().join("member/sub/sub_folder/sub/"),
+    );
+    assert_eq!(workspace.diagnostics().len(), 2); // for each unstable
+    assert_eq!(workspace.deno_jsons().count(), 2);
+    assert_eq!(workspace.root_dir.to_file_path().unwrap(), root_dir());
+    assert_eq!(workspace.package_jsons().count(), 3);
+    assert!(!workspace.has_unstable("sloppy-imports"));
+    assert!(!workspace.has_unstable("byonm"));
   }
 
   #[test]

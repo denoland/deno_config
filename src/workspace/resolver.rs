@@ -171,7 +171,7 @@ impl WorkspaceResolver {
       fetch_text: impl Fn(&Url) -> TReturn,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
-      let root_folder = workspace.root_folder().1;
+      let root_deno_json = workspace.root_deno_json();
       let deno_jsons = workspace
         .config_folders()
         .iter()
@@ -195,8 +195,7 @@ impl WorkspaceResolver {
             return Ok(None);
           }
 
-          let config_specified_import_map = match root_folder.deno_json.as_ref()
-          {
+          let config_specified_import_map = match root_deno_json.as_ref() {
             Some(deno_json) => deno_json
               .to_import_map_value(fetch_text)
               .await
@@ -223,7 +222,7 @@ impl WorkspaceResolver {
             .iter()
             .filter(|f| {
               Some(&f.specifier)
-                != root_folder.deno_json.as_ref().map(|c| &c.specifier)
+                != root_deno_json.as_ref().map(|c| &c.specifier)
             })
             .map(|config| import_map::ext::ImportMapConfig {
               base_url: config.specifier.clone(),
