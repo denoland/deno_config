@@ -2718,6 +2718,7 @@ mod test {
     assert!(!workspace.has_unstable("sloppy-imports"));
     assert_eq!(workspace.resolve_lockfile_path().unwrap(), None);
     assert_eq!(workspace.node_modules_dir(), Some(false));
+    assert_eq!(workspace.resolve_lockfile_path().unwrap(), None);
     assert_eq!(
       workspace.vendor_dir_path().unwrap(),
       &root_dir().join("vendor")
@@ -3444,6 +3445,10 @@ mod test {
     );
     assert_eq!(workspace.package_jsons().count(), 0);
     assert!(workspace.has_unstable("byonm"));
+    assert_eq!(
+      workspace.resolve_lockfile_path().unwrap(),
+      Some(root_dir().join("member/deno.lock"))
+    );
   }
 
   #[test]
@@ -4258,6 +4263,20 @@ mod test {
       .unwrap();
     // should only have member-a/sub-dir/file.ts and not member-a/file.ts
     assert_eq!(files, vec![root_dir().join("member-a/sub-dir/file.ts")]);
+  }
+
+  #[test]
+  fn test_lock_path() {
+    let workspace = workspace_for_root_and_member(
+      json!({
+        "lock": "other.lock",
+      }),
+      json!({}),
+    );
+    assert_eq!(
+      workspace.resolve_lockfile_path().unwrap(),
+      Some(root_dir().join("other.lock"))
+    );
   }
 
   fn workspace_for_root_and_member(
