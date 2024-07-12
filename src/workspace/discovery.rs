@@ -531,8 +531,10 @@ fn discover_workspace_config_files_for_single_dir(
         }
       }
 
-      for (url, config_folder) in found_config_folders {
-        if is_root_deno_json_workspace {
+      if is_root_deno_json_workspace {
+        if let Some((_, config_folder)) =
+          found_config_folders.into_iter().next()
+        {
           return Err(
             WorkspaceDiscoverErrorKind::ConfigNotWorkspaceMember {
               workspace_url: root_config_folder.folder_url(),
@@ -541,10 +543,6 @@ fn discover_workspace_config_files_for_single_dir(
             }
             .into(),
           );
-        } else {
-          // otherwise, be lenient and just add it to the workspace
-          let url = new_rc(url);
-          final_members.insert(url, config_folder);
         }
       }
 
