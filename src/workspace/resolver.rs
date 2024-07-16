@@ -391,20 +391,16 @@ impl WorkspaceResolver {
     &self,
     pkg_req: &PackageReq,
   ) -> Option<&Path> {
-    let result = self
+    if pkg_req.version_req.tag().is_some() {
+      return None;
+    }
+
+    self
       .resolve_workspace_pkg_json_folder_for_pkg_json_dep(
         &pkg_req.name,
         &pkg_req.version_req,
       )
-      .ok()?;
-
-    if let Some(tag) = pkg_req.version_req.tag() {
-      if tag != "workspace" {
-        return None;
-      }
-    }
-
-    Some(result)
+      .ok()
   }
 
   pub fn resolve_workspace_pkg_json_folder_for_pkg_json_dep(
@@ -690,8 +686,8 @@ mod test {
         root_dir().join("no-version")
       );
 
-      assert_eq!(resolve("@scope/a@workspace").unwrap(), root_dir().join("a"));
-      // difference is here, it won't match for a non-workspace tag for an npm specifier
+      // won't match for tags
+      assert_eq!(resolve("@scope/a@workspace"), None);
       assert_eq!(resolve("@scope/a@latest"), None);
     }
   }
