@@ -156,6 +156,7 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
 
 #[derive(Debug)]
 pub struct WorkspaceResolver {
+  workspace_root: UrlRc,
   maybe_import_map: Option<ImportMapWithDiagnostics>,
   pkg_jsons: BTreeMap<UrlRc, PkgJsonResolverFolderConfig>,
   pkg_json_dep_resolution: PackageJsonDepResolution,
@@ -281,6 +282,7 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
     Ok(Self {
+      workspace_root: workspace.root_dir.clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       maybe_import_map,
       pkg_jsons,
@@ -291,6 +293,7 @@ impl WorkspaceResolver {
   ///
   /// Generally, create this from a Workspace instead.
   pub fn new_raw(
+    workspace_root: UrlRc,
     maybe_import_map: Option<ImportMap>,
     pkg_jsons: Vec<PackageJsonRc>,
     pkg_json_dep_resolution: PackageJsonDepResolution,
@@ -313,6 +316,7 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
     Self {
+      workspace_root,
       maybe_import_map,
       pkg_jsons,
       pkg_json_dep_resolution,
@@ -388,25 +392,27 @@ impl WorkspaceResolver {
         }
       }
 
-      // 3. Finally try to resolve to a workspace npm package.
-      for pkg_json_folder in self.pkg_jsons.values() {
-        let Some(name) = &pkg_json_folder.pkg_json.name else {
-          continue;
-        };
-        let Some(path) = specifier.strip_prefix(name) else {
-          continue;
-        };
-        if path.is_empty() || path.starts_with('/') {
-          let sub_path = path.strip_prefix('/').unwrap_or(path);
-          return Ok(MappedResolution::WorkspaceNpmPackage {
-            target_pkg_json: &pkg_json_folder.pkg_json,
-            pkg_name: name,
-            sub_path: if sub_path.is_empty() {
-              None
-            } else {
-              Some(sub_path.to_string())
-            },
-          });
+      // 3. Finally try to resolve to a workspace npm package if inside the workspace.
+      if referrer.as_str().starts_with(self.workspace_root.as_str()) {
+        for pkg_json_folder in self.pkg_jsons.values() {
+          let Some(name) = &pkg_json_folder.pkg_json.name else {
+            continue;
+          };
+          let Some(path) = specifier.strip_prefix(name) else {
+            continue;
+          };
+          if path.is_empty() || path.starts_with('/') {
+            let sub_path = path.strip_prefix('/').unwrap_or(path);
+            return Ok(MappedResolution::WorkspaceNpmPackage {
+              target_pkg_json: &pkg_json_folder.pkg_json,
+              pkg_name: name,
+              sub_path: if sub_path.is_empty() {
+                None
+              } else {
+                Some(sub_path.to_string())
+              },
+            });
+          }
         }
       }
     }
@@ -587,7 +593,10 @@ mod test {
     let resolve = |name: &str, referrer: &str| {
       resolver.resolve(
         name,
-        &Url::from_file_path(root_dir().join(referrer)).unwrap(),
+        &Url::from_file_path(crate::util::normalize_path(
+          root_dir().join(referrer),
+        ))
+        .unwrap(),
       )
     };
     match resolve("pkg", "b/index.js").unwrap() {
@@ -643,6 +652,9 @@ mod test {
       }
       _ => unreachable!(),
     }
+
+    // won't resolve the package outside the workspace
+    assert!(resolve("pkg", "../outside-workspace.js").is_err());
   }
 
   #[tokio::test]
