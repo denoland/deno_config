@@ -82,6 +82,12 @@ pub struct SpecifiedImportMap {
 pub enum MappedResolution<'a> {
   Normal(Url),
   ImportMap(Url),
+  /// Resolved a bare specifier to a package.json that was a workspace member.
+  WorkspaceNpmPackage {
+    target_pkg_json: &'a PackageJsonRc,
+    pkg_name: &'a str,
+    sub_path: Option<String>,
+  },
   PackageJson {
     pkg_json: &'a PackageJsonRc,
     alias: &'a str,
@@ -150,6 +156,7 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
 
 #[derive(Debug)]
 pub struct WorkspaceResolver {
+  workspace_root: UrlRc,
   maybe_import_map: Option<ImportMapWithDiagnostics>,
   pkg_jsons: BTreeMap<UrlRc, PkgJsonResolverFolderConfig>,
   pkg_json_dep_resolution: PackageJsonDepResolution,
@@ -275,6 +282,7 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
     Ok(Self {
+      workspace_root: workspace.root_dir.clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       maybe_import_map,
       pkg_jsons,
@@ -285,6 +293,7 @@ impl WorkspaceResolver {
   ///
   /// Generally, create this from a Workspace instead.
   pub fn new_raw(
+    workspace_root: UrlRc,
     maybe_import_map: Option<ImportMap>,
     pkg_jsons: Vec<PackageJsonRc>,
     pkg_json_dep_resolution: PackageJsonDepResolution,
@@ -307,6 +316,7 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
     Self {
+      workspace_root,
       maybe_import_map,
       pkg_jsons,
       pkg_json_dep_resolution,
@@ -334,7 +344,7 @@ impl WorkspaceResolver {
     specifier: &str,
     referrer: &Url,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
-    // attempt to resolve with the import map and normally first
+    // 1. Attempt to resolve with the import map and normally first
     let resolve_error = match &self.maybe_import_map {
       Some(import_map) => {
         match import_map.import_map.resolve(specifier, referrer) {
@@ -350,8 +360,8 @@ impl WorkspaceResolver {
       }
     };
 
-    // then using the package.json
     if self.pkg_json_dep_resolution == PackageJsonDepResolution::Enabled {
+      // 2. Attempt to resolve from the package.json dependencies.
       let mut previously_found_dir = false;
       for (dir_url, pkg_json_folder) in self.pkg_jsons.iter().rev() {
         if !referrer.as_str().starts_with(dir_url.as_str()) {
@@ -378,6 +388,30 @@ impl WorkspaceResolver {
                 dep_result,
               });
             }
+          }
+        }
+      }
+
+      // 3. Finally try to resolve to a workspace npm package if inside the workspace.
+      if referrer.as_str().starts_with(self.workspace_root.as_str()) {
+        for pkg_json_folder in self.pkg_jsons.values() {
+          let Some(name) = &pkg_json_folder.pkg_json.name else {
+            continue;
+          };
+          let Some(path) = specifier.strip_prefix(name) else {
+            continue;
+          };
+          if path.is_empty() || path.starts_with('/') {
+            let sub_path = path.strip_prefix('/').unwrap_or(path);
+            return Ok(MappedResolution::WorkspaceNpmPackage {
+              target_pkg_json: &pkg_json_folder.pkg_json,
+              pkg_name: name,
+              sub_path: if sub_path.is_empty() {
+                None
+              } else {
+                Some(sub_path.to_string())
+              },
+            });
           }
         }
       }
@@ -526,6 +560,7 @@ mod test {
         "workspace": [
           "a",
           "b",
+          "c",
         ]
       }),
     );
@@ -545,13 +580,23 @@ mod test {
         },
       }),
     );
+    fs.insert_json(
+      root_dir().join("c/package.json"),
+      json!({
+        "name": "pkg",
+        "version": "0.5.0"
+      }),
+    );
     let workspace = workspace_at_start_dir(&fs, &root_dir());
     let resolver = create_resolver(&workspace).await;
     assert!(resolver.diagnostics().is_empty());
     let resolve = |name: &str, referrer: &str| {
       resolver.resolve(
         name,
-        &Url::from_file_path(root_dir().join(referrer)).unwrap(),
+        &Url::from_file_path(crate::util::normalize_path(
+          root_dir().join(referrer),
+        ))
+        .unwrap(),
       )
     };
     match resolve("pkg", "b/index.js").unwrap() {
@@ -565,8 +610,51 @@ mod test {
         assert_eq!(sub_path, None);
         dep_result.as_ref().unwrap();
       }
+      value => unreachable!("{:?}", value),
+    }
+    match resolve("pkg/sub-path", "b/index.js").unwrap() {
+      MappedResolution::PackageJson {
+        alias,
+        sub_path,
+        dep_result,
+        ..
+      } => {
+        assert_eq!(alias, "pkg");
+        assert_eq!(sub_path.unwrap(), "sub-path");
+        dep_result.as_ref().unwrap();
+      }
+      value => unreachable!("{:?}", value),
+    }
+
+    // pkg is not a dependency in this folder, so it should resolve
+    // to the workspace member
+    match resolve("pkg", "index.js").unwrap() {
+      MappedResolution::WorkspaceNpmPackage {
+        pkg_name,
+        sub_path,
+        target_pkg_json,
+      } => {
+        assert_eq!(pkg_name, "pkg");
+        assert_eq!(sub_path, None);
+        assert_eq!(target_pkg_json.dir_path(), root_dir().join("c"));
+      }
       _ => unreachable!(),
     }
+    match resolve("pkg/sub-path", "index.js").unwrap() {
+      MappedResolution::WorkspaceNpmPackage {
+        pkg_name,
+        sub_path,
+        target_pkg_json,
+      } => {
+        assert_eq!(pkg_name, "pkg");
+        assert_eq!(sub_path.unwrap(), "sub-path");
+        assert_eq!(target_pkg_json.dir_path(), root_dir().join("c"));
+      }
+      _ => unreachable!(),
+    }
+
+    // won't resolve the package outside the workspace
+    assert!(resolve("pkg", "../outside-workspace.js").is_err());
   }
 
   #[tokio::test]
