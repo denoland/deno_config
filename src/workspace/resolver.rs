@@ -340,7 +340,7 @@ impl WorkspaceResolver {
     specifier: &str,
     referrer: &Url,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
-    // attempt to resolve with the import map and normally first
+    // 1. Attempt to resolve with the import map and normally first
     let resolve_error = match &self.maybe_import_map {
       Some(import_map) => {
         match import_map.import_map.resolve(specifier, referrer) {
@@ -356,8 +356,8 @@ impl WorkspaceResolver {
       }
     };
 
-    // then using the package.json
     if self.pkg_json_dep_resolution == PackageJsonDepResolution::Enabled {
+      // 2. Attempt to resolve from the package.json dependencies.
       let mut previously_found_dir = false;
       for (dir_url, pkg_json_folder) in self.pkg_jsons.iter().rev() {
         if !referrer.as_str().starts_with(dir_url.as_str()) {
@@ -388,7 +388,7 @@ impl WorkspaceResolver {
         }
       }
 
-      // try to resolve to a workspace npm package
+      // 3. Finally try to resolve to a workspace npm package.
       for pkg_json_folder in self.pkg_jsons.values() {
         let Some(name) = &pkg_json_folder.pkg_json.name else {
           continue;
