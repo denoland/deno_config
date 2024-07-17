@@ -164,14 +164,14 @@ impl WorkspaceResolver {
   >(
     workspace: &Workspace,
     options: CreateResolverOptions,
-    fetch_text: impl Fn(&Url) -> TReturn,
+    fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     async fn resolve_import_map<
       TReturn: Future<Output = Result<String, AnyError>>,
     >(
       workspace: &Workspace,
       specified_import_map: Option<SpecifiedImportMap>,
-      fetch_text: impl Fn(&Url) -> TReturn,
+      fetch_text: impl FnOnce(&Url) -> TReturn,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
       let root_deno_json = workspace.root_deno_json();

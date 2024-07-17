@@ -865,7 +865,7 @@ impl ConfigFile {
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
     &self,
-    fetch_text: impl Fn(&Url) -> TReturn,
+    fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Option<ImportMapWithDiagnostics>, AnyError> {
     let maybe_result = self.to_import_map_value(fetch_text).await?;
     match maybe_result {
@@ -884,7 +884,7 @@ impl ConfigFile {
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
     &self,
-    fetch_text: impl Fn(&Url) -> TReturn,
+    fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Option<(Cow<Url>, serde_json::Value)>, AnyError> {
     // has higher precedence over the path
     if self.json.imports.is_some() || self.json.scopes.is_some() {
