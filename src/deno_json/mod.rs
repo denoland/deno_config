@@ -626,6 +626,11 @@ fn decorate_tasks_json(
   Value::Object(new_tasks)
 }
 
+pub trait DenoJsonCache {
+  fn get(&self, path: &Path) -> Option<ConfigFileRc>;
+  fn set(&self, path: PathBuf, deno_json: ConfigFileRc);
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ConfigParseOptions {
   pub include_task_comments: bool,
@@ -659,37 +664,13 @@ impl ConfigFile {
     }
   }
 
-  pub fn discover_from(
-    fs: &dyn DenoConfigFs,
-    start: &Path,
-    additional_config_file_names: &[&str],
-    parse_options: &ConfigParseOptions,
-  ) -> Result<Option<ConfigFile>, ConfigFileReadError> {
-    let config_file_names =
-      Self::resolve_config_file_names(additional_config_file_names);
-
-    debug_assert!(start.is_absolute());
-    for ancestor in start.ancestors() {
-      let maybe_config_file = Self::maybe_find_in_folder(
-        fs,
-        ancestor,
-        &config_file_names,
-        parse_options,
-      )?;
-      if let Some(config_file) = maybe_config_file {
-        return Ok(Some(config_file));
-      }
-    }
-    // No config file found.
-    Ok(None)
-  }
-
   pub(crate) fn maybe_find_in_folder(
     fs: &dyn DenoConfigFs,
+    maybe_cache: Option<&dyn DenoJsonCache>,
     folder: &Path,
     config_file_names: &[&str],
     parse_options: &ConfigParseOptions,
-  ) -> Result<Option<Self>, ConfigFileReadError> {
+  ) -> Result<Option<ConfigFileRc>, ConfigFileReadError> {
     fn is_skippable_err(e: &ConfigFileReadError) -> bool {
       if let ConfigFileReadError::FailedReading { source: ioerr, .. } = e {
         is_skippable_io_error(ioerr)
@@ -700,9 +681,16 @@ impl ConfigFile {
 
     for config_filename in config_file_names {
       let file_path = folder.join(config_filename);
+      if let Some(item) = maybe_cache.and_then(|c| c.get(&file_path)) {
+        return Ok(Some(item));
+      }
       match ConfigFile::read(fs, &file_path, parse_options) {
         Ok(cf) => {
+          let cf = crate::sync::new_rc(cf);
           log::debug!("Config file found at '{}'", file_path.display());
+          if let Some(cache) = maybe_cache {
+            cache.set(file_path, cf.clone());
+          }
           return Ok(Some(cf));
         }
         Err(e) if is_skippable_err(&e) => {
@@ -2219,60 +2207,6 @@ Caused by:
       &ConfigParseOptions::default()
     )
     .is_ok());
-  }
-
-  #[test]
-  fn discover_from_success() {
-    // testdata/fmt/deno.jsonc exists
-    let testdata = testdata_path();
-    let c_md = testdata.join("fmt/with_config/subdir/c.md");
-    let config_file = ConfigFile::discover_from(
-      &RealDenoConfigFs,
-      &c_md,
-      &[],
-      &ConfigParseOptions::default(),
-    )
-    .unwrap()
-    .unwrap();
-    let fmt_config = config_file.to_fmt_config().unwrap();
-    let expected_exclude =
-      Url::from_file_path(testdata.join("fmt/with_config/subdir/b.ts"))
-        .unwrap()
-        .to_file_path()
-        .unwrap();
-    assert_eq!(
-      fmt_config.files.exclude,
-      PathOrPatternSet::new(vec![PathOrPattern::Path(expected_exclude)])
-    );
-  }
-
-  #[test]
-  fn discover_from_additional_config_file_names_success() {
-    let testdata = testdata_path();
-    let dir = testdata.join("additional_files/");
-    let config_file = ConfigFile::discover_from(
-      &RealDenoConfigFs,
-      &dir,
-      &["jsr.json"],
-      &ConfigParseOptions::default(),
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(config_file.json.name.unwrap(), "@foo/bar");
-  }
-
-  #[test]
-  fn discover_from_malformed() {
-    let testdata = testdata_path();
-    let d = testdata.join("malformed_config/");
-    let err = ConfigFile::discover_from(
-      &RealDenoConfigFs,
-      d.as_path(),
-      &[],
-      &ConfigParseOptions::default(),
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("Unable to parse config file"));
   }
 
   #[test]
