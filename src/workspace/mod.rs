@@ -447,7 +447,7 @@ impl Workspace {
   >(
     &self,
     options: CreateResolverOptions,
-    fetch_text: impl Fn(&Url) -> TReturn,
+    fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
     WorkspaceResolver::from_workspace(self, options, fetch_text).await
   }
