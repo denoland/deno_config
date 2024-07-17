@@ -191,7 +191,7 @@ pub struct LintConfig {
 
 impl LintConfig {
   pub fn default_with_base(base: PathBuf) -> Self {
-    // note: don't create default implementations of these
+    // note: don't create Default implementations of these
     // config structs because the base of FilePatterns matters
     Self {
       options: Default::default(),
