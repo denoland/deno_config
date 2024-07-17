@@ -189,6 +189,17 @@ pub struct LintConfig {
   pub files: FilePatterns,
 }
 
+impl LintConfig {
+  pub fn default_with_base(base: PathBuf) -> Self {
+    // note: don't create Default implementations of these
+    // config structs because the base of FilePatterns matters
+    Self {
+      options: Default::default(),
+      files: FilePatterns::new_with_base(base),
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum ProseWrap {
@@ -309,6 +320,15 @@ pub struct FmtConfig {
   pub files: FilePatterns,
 }
 
+impl FmtConfig {
+  pub fn default_with_base(base: PathBuf) -> Self {
+    Self {
+      options: Default::default(),
+      files: FilePatterns::new_with_base(base),
+    }
+  }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportsConfig {
   base: Url,
@@ -367,6 +387,14 @@ pub struct TestConfig {
   pub files: FilePatterns,
 }
 
+impl TestConfig {
+  pub fn default_with_base(base: PathBuf) -> Self {
+    Self {
+      files: FilePatterns::new_with_base(base),
+    }
+  }
+}
+
 /// `publish` config representation for serde
 ///
 /// fields `include` and `exclude` are expanded from [SerializedFilesConfig].
@@ -394,6 +422,14 @@ impl SerializedPublishConfig {
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct PublishConfig {
   pub files: FilePatterns,
+}
+
+impl PublishConfig {
+  pub fn default_with_base(base: PathBuf) -> Self {
+    Self {
+      files: FilePatterns::new_with_base(base),
+    }
+  }
 }
 
 /// `bench` config representation for serde
@@ -426,6 +462,14 @@ impl SerializedBenchConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BenchConfig {
   pub files: FilePatterns,
+}
+
+impl BenchConfig {
+  pub fn default_with_base(base: PathBuf) -> Self {
+    Self {
+      files: FilePatterns::new_with_base(base),
+    }
+  }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
