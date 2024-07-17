@@ -46,10 +46,6 @@ pub enum WorkspaceResolverCreateError {
   },
   #[error(transparent)]
   ImportMap(#[from] import_map::ImportMapError),
-  #[error(
-    "Specifying an import map in a workspace via CLI flags is not implemented."
-  )]
-  WorkspaceSpecifiedImportMapNotImplemented,
 }
 
 /// Whether to resolve dependencies by reading the dependencies list
