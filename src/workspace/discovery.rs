@@ -273,13 +273,14 @@ fn discover_workspace_config_files_for_single_dir(
     |folder_path: &Path| -> Result<_, ResolveWorkspaceMemberError> {
       let maybe_config_file = ConfigFile::maybe_find_in_folder(
         opts.fs,
+        opts.deno_json_cache,
         folder_path,
         &config_file_names,
         &opts.config_parse_options,
       )?;
       let maybe_pkg_json = load_pkg_json_in_folder(folder_path)?;
       Ok(ConfigFolder::from_maybe_both(
-        maybe_config_file.map(new_rc),
+        maybe_config_file,
         maybe_pkg_json,
       ))
     };

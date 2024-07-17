@@ -246,6 +246,9 @@ pub enum VendorEnablement<'a> {
 #[derive(Default, Clone)]
 pub struct WorkspaceDiscoverOptions<'a> {
   pub fs: &'a dyn crate::fs::DenoConfigFs,
+  /// A cache for deno.json files. This is mostly only useful in the LSP where
+  /// workspace discovery may occur multiple times.
+  pub deno_json_cache: Option<&'a dyn crate::deno_json::DenoJsonCache>,
   pub pkg_json_cache: Option<&'a dyn crate::package_json::PackageJsonCache>,
   pub config_parse_options: ConfigParseOptions,
   pub additional_config_file_names: &'a [&'a str],
@@ -1764,6 +1767,9 @@ fn parent_specifier_str(specifier: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod test {
+  use std::cell::RefCell;
+  use std::collections::HashMap;
+
   use pretty_assertions::assert_eq;
   use serde_json::json;
 
@@ -1774,6 +1780,7 @@ mod test {
   use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
   use crate::util::normalize_path;
+  use crate::DenoJsonCache;
   use crate::TsConfig;
 
   use super::*;
@@ -4326,6 +4333,59 @@ mod test {
       workspace.resolve_lockfile_path().unwrap(),
       Some(root_dir().join("other.lock"))
     );
+  }
+
+  #[test]
+  fn workspace_discovery_deno_json_cache() {
+    #[derive(Default)]
+    struct Cache(RefCell<HashMap<PathBuf, ConfigFileRc>>);
+
+    impl DenoJsonCache for Cache {
+      fn get(&self, path: &Path) -> Option<ConfigFileRc> {
+        self.0.borrow().get(path).cloned()
+      }
+
+      fn set(&self, path: PathBuf, deno_json: ConfigFileRc) {
+        self.0.borrow_mut().insert(path, deno_json);
+      }
+    }
+
+    let mut fs = TestFileSystem::default();
+    fs.insert(root_dir().join("deno.json"), "{ \"nodeModulesDir\": true }");
+    let cache = Cache::default();
+    let workspace = Workspace::discover(
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        deno_json_cache: Some(&cache),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(cache.0.borrow().len(), 1); // writes to the cache
+    assert_eq!(workspace.node_modules_dir(), Some(true));
+    let new_config_file = ConfigFile::new(
+      r#"{ "nodeModulesDir": false }"#,
+      Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      &Default::default(),
+    )
+    .unwrap();
+    cache
+      .0
+      .borrow_mut()
+      .insert(root_dir().join("deno.json"), new_rc(new_config_file));
+    let workspace = Workspace::discover(
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        deno_json_cache: Some(&cache),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(workspace.node_modules_dir(), Some(false)); // reads from the cache
   }
 
   fn workspace_for_root_and_member(
