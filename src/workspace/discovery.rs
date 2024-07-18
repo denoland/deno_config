@@ -23,14 +23,15 @@ use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_parent;
+use crate::workspace::Workspace;
 
 use super::ResolveWorkspaceMemberError;
-use super::UrlRc;
 use super::VendorEnablement;
 use super::WorkspaceDiscoverError;
 use super::WorkspaceDiscoverErrorKind;
 use super::WorkspaceDiscoverOptions;
 use super::WorkspaceDiscoverStart;
+use super::WorkspaceRc;
 
 #[derive(Debug)]
 pub enum DenoOrPkgJson {
@@ -69,7 +70,7 @@ impl ConfigFolder {
     }
   }
 
-  pub fn is_workspace(&self) -> bool {
+  pub fn has_workspace_members(&self) -> bool {
     match self {
       Self::Single(DenoOrPkgJson::Deno(config)) => {
         config.json.workspace.is_some()
@@ -125,13 +126,8 @@ pub enum ConfigFileDiscovery {
   None {
     maybe_vendor_dir: Option<PathBuf>,
   },
-  Single {
-    config_folder: ConfigFolder,
-    maybe_vendor_dir: Option<PathBuf>,
-  },
   Workspace {
-    root: ConfigFolder,
-    members: BTreeMap<UrlRc, ConfigFolder>,
+    workspace: WorkspaceRc,
     maybe_vendor_dir: Option<PathBuf>,
   },
 }
@@ -140,11 +136,15 @@ impl ConfigFileDiscovery {
   fn root_config_specifier(&self) -> Option<Cow<Url>> {
     match self {
       Self::None { .. } => None,
-      Self::Single { config_folder, .. } => {
-        Some(config_folder_config_specifier(config_folder))
-      }
-      Self::Workspace { root, .. } => {
-        Some(config_folder_config_specifier(root))
+      Self::Workspace { workspace, .. } => {
+        let root_folder_configs = workspace.root_folder_configs();
+        if let Some(deno_json) = &root_folder_configs.deno_json {
+          return Some(Cow::Borrowed(&deno_json.specifier));
+        }
+        if let Some(pkg_json) = &root_folder_configs.pkg_json {
+          return Some(Cow::Owned(pkg_json.specifier()));
+        }
+        None
       }
     }
   }
@@ -238,6 +238,16 @@ fn discover_workspace_config_files_for_single_dir(
       .collect()
   }
 
+  if opts.workspace_cache.is_some() {
+    // it doesn't really make sense to use a workspace cache without config
+    // caches because that would mean the configs might change between calls
+    // causing strange behavior, so panic if someone does this
+    assert!(
+      opts.deno_json_cache.is_some() && opts.pkg_json_cache.is_some(),
+      "Using a workspace cache requires setting the deno.json and package.json caches"
+    );
+  }
+
   let start_dir: Option<&Path>;
   let mut first_config_folder_url: Option<Url> = None;
   let mut found_config_folders: HashMap<_, ConfigFolder> = HashMap::new();
@@ -295,13 +305,56 @@ fn discover_workspace_config_files_for_single_dir(
         specifier.clone(),
         &opts.config_parse_options,
       )?);
-      let maybe_pkg_json = load_pkg_json_in_folder(&config_file.dir_path())?;
+
+      // see what config would be loaded if we just specified the parent directory
+      let natural_config_folder_result =
+        load_config_folder(file.parent().unwrap());
+      let matching_config_folder = match natural_config_folder_result {
+        Ok(Some(natual_config_folder)) => {
+          if natual_config_folder
+            .deno_json()
+            .is_some_and(|d| d.specifier == config_file.specifier)
+          {
+            Some(natual_config_folder)
+          } else {
+            None
+          }
+        }
+        Ok(None) | Err(_) => None,
+      };
+
+      let config_folder = match matching_config_folder {
+        Some(config_folder) => config_folder,
+        None => {
+          // when loading the directory we would have loaded something else, so
+          // don't try to load a workspace and don't store this information in
+          // the workspace cache
+          let config_folder =
+            ConfigFolder::Single(DenoOrPkgJson::Deno(config_file));
+          return Ok(ConfigFileDiscovery::Workspace {
+            maybe_vendor_dir: resolve_vendor_dir(
+              config_folder.deno_json().map(|d| d.as_ref()),
+              opts.maybe_vendor_override.as_ref(),
+            ),
+            workspace: new_rc(Workspace::new_single(config_folder)),
+          });
+        }
+      };
+
+      if let Some(workspace_cache) = &opts.workspace_cache {
+        if let Some(workspace) = workspace_cache.get(&config_file.dir_path()) {
+          return Ok(ConfigFileDiscovery::Workspace {
+            workspace: workspace.clone(),
+            maybe_vendor_dir: resolve_vendor_dir(
+              config_folder.deno_json().map(|d| d.as_ref()),
+              opts.maybe_vendor_override.as_ref(),
+            ),
+          });
+        }
+      }
+
       let parent_dir_url = specifier_parent(&config_file.specifier);
-      found_config_folders.insert(
-        parent_dir_url.clone(),
-        ConfigFolder::from_maybe_both(Some(config_file), maybe_pkg_json)
-          .unwrap(),
-      );
+      found_config_folders.insert(parent_dir_url.clone(), config_folder);
       first_config_folder_url = Some(parent_dir_url);
       // start searching for a workspace in the parent directory
       start_dir = file.parent().and_then(|p| p.parent());
@@ -323,263 +376,63 @@ fn discover_workspace_config_files_for_single_dir(
       }
     }
 
+    if let Some(workspace_with_members) = opts
+      .workspace_cache
+      .and_then(|c| c.get(current_dir))
+      .filter(|w| w.config_folders.len() > 1)
+    {
+      let maybe_vendor_dir = resolve_vendor_dir(
+        workspace_with_members.root_deno_json().map(|d| d.as_ref()),
+        opts.maybe_vendor_override.as_ref(),
+      );
+      return handle_workspace_with_members(
+        workspace_with_members,
+        maybe_vendor_dir,
+        first_config_folder_url.as_ref(),
+        found_config_folders,
+        opts,
+      );
+    }
+
     let maybe_config_folder = load_config_folder(current_dir)?;
     let Some(root_config_folder) = maybe_config_folder else {
       continue;
     };
-    if root_config_folder.is_workspace() {
+    if root_config_folder.has_workspace_members() {
       let maybe_vendor_dir = resolve_vendor_dir(
-        Some(&root_config_folder),
+        root_config_folder.deno_json().map(|d| d.as_ref()),
         opts.maybe_vendor_override.as_ref(),
       );
-      let mut final_members = BTreeMap::new();
-      let root_config_file_directory_url = root_config_folder.folder_url();
-      let resolve_member_url =
-        |raw_member: &str| -> Result<Url, ResolveWorkspaceMemberError> {
-          let member = ensure_trailing_slash(raw_member);
-          let member_dir_url = root_config_file_directory_url
-            .join(&member)
-            .map_err(|err| ResolveWorkspaceMemberError::InvalidMember {
-              base: root_config_folder.folder_url(),
-              member: raw_member.to_owned(),
-              source: err,
-            })?;
-          Ok(member_dir_url)
-        };
-      let validate_member_url_is_descendant =
-        |member_dir_url: &Url| -> Result<(), ResolveWorkspaceMemberError> {
-          if !member_dir_url
-            .as_str()
-            .starts_with(root_config_file_directory_url.as_str())
-          {
-            return Err(ResolveWorkspaceMemberError::NonDescendant {
-              workspace_url: root_config_file_directory_url.clone(),
-              member_url: member_dir_url.clone(),
-            });
-          }
-          Ok(())
-        };
-      let mut find_member_config_folder =
-        |member_dir_url: &Url| -> Result<_, ResolveWorkspaceMemberError> {
-          // try to find the config folder in memory from the configs we already
-          // found on the file system
-          if let Some(config_folder) =
-            found_config_folders.remove(member_dir_url)
-          {
-            return Ok(config_folder);
-          }
-
-          let maybe_config_folder =
-            load_config_folder(&member_dir_url.to_file_path().unwrap())?;
-          maybe_config_folder.ok_or_else(|| {
-            // it's fine this doesn't use all the possible config file names
-            // as this is only used to enhance the error message
-            if member_dir_url.as_str().ends_with("/deno.json/")
-              || member_dir_url.as_str().ends_with("/deno.jsonc/")
-              || member_dir_url.as_str().ends_with("/package.json/")
-            {
-              ResolveWorkspaceMemberError::NotFoundMaybeSpecifiedFile {
-                dir_url: member_dir_url.clone(),
-              }
-            } else {
-              ResolveWorkspaceMemberError::NotFound {
-                dir_url: member_dir_url.clone(),
-              }
-            }
-          })
-        };
-      if let Some(deno_json) = root_config_folder.deno_json() {
-        if let Some(workspace_config) = deno_json.to_workspace_config()? {
-          for raw_member in &workspace_config.members {
-            let member_dir_url = resolve_member_url(raw_member)?;
-            if member_dir_url == root_config_file_directory_url {
-              return Err(
-                ResolveWorkspaceMemberError::InvalidSelfReference {
-                  member: raw_member.to_string(),
-                }
-                .into(),
-              );
-            }
-            validate_member_url_is_descendant(&member_dir_url)?;
-            let member_config_folder =
-              find_member_config_folder(&member_dir_url)?;
-            let previous_member = final_members
-              .insert(new_rc(member_dir_url), member_config_folder);
-            if previous_member.is_some() {
-              return Err(
-                ResolveWorkspaceMemberError::Duplicate {
-                  member: raw_member.to_string(),
-                }
-                .into(),
-              );
-            }
-          }
-        }
-      }
-      if let Some(pkg_json) = root_config_folder.pkg_json() {
-        if let Some(members) = &pkg_json.workspaces {
-          let (pattern_members, path_members): (Vec<_>, Vec<_>) =
-            members.iter().partition(|member| {
-              is_glob_pattern(member) || member.starts_with('!')
-            });
-          let patterns = pattern_members
-            .iter()
-            .map(|raw_member| {
-              PathOrPattern::from_relative(
-                pkg_json.dir_path(),
-                &format!("{}package.json", ensure_trailing_slash(raw_member)),
-              )
-              .map_err(|err| {
-                ResolveWorkspaceMemberError::NpmMemberToPattern {
-                  base: root_config_file_directory_url.clone(),
-                  member: raw_member.to_string(),
-                  source: err,
-                }
-              })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-          let pkg_json_paths = if patterns.is_empty() {
-            Vec::new()
-          } else {
-            FileCollector::new(|_| true)
-              .ignore_git_folder()
-              .ignore_node_modules()
-              .set_vendor_folder(maybe_vendor_dir.clone())
-              .collect_file_patterns(
-                opts.fs,
-                FilePatterns {
-                  base: pkg_json.dir_path().to_path_buf(),
-                  include: Some(PathOrPatternSet::new(patterns)),
-                  exclude: PathOrPatternSet::new(Vec::new()),
-                },
-              )
-              .map_err(|err| {
-                WorkspaceDiscoverErrorKind::FailedCollectingNpmMembers {
-                  package_json_url: pkg_json.specifier(),
-                  source: err,
-                }
-              })?
-          };
-          let mut member_dir_urls =
-            IndexSet::with_capacity(path_members.len() + pkg_json_paths.len());
-          for path_member in path_members {
-            let member_dir_url = resolve_member_url(path_member)?;
-            member_dir_urls.insert(member_dir_url);
-          }
-          for pkg_json_path in pkg_json_paths {
-            let member_dir_url =
-              Url::from_directory_path(pkg_json_path.parent().unwrap())
-                .unwrap();
-            member_dir_urls.insert(member_dir_url);
-          }
-
-          for member_dir_url in member_dir_urls {
-            if member_dir_url == root_config_file_directory_url {
-              continue; // ignore self references
-            }
-            validate_member_url_is_descendant(&member_dir_url)?;
-            let member_config_folder =
-              match find_member_config_folder(&member_dir_url) {
-                Ok(config_folder) => config_folder,
-                Err(ResolveWorkspaceMemberError::NotFound { dir_url }) => {
-                  // enhance the error to say we didn't find a package.json
-                  return Err(
-                    ResolveWorkspaceMemberError::NotFoundPackageJson {
-                      dir_url,
-                    }
-                    .into(),
-                  );
-                }
-                Err(err) => return Err(err.into()),
-              };
-            if member_config_folder.pkg_json().is_none() {
-              return Err(
-                ResolveWorkspaceMemberError::NotFoundPackageJson {
-                  dir_url: member_dir_url,
-                }
-                .into(),
-              );
-            }
-            // don't surface errors about duplicate members for
-            // package.json workspace members
-            final_members.insert(new_rc(member_dir_url), member_config_folder);
-          }
-        }
-      }
-
-      // just include any remaining found configs as workspace members
-      // instead of erroring for now
-      let is_root_deno_json_workspace = root_config_folder
-        .deno_json()
-        .map(|d| d.json.workspace.is_some())
-        .unwrap_or(false);
-
-      // if the root was an npm workspace that doesn't have the start config
-      // as a member then only resolve the start config
-      if !is_root_deno_json_workspace {
-        if let Some(first_config_folder) = &first_config_folder_url {
-          if let Some(config_folder) =
-            found_config_folders.remove(first_config_folder)
-          {
-            return Ok(ConfigFileDiscovery::Single {
-              maybe_vendor_dir: resolve_vendor_dir(
-                Some(&config_folder),
-                opts.maybe_vendor_override.as_ref(),
-              ),
-              config_folder,
-            });
-          }
-        }
-      }
-
-      if is_root_deno_json_workspace {
-        if let Some((_, config_folder)) =
-          found_config_folders.into_iter().next()
-        {
-          return Err(
-            WorkspaceDiscoverErrorKind::ConfigNotWorkspaceMember {
-              workspace_url: root_config_folder.folder_url(),
-              config_url: config_folder_config_specifier(&config_folder)
-                .into_owned(),
-            }
-            .into(),
-          );
-        }
-      }
-
-      // ensure no duplicate names in deno configuration files
-      let mut seen_names: HashMap<&str, &Url> =
-        HashMap::with_capacity(final_members.len() + 1);
-      for folder in
-        std::iter::once(&root_config_folder).chain(final_members.values())
-      {
-        if let Some(deno_json) = folder.deno_json() {
-          if let Some(name) = deno_json.json.name.as_deref() {
-            if let Some(other_member_url) = seen_names.get(name) {
-              return Err(
-                ResolveWorkspaceMemberError::DuplicatePackageName {
-                  name: name.to_string(),
-                  deno_json_url: deno_json.specifier.clone(),
-                  other_deno_json_url: (*other_member_url).clone(),
-                }
-                .into(),
-              );
-            } else {
-              seen_names.insert(name, &deno_json.specifier);
-            }
-          }
-        }
-      }
-
-      return Ok(ConfigFileDiscovery::Workspace {
-        root: root_config_folder,
-        members: final_members,
+      let root_workspace = resolve_workspace_for_config_folder(
+        root_config_folder,
+        maybe_vendor_dir.as_ref(),
+        opts,
+        &mut found_config_folders,
+        load_config_folder,
+      )?;
+      return handle_workspace_with_members(
+        root_workspace,
         maybe_vendor_dir,
-      });
+        first_config_folder_url.as_ref(),
+        found_config_folders,
+        opts,
+      );
     }
 
     let config_folder_url = root_config_folder.folder_url();
     if first_config_folder_url.is_none() {
+      if let Some(workspace_cache) = &opts.workspace_cache {
+        if let Some(workspace) = workspace_cache.get(current_dir) {
+          return Ok(ConfigFileDiscovery::Workspace {
+            workspace: workspace.clone(),
+            maybe_vendor_dir: resolve_vendor_dir(
+              root_config_folder.deno_json().map(|d| d.as_ref()),
+              opts.maybe_vendor_override.as_ref(),
+            ),
+          });
+        }
+      }
+
       first_config_folder_url = Some(config_folder_url.clone());
     }
     found_config_folders.insert(config_folder_url, root_config_folder);
@@ -590,11 +443,15 @@ fn discover_workspace_config_files_for_single_dir(
       .remove(&first_config_folder_url)
       .unwrap();
     let maybe_vendor_dir = resolve_vendor_dir(
-      Some(&config_folder),
+      config_folder.deno_json().map(|d| d.as_ref()),
       opts.maybe_vendor_override.as_ref(),
     );
-    Ok(ConfigFileDiscovery::Single {
-      config_folder,
+    let workspace = new_rc(Workspace::new_single(config_folder));
+    if let Some(cache) = opts.workspace_cache {
+      cache.set(workspace.root_dir_path(), workspace.clone());
+    }
+    Ok(ConfigFileDiscovery::Workspace {
+      workspace,
       maybe_vendor_dir,
     })
   } else {
@@ -607,33 +464,290 @@ fn discover_workspace_config_files_for_single_dir(
   }
 }
 
-fn resolve_vendor_dir(
-  maybe_config_folder: Option<&ConfigFolder>,
-  maybe_vendor_override: Option<&VendorEnablement>,
-) -> Option<PathBuf> {
-  match maybe_config_folder {
-    Some(config_folder) => {
-      if let Some(vendor_folder_override) = maybe_vendor_override {
-        match vendor_folder_override {
-          VendorEnablement::Disable => None,
-          VendorEnablement::Enable { cwd } => match config_folder.deno_json() {
-            Some(c) => Some(c.dir_path().join("vendor")),
-            None => Some(cwd.join("vendor")),
-          },
+fn handle_workspace_with_members(
+  root_workspace: WorkspaceRc,
+  maybe_vendor_dir: Option<PathBuf>,
+  first_config_folder_url: Option<&Url>,
+  mut found_config_folders: HashMap<Url, ConfigFolder>,
+  opts: &WorkspaceDiscoverOptions,
+) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
+  let is_root_deno_json_workspace = root_workspace
+    .root_deno_json()
+    .map(|d| d.json.workspace.is_some())
+    .unwrap_or(false);
+  // if the root was an npm workspace that doesn't have the start config
+  // as a member then only resolve the start config
+  if !is_root_deno_json_workspace {
+    if let Some(first_config_folder) = &first_config_folder_url {
+      if let Some(config_folder) =
+        found_config_folders.remove(first_config_folder)
+      {
+        let maybe_vendor_dir = resolve_vendor_dir(
+          config_folder.deno_json().map(|d| d.as_ref()),
+          opts.maybe_vendor_override.as_ref(),
+        );
+        let workspace = new_rc(Workspace::new_single(config_folder));
+        if let Some(cache) = opts.workspace_cache {
+          cache.set(workspace.root_dir_path(), workspace.clone());
         }
+        return Ok(ConfigFileDiscovery::Workspace {
+          maybe_vendor_dir,
+          workspace,
+        });
+      }
+    }
+  }
+
+  if is_root_deno_json_workspace {
+    if let Some((_, config_folder)) = found_config_folders.iter().next() {
+      return Err(
+        WorkspaceDiscoverErrorKind::ConfigNotWorkspaceMember {
+          workspace_url: root_workspace.root_dir().clone(),
+          config_url: config_folder_config_specifier(config_folder)
+            .into_owned(),
+        }
+        .into(),
+      );
+    }
+  }
+
+  // ensure no duplicate names in deno configuration files
+  let mut seen_names: HashMap<&str, &Url> =
+    HashMap::with_capacity(root_workspace.config_folders.len() + 1);
+  for deno_json in root_workspace.deno_jsons() {
+    if let Some(name) = deno_json.json.name.as_deref() {
+      if let Some(other_member_url) = seen_names.get(name) {
+        return Err(
+          ResolveWorkspaceMemberError::DuplicatePackageName {
+            name: name.to_string(),
+            deno_json_url: deno_json.specifier.clone(),
+            other_deno_json_url: (*other_member_url).clone(),
+          }
+          .into(),
+        );
       } else {
-        let deno_json = config_folder.deno_json()?;
-        if deno_json.vendor() == Some(true) {
-          Some(deno_json.dir_path().join("vendor"))
+        seen_names.insert(name, &deno_json.specifier);
+      }
+    }
+  }
+
+  Ok(ConfigFileDiscovery::Workspace {
+    workspace: root_workspace,
+    maybe_vendor_dir,
+  })
+}
+
+fn resolve_workspace_for_config_folder(
+  root_config_folder: ConfigFolder,
+  maybe_vendor_dir: Option<&PathBuf>,
+  opts: &WorkspaceDiscoverOptions,
+  found_config_folders: &mut HashMap<Url, ConfigFolder>,
+  load_config_folder: impl Fn(
+    &Path,
+  ) -> Result<
+    Option<ConfigFolder>,
+    ResolveWorkspaceMemberError,
+  >,
+) -> Result<WorkspaceRc, WorkspaceDiscoverError> {
+  let mut final_members = BTreeMap::new();
+  let root_config_file_directory_url = root_config_folder.folder_url();
+  let resolve_member_url =
+    |raw_member: &str| -> Result<Url, ResolveWorkspaceMemberError> {
+      let member = ensure_trailing_slash(raw_member);
+      let member_dir_url = root_config_file_directory_url
+        .join(&member)
+        .map_err(|err| ResolveWorkspaceMemberError::InvalidMember {
+          base: root_config_folder.folder_url(),
+          member: raw_member.to_owned(),
+          source: err,
+        })?;
+      Ok(member_dir_url)
+    };
+  let validate_member_url_is_descendant =
+    |member_dir_url: &Url| -> Result<(), ResolveWorkspaceMemberError> {
+      if !member_dir_url
+        .as_str()
+        .starts_with(root_config_file_directory_url.as_str())
+      {
+        return Err(ResolveWorkspaceMemberError::NonDescendant {
+          workspace_url: root_config_file_directory_url.clone(),
+          member_url: member_dir_url.clone(),
+        });
+      }
+      Ok(())
+    };
+  let mut find_member_config_folder =
+    |member_dir_url: &Url| -> Result<_, ResolveWorkspaceMemberError> {
+      // try to find the config folder in memory from the configs we already
+      // found on the file system
+      if let Some(config_folder) = found_config_folders.remove(member_dir_url) {
+        return Ok(config_folder);
+      }
+
+      let maybe_config_folder =
+        load_config_folder(&member_dir_url.to_file_path().unwrap())?;
+      maybe_config_folder.ok_or_else(|| {
+        // it's fine this doesn't use all the possible config file names
+        // as this is only used to enhance the error message
+        if member_dir_url.as_str().ends_with("/deno.json/")
+          || member_dir_url.as_str().ends_with("/deno.jsonc/")
+          || member_dir_url.as_str().ends_with("/package.json/")
+        {
+          ResolveWorkspaceMemberError::NotFoundMaybeSpecifiedFile {
+            dir_url: member_dir_url.clone(),
+          }
         } else {
-          None
+          ResolveWorkspaceMemberError::NotFound {
+            dir_url: member_dir_url.clone(),
+          }
+        }
+      })
+    };
+  if let Some(deno_json) = root_config_folder.deno_json() {
+    if let Some(workspace_config) = deno_json.to_workspace_config()? {
+      for raw_member in &workspace_config.members {
+        let member_dir_url = resolve_member_url(raw_member)?;
+        if member_dir_url == root_config_file_directory_url {
+          return Err(
+            ResolveWorkspaceMemberError::InvalidSelfReference {
+              member: raw_member.to_string(),
+            }
+            .into(),
+          );
+        }
+        validate_member_url_is_descendant(&member_dir_url)?;
+        let member_config_folder = find_member_config_folder(&member_dir_url)?;
+        let previous_member =
+          final_members.insert(new_rc(member_dir_url), member_config_folder);
+        if previous_member.is_some() {
+          return Err(
+            ResolveWorkspaceMemberError::Duplicate {
+              member: raw_member.to_string(),
+            }
+            .into(),
+          );
         }
       }
     }
-    None => match maybe_vendor_override {
-      Some(VendorEnablement::Enable { cwd }) => Some(cwd.join("vendor")),
-      _ => None,
-    },
+  }
+  if let Some(pkg_json) = root_config_folder.pkg_json() {
+    if let Some(members) = &pkg_json.workspaces {
+      let (pattern_members, path_members): (Vec<_>, Vec<_>) = members
+        .iter()
+        .partition(|member| is_glob_pattern(member) || member.starts_with('!'));
+      let patterns = pattern_members
+        .iter()
+        .map(|raw_member| {
+          PathOrPattern::from_relative(
+            pkg_json.dir_path(),
+            &format!("{}package.json", ensure_trailing_slash(raw_member)),
+          )
+          .map_err(|err| {
+            ResolveWorkspaceMemberError::NpmMemberToPattern {
+              base: root_config_file_directory_url.clone(),
+              member: raw_member.to_string(),
+              source: err,
+            }
+          })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+      let pkg_json_paths = if patterns.is_empty() {
+        Vec::new()
+      } else {
+        FileCollector::new(|_| true)
+          .ignore_git_folder()
+          .ignore_node_modules()
+          .set_vendor_folder(maybe_vendor_dir.cloned())
+          .collect_file_patterns(
+            opts.fs,
+            FilePatterns {
+              base: pkg_json.dir_path().to_path_buf(),
+              include: Some(PathOrPatternSet::new(patterns)),
+              exclude: PathOrPatternSet::new(Vec::new()),
+            },
+          )
+          .map_err(|err| {
+            WorkspaceDiscoverErrorKind::FailedCollectingNpmMembers {
+              package_json_url: pkg_json.specifier(),
+              source: err,
+            }
+          })?
+      };
+      let mut member_dir_urls =
+        IndexSet::with_capacity(path_members.len() + pkg_json_paths.len());
+      for path_member in path_members {
+        let member_dir_url = resolve_member_url(path_member)?;
+        member_dir_urls.insert(member_dir_url);
+      }
+      for pkg_json_path in pkg_json_paths {
+        let member_dir_url =
+          Url::from_directory_path(pkg_json_path.parent().unwrap()).unwrap();
+        member_dir_urls.insert(member_dir_url);
+      }
+
+      for member_dir_url in member_dir_urls {
+        if member_dir_url == root_config_file_directory_url {
+          continue; // ignore self references
+        }
+        validate_member_url_is_descendant(&member_dir_url)?;
+        let member_config_folder =
+          match find_member_config_folder(&member_dir_url) {
+            Ok(config_folder) => config_folder,
+            Err(ResolveWorkspaceMemberError::NotFound { dir_url }) => {
+              // enhance the error to say we didn't find a package.json
+              return Err(
+                ResolveWorkspaceMemberError::NotFoundPackageJson { dir_url }
+                  .into(),
+              );
+            }
+            Err(err) => return Err(err.into()),
+          };
+        if member_config_folder.pkg_json().is_none() {
+          return Err(
+            ResolveWorkspaceMemberError::NotFoundPackageJson {
+              dir_url: member_dir_url,
+            }
+            .into(),
+          );
+        }
+        // don't surface errors about duplicate members for
+        // package.json workspace members
+        final_members.insert(new_rc(member_dir_url), member_config_folder);
+      }
+    }
+  }
+
+  let workspace = new_rc(Workspace::new_with_members(
+    root_config_folder,
+    final_members,
+  ));
+
+  if let Some(cache) = opts.workspace_cache {
+    cache.set(workspace.root_dir_path(), workspace.clone());
+  }
+
+  Ok(workspace)
+}
+
+fn resolve_vendor_dir(
+  maybe_deno_json: Option<&ConfigFile>,
+  maybe_vendor_override: Option<&VendorEnablement>,
+) -> Option<PathBuf> {
+  if let Some(vendor_folder_override) = maybe_vendor_override {
+    match vendor_folder_override {
+      VendorEnablement::Disable => None,
+      VendorEnablement::Enable { cwd } => match maybe_deno_json {
+        Some(c) => Some(c.dir_path().join("vendor")),
+        None => Some(cwd.join("vendor")),
+      },
+    }
+  } else {
+    let deno_json = maybe_deno_json?;
+    if deno_json.vendor() == Some(true) {
+      Some(deno_json.dir_path().join("vendor"))
+    } else {
+      None
+    }
   }
 }
 

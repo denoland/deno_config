@@ -1,6 +1,7 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::future::Future;
@@ -216,7 +217,10 @@ pub enum WorkspaceDiscoverErrorKind {
   #[error(transparent)]
   SpecifierToFilePath(#[from] SpecifierToFilePathError),
   #[error("Config file must be a member of the workspace.\n  Config: {config_url}\n  Workspace: {workspace_url}")]
-  ConfigNotWorkspaceMember { workspace_url: Url, config_url: Url },
+  ConfigNotWorkspaceMember {
+    workspace_url: UrlRc,
+    config_url: Url,
+  },
   #[error(
     "Failed collecting npm workspace members.\n  Config: {package_json_url}"
   )]
@@ -243,6 +247,11 @@ pub enum VendorEnablement<'a> {
   },
 }
 
+pub trait WorkspaceCache {
+  fn get(&self, dir_path: &Path) -> Option<WorkspaceRc>;
+  fn set(&self, dir_path: PathBuf, workspace: WorkspaceRc);
+}
+
 #[derive(Default, Clone)]
 pub struct WorkspaceDiscoverOptions<'a> {
   pub fs: &'a dyn crate::fs::DenoConfigFs,
@@ -250,6 +259,9 @@ pub struct WorkspaceDiscoverOptions<'a> {
   /// workspace discovery may occur multiple times.
   pub deno_json_cache: Option<&'a dyn crate::deno_json::DenoJsonCache>,
   pub pkg_json_cache: Option<&'a dyn crate::package_json::PackageJsonCache>,
+  /// A cache for workspaces. This is mostly only useful in the LSP where
+  /// workspace discovery may occur multiple times.
+  pub workspace_cache: Option<&'a dyn WorkspaceCache>,
   pub config_parse_options: ConfigParseOptions,
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
@@ -300,8 +312,42 @@ pub struct Workspace {
 }
 
 impl Workspace {
+  pub(crate) fn new_single(config_folder: ConfigFolder) -> Self {
+    let root_dir = new_rc(config_folder.folder_url());
+    Workspace {
+      config_folders: IndexMap::from([(
+        root_dir.clone(),
+        FolderConfigs::from_config_folder(config_folder),
+      )]),
+      root_dir: root_dir.clone(),
+    }
+  }
+
+  pub(crate) fn new_with_members(
+    root: ConfigFolder,
+    members: BTreeMap<UrlRc, ConfigFolder>,
+  ) -> Self {
+    let root_dir = new_rc(root.folder_url());
+    let mut config_folders = IndexMap::with_capacity(members.len() + 1);
+    config_folders
+      .insert(root_dir.clone(), FolderConfigs::from_config_folder(root));
+    config_folders.extend(members.into_iter().map(
+      |(folder_url, config_folder)| {
+        (folder_url, FolderConfigs::from_config_folder(config_folder))
+      },
+    ));
+    Workspace {
+      root_dir,
+      config_folders,
+    }
+  }
+
   pub fn root_dir(&self) -> &UrlRc {
     &self.root_dir
+  }
+
+  pub fn root_dir_path(&self) -> PathBuf {
+    self.root_dir.to_file_path().unwrap()
   }
 
   pub fn root_folder_configs(&self) -> &FolderConfigs {
@@ -629,46 +675,10 @@ impl WorkspaceContext {
         });
         WorkspaceContext::new(&start_dir, vendor_dir, workspace)
       }
-      ConfigFileDiscovery::Single {
-        config_folder: folder,
-        maybe_vendor_dir: vendor_dir,
-      } => {
-        let root_dir = new_rc(folder.folder_url());
-        WorkspaceContext::new(
-          &start_dir,
-          vendor_dir,
-          new_rc(Workspace {
-            config_folders: IndexMap::from([(
-              root_dir.clone(),
-              FolderConfigs::from_config_folder(folder),
-            )]),
-            root_dir,
-          }),
-        )
-      }
       ConfigFileDiscovery::Workspace {
-        root,
-        members,
+        workspace,
         maybe_vendor_dir: vendor_dir,
-      } => {
-        let root_dir = new_rc(root.folder_url());
-        let mut config_folders = IndexMap::with_capacity(members.len() + 1);
-        config_folders
-          .insert(root_dir.clone(), FolderConfigs::from_config_folder(root));
-        config_folders.extend(members.into_iter().map(
-          |(folder_url, config_folder)| {
-            (folder_url, FolderConfigs::from_config_folder(config_folder))
-          },
-        ));
-        WorkspaceContext::new(
-          &start_dir,
-          vendor_dir,
-          new_rc(Workspace {
-            root_dir,
-            config_folders,
-          }),
-        )
-      }
+      } => WorkspaceContext::new(&start_dir, vendor_dir, workspace),
     };
     debug_assert!(
       context
@@ -4391,24 +4401,137 @@ mod test {
   }
 
   #[test]
-  fn workspace_discovery_deno_json_cache() {
-    #[derive(Default)]
-    struct Cache(RefCell<HashMap<PathBuf, ConfigFileRc>>);
-
-    impl DenoJsonCache for Cache {
-      fn get(&self, path: &Path) -> Option<ConfigFileRc> {
-        self.0.borrow().get(path).cloned()
-      }
-
-      fn set(&self, path: PathBuf, deno_json: ConfigFileRc) {
-        self.0.borrow_mut().insert(path, deno_json);
+  fn test_config_not_deno_workspace_member() {
+    fn assert_err(err: &WorkspaceDiscoverError, config_file_path: &Path) {
+      match err.as_kind() {
+        WorkspaceDiscoverErrorKind::ConfigNotWorkspaceMember {
+          workspace_url,
+          config_url,
+        } => {
+          assert_eq!(
+            workspace_url.as_ref(),
+            &Url::from_directory_path(root_dir()).unwrap()
+          );
+          assert_eq!(
+            config_url,
+            &Url::from_file_path(config_file_path).unwrap()
+          );
+        }
+        _ => unreachable!(),
       }
     }
 
+    for file_name in ["deno.json", "deno.jsonc"] {
+      let config_file_path = root_dir().join("member-b").join(file_name);
+      let mut fs = TestFileSystem::default();
+      fs.insert_json(
+        root_dir().join("deno.json"),
+        json!({
+          "workspace": ["./member-a"],
+        }),
+      );
+      fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
+      fs.insert_json(config_file_path.clone(), json!({}));
+      let err = workspace_at_start_dir_err(&fs, &root_dir().join("member-b"));
+      assert_err(&err, &config_file_path);
+
+      // try for when the config file is specified as well
+      let err = WorkspaceContext::discover(
+        WorkspaceDiscoverStart::ConfigFile(&config_file_path),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          discover_pkg_json: true,
+          ..Default::default()
+        },
+      )
+      .unwrap_err();
+      assert_err(&err, &config_file_path);
+    }
+  }
+
+  #[test]
+  fn test_config_not_deno_workspace_member_non_natural_config_file_name() {
+    for file_name in ["other-name.json", "deno.jsonc"] {
+      let mut fs = TestFileSystem::default();
+      fs.insert_json(
+        root_dir().join("deno.json"),
+        json!({
+          "workspace": ["./member-a", "./member-b"],
+        }),
+      );
+      fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
+      // this is the "natural" config file that would be discovered by
+      // workspace discovery and since the file name specified does not
+      // match it, the workspace is not discovered and an error does not
+      // occur
+      fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
+      let config_file_path = root_dir().join("member-b").join(file_name);
+      fs.insert_json(config_file_path.clone(), json!({}));
+      let workspace_ctx = WorkspaceContext::discover(
+        WorkspaceDiscoverStart::ConfigFile(&config_file_path),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          discover_pkg_json: true,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+      assert_eq!(
+        workspace_ctx
+          .workspace
+          .deno_jsons()
+          .map(|c| c.specifier.to_file_path().unwrap())
+          .collect::<Vec<_>>(),
+        vec![config_file_path]
+      );
+    }
+  }
+
+  #[derive(Default)]
+  struct DenoJsonMemCache(RefCell<HashMap<PathBuf, ConfigFileRc>>);
+
+  impl DenoJsonCache for DenoJsonMemCache {
+    fn get(&self, path: &Path) -> Option<ConfigFileRc> {
+      self.0.borrow().get(path).cloned()
+    }
+
+    fn set(&self, path: PathBuf, deno_json: ConfigFileRc) {
+      self.0.borrow_mut().insert(path, deno_json);
+    }
+  }
+
+  #[derive(Default)]
+  struct PkgJsonMemCache(RefCell<HashMap<PathBuf, PackageJsonRc>>);
+
+  impl crate::package_json::PackageJsonCache for PkgJsonMemCache {
+    fn get(&self, path: &Path) -> Option<PackageJsonRc> {
+      self.0.borrow().get(path).cloned()
+    }
+
+    fn set(&self, path: PathBuf, value: PackageJsonRc) {
+      self.0.borrow_mut().insert(path, value);
+    }
+  }
+
+  #[derive(Default)]
+  struct WorkspaceMemCache(RefCell<HashMap<PathBuf, WorkspaceRc>>);
+
+  impl WorkspaceCache for WorkspaceMemCache {
+    fn get(&self, dir_path: &Path) -> Option<WorkspaceRc> {
+      self.0.borrow().get(dir_path).cloned()
+    }
+
+    fn set(&self, dir_path: PathBuf, workspace: WorkspaceRc) {
+      self.0.borrow_mut().insert(dir_path, workspace);
+    }
+  }
+
+  #[test]
+  fn workspace_discovery_deno_json_cache() {
     let mut fs = TestFileSystem::default();
     fs.insert(root_dir().join("deno.json"), "{ \"nodeModulesDir\": true }");
-    let cache = Cache::default();
-    let workspace = WorkspaceContext::discover(
+    let cache = DenoJsonMemCache::default();
+    let workspace_ctx = WorkspaceContext::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -4419,7 +4542,7 @@ mod test {
     )
     .unwrap();
     assert_eq!(cache.0.borrow().len(), 1); // writes to the cache
-    assert_eq!(workspace.node_modules_dir(), Some(true));
+    assert_eq!(workspace_ctx.node_modules_dir(), Some(true));
     let new_config_file = ConfigFile::new(
       r#"{ "nodeModulesDir": false }"#,
       Url::from_file_path(root_dir().join("deno.json")).unwrap(),
@@ -4430,7 +4553,7 @@ mod test {
       .0
       .borrow_mut()
       .insert(root_dir().join("deno.json"), new_rc(new_config_file));
-    let workspace = WorkspaceContext::discover(
+    let workspace_ctx = WorkspaceContext::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -4440,7 +4563,113 @@ mod test {
       },
     )
     .unwrap();
-    assert_eq!(workspace.node_modules_dir(), Some(false)); // reads from the cache
+    assert_eq!(workspace_ctx.node_modules_dir(), Some(false)); // reads from the cache
+  }
+
+  #[test]
+  fn workspace_discovery_pkg_json_cache() {
+    let mut fs = TestFileSystem::default();
+    fs.insert(root_dir().join("package.json"), "{ \"name\": \"member\" }");
+    let cache = PkgJsonMemCache::default();
+    let workspace_ctx = WorkspaceContext::discover(
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        pkg_json_cache: Some(&cache),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(cache.0.borrow().len(), 1); // writes to the cache
+    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 1);
+    let new_pkg_json = PackageJson::load_from_string(
+      root_dir().join("package.json"),
+      r#"{ "name": "cached-name" }"#.to_string(),
+    )
+    .unwrap();
+    cache
+      .0
+      .borrow_mut()
+      .insert(root_dir().join("package.json"), new_rc(new_pkg_json));
+    let workspace_ctx = WorkspaceContext::discover(
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        pkg_json_cache: Some(&cache),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    // reads from the cache
+    assert_eq!(
+      workspace_ctx
+        .workspace
+        .package_jsons()
+        .map(|p| p.name.as_deref().unwrap())
+        .collect::<Vec<_>>(),
+      vec!["cached-name"]
+    );
+  }
+
+  #[test]
+  fn workspace_discovery_workspace_cache() {
+    let mut fs = TestFileSystem::default();
+    fs.insert(
+      root_dir().join("member/package-a/package.json"),
+      r#"{ "name": "member-a" }"#,
+    );
+    fs.insert(
+      root_dir().join("member/package-b/deno.json"),
+      r#"{ "name": "member-b" }"#,
+    );
+    fs.insert(
+      root_dir().join("deno.json"),
+      r#"{ "workspace": ["member/package-a", "member/package-b"] }"#,
+    );
+    let deno_json_cache = DenoJsonMemCache::default();
+    let pkg_json_cache = PkgJsonMemCache::default();
+    let workspace_cache = WorkspaceMemCache::default();
+    let workspace_ctx = WorkspaceContext::discover(
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        deno_json_cache: Some(&deno_json_cache),
+        pkg_json_cache: Some(&pkg_json_cache),
+        workspace_cache: Some(&workspace_cache),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 1);
+    // writes to the caches
+    assert_eq!(pkg_json_cache.0.borrow().len(), 1);
+    assert_eq!(deno_json_cache.0.borrow().len(), 2);
+    assert_eq!(workspace_cache.0.borrow().len(), 1);
+    // now delete from the deno json and pkg json caches
+    deno_json_cache.0.borrow_mut().clear();
+    pkg_json_cache.0.borrow_mut().clear();
+    // should load and not write to the caches
+    let workspace_ctx = WorkspaceContext::discover(
+      WorkspaceDiscoverStart::Paths(&[root_dir()]),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        deno_json_cache: Some(&deno_json_cache),
+        pkg_json_cache: Some(&pkg_json_cache),
+        workspace_cache: Some(&workspace_cache),
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 1);
+    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 2);
+    // it wouldn't have written to these because it just
+    // loads from the workspace cache
+    assert_eq!(pkg_json_cache.0.borrow().len(), 0);
+    assert_eq!(deno_json_cache.0.borrow().len(), 0);
   }
 
   fn workspace_for_root_and_member(
