@@ -491,19 +491,24 @@ fn handle_workspace_with_members(
   // as a member then only resolve the start config
   if !is_root_deno_json_workspace {
     if let Some(first_config_folder) = &first_config_folder_url {
-      if let Some(config_folder) =
-        found_config_folders.remove(first_config_folder)
+      if !root_workspace
+        .config_folders
+        .contains_key(*first_config_folder)
       {
-        let maybe_vendor_dir = resolve_vendor_dir(
-          config_folder.deno_json().map(|d| d.as_ref()),
-          opts.maybe_vendor_override.as_ref(),
-        );
-        let workspace =
-          new_rc(Workspace::new_single(config_folder, maybe_vendor_dir));
-        if let Some(cache) = opts.workspace_cache {
-          cache.set(workspace.root_dir_path(), workspace.clone());
+        if let Some(config_folder) =
+          found_config_folders.remove(first_config_folder)
+        {
+          let maybe_vendor_dir = resolve_vendor_dir(
+            config_folder.deno_json().map(|d| d.as_ref()),
+            opts.maybe_vendor_override.as_ref(),
+          );
+          let workspace =
+            new_rc(Workspace::new_single(config_folder, maybe_vendor_dir));
+          if let Some(cache) = opts.workspace_cache {
+            cache.set(workspace.root_dir_path(), workspace.clone());
+          }
+          return Ok(ConfigFileDiscovery::Workspace { workspace });
         }
-        return Ok(ConfigFileDiscovery::Workspace { workspace });
       }
     }
   }
