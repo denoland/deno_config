@@ -499,15 +499,17 @@ fn handle_workspace_with_members(
   }
 
   if is_root_deno_json_workspace {
-    if let Some((_, config_folder)) = found_config_folders.iter().next() {
-      return Err(
-        WorkspaceDiscoverErrorKind::ConfigNotWorkspaceMember {
-          workspace_url: root_workspace.root_dir().clone(),
-          config_url: config_folder_config_specifier(config_folder)
-            .into_owned(),
-        }
-        .into(),
-      );
+    for (key, config_folder) in &found_config_folders {
+      if !root_workspace.config_folders.contains_key(key) {
+        return Err(
+          WorkspaceDiscoverErrorKind::ConfigNotWorkspaceMember {
+            workspace_url: root_workspace.root_dir().clone(),
+            config_url: config_folder_config_specifier(config_folder)
+              .into_owned(),
+          }
+          .into(),
+        );
+      }
     }
   }
 
