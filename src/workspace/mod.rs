@@ -42,7 +42,6 @@ use crate::deno_json::TestConfig;
 use crate::deno_json::TsConfigForEmit;
 use crate::deno_json::TsConfigType;
 use crate::deno_json::WorkspaceConfigParseError;
-use crate::deno_json::WorkspaceLintConfig;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternParseError;
@@ -104,6 +103,11 @@ impl NpmPackageConfig {
       RangeSetOrTag::Tag(tag) => tag == "workspace",
     }
   }
+}
+
+#[derive(Clone, Debug, Default, Hash, PartialEq)]
+pub struct WorkspaceLintConfig {
+  pub report: Option<String>,
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -571,7 +575,7 @@ impl Workspace {
 pub struct WorkspaceContext {
   pub workspace: WorkspaceRc,
   /// The member context about the directory that workspace discovery started from.
-  pub start_member_ctx: WorkspaceMemberContext,
+  pub start_ctx: WorkspaceMemberContext,
   vendor_dir: Option<PathBuf>,
 }
 
@@ -699,7 +703,7 @@ impl WorkspaceContext {
     Self {
       workspace,
       vendor_dir,
-      start_member_ctx,
+      start_ctx: start_member_ctx,
     }
   }
 
@@ -815,7 +819,7 @@ impl WorkspaceContext {
   }
 
   pub fn jsr_packages_for_publish(&self) -> Vec<JsrPackageConfig> {
-    let ctx = &self.start_member_ctx;
+    let ctx = &self.start_ctx;
     // only publish the current folder if it's a package
     if let Some(package_config) = ctx.maybe_package_config() {
       return vec![package_config];
@@ -2039,7 +2043,7 @@ mod test {
     // root
     {
       let tasks_config =
-        workspace_ctx.start_member_ctx.to_tasks_config().unwrap();
+        workspace_ctx.start_ctx.to_tasks_config().unwrap();
       assert_eq!(
         tasks_config,
         WorkspaceTasksConfig {
@@ -2318,7 +2322,7 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.diagnostics(), vec![]);
-    let ctx = workspace_ctx.start_member_ctx;
+    let ctx = workspace_ctx.start_ctx;
     let lint_config = ctx
       .to_lint_config(FilePatterns::new_with_base(ctx.dir_path()))
       .unwrap();
@@ -2382,7 +2386,7 @@ mod test {
         report: Some("json".to_string()),
       }
     );
-    let start_ctx = workspace_ctx.start_member_ctx;
+    let start_ctx = workspace_ctx.start_ctx;
     let lint_config = start_ctx
       .to_lint_config(FilePatterns::new_with_base(start_ctx.dir_path()))
       .unwrap();
@@ -2462,7 +2466,7 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.diagnostics(), vec![]);
-    let start_ctx = workspace_ctx.start_member_ctx;
+    let start_ctx = workspace_ctx.start_ctx;
     let fmt_config = start_ctx
       .to_fmt_config(FilePatterns::new_with_base(start_ctx.dir_path()))
       .unwrap();
@@ -2529,7 +2533,7 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.diagnostics(), vec![]);
-    let start_ctx = workspace_ctx.start_member_ctx;
+    let start_ctx = workspace_ctx.start_ctx;
     let bench_config = start_ctx
       .to_bench_config(FilePatterns::new_with_base(start_ctx.dir_path()))
       .unwrap();
@@ -2580,7 +2584,7 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.diagnostics(), vec![]);
-    let start_ctx = workspace_ctx.start_member_ctx;
+    let start_ctx = workspace_ctx.start_ctx;
     let config = start_ctx
       .to_test_config(FilePatterns::new_with_base(start_ctx.dir_path()))
       .unwrap();
@@ -2638,7 +2642,7 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.diagnostics(), vec![]);
-    let config = workspace_ctx.start_member_ctx.to_publish_config().unwrap();
+    let config = workspace_ctx.start_ctx.to_publish_config().unwrap();
     assert_eq!(
       config,
       PublishConfig {
@@ -2698,7 +2702,7 @@ mod test {
       include: None,
       exclude: Default::default(),
     };
-    let member_ctx = &workspace_ctx.start_member_ctx;
+    let member_ctx = &workspace_ctx.start_ctx;
 
     for (expected_files, ctx) in [
       (expected_root_files, &root_ctx),
