@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use indexmap::IndexSet;
 use url::Url;
 
+use crate::deno_json::ConfigFile;
+use crate::deno_json::ConfigFileRc;
 use crate::glob::is_glob_pattern;
 use crate::glob::FileCollector;
 use crate::glob::FilePatterns;
@@ -21,8 +23,6 @@ use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_parent;
-use crate::ConfigFile;
-use crate::ConfigFileRc;
 
 use super::ResolveWorkspaceMemberError;
 use super::UrlRc;

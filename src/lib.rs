@@ -5,7 +5,7 @@
 #![deny(clippy::unused_async)]
 
 #[cfg(feature = "deno_json")]
-mod deno_json;
+pub mod deno_json;
 pub mod fs;
 #[cfg(feature = "deno_json")]
 pub mod glob;
@@ -18,7 +18,5 @@ mod util;
 #[cfg(feature = "workspace")]
 pub mod workspace;
 
-#[cfg(feature = "deno_json")]
-pub use deno_json::*;
 #[cfg(feature = "deno_json")]
 pub use util::SpecifierToFilePathError;

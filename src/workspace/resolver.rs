@@ -20,15 +20,15 @@ use serde::Serialize;
 use thiserror::Error;
 use url::Url;
 
+use crate::deno_json::ConfigFile;
 use crate::package_json::PackageJsonDepValue;
 use crate::package_json::PackageJsonDepValueParseError;
 use crate::package_json::PackageJsonDeps;
 use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
-use crate::ConfigFile;
 
 use super::UrlRc;
-use super::Workspace;
+use super::WorkspaceContext;
 
 #[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
@@ -162,20 +162,21 @@ impl WorkspaceResolver {
   pub(crate) async fn from_workspace<
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
-    workspace: &Workspace,
+    workspace_ctx: &WorkspaceContext,
     options: CreateResolverOptions,
     fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     async fn resolve_import_map<
       TReturn: Future<Output = Result<String, AnyError>>,
     >(
-      workspace: &Workspace,
+      workspace_ctx: &WorkspaceContext,
       specified_import_map: Option<SpecifiedImportMap>,
       fetch_text: impl FnOnce(&Url) -> TReturn,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
-      let root_deno_json = workspace.root_deno_json();
-      let deno_jsons = workspace
+      let root_deno_json = workspace_ctx.workspace.root_deno_json();
+      let deno_jsons = workspace_ctx
+        .workspace
         .config_folders()
         .iter()
         .filter_map(|(_, f)| f.deno_json.as_ref())
@@ -213,7 +214,13 @@ impl WorkspaceResolver {
                 )
               }),
             None => (
-              Cow::Owned(workspace.root_dir.join("deno.json").unwrap()),
+              Cow::Owned(
+                workspace_ctx
+                  .workspace
+                  .root_dir()
+                  .join("deno.json")
+                  .unwrap(),
+              ),
               serde_json::Value::Object(Default::default()),
             ),
           };
@@ -262,10 +269,14 @@ impl WorkspaceResolver {
       )?))
     }
 
-    let maybe_import_map =
-      resolve_import_map(workspace, options.specified_import_map, fetch_text)
-        .await?;
-    let pkg_jsons = workspace
+    let maybe_import_map = resolve_import_map(
+      workspace_ctx,
+      options.specified_import_map,
+      fetch_text,
+    )
+    .await?;
+    let pkg_jsons = workspace_ctx
+      .workspace
       .config_folders()
       .iter()
       .filter_map(|(dir_url, f)| {
@@ -278,7 +289,7 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
     Ok(Self {
-      workspace_root: workspace.root_dir.clone(),
+      workspace_root: workspace_ctx.workspace.root_dir().clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       maybe_import_map,
       pkg_jsons,
@@ -534,10 +545,9 @@ mod test {
 
   use super::*;
   use crate::fs::TestFileSystem;
-  use crate::sync::new_rc;
+  use crate::workspace::WorkspaceContext;
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
-  use crate::workspace::WorkspaceRc;
 
   fn root_dir() -> PathBuf {
     if cfg!(windows) {
@@ -881,8 +891,10 @@ mod test {
       .unwrap();
   }
 
-  async fn create_resolver(workspace: &WorkspaceRc) -> WorkspaceResolver {
-    workspace
+  async fn create_resolver(
+    workspace_ctx: &WorkspaceContext,
+  ) -> WorkspaceResolver {
+    workspace_ctx
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
@@ -897,17 +909,15 @@ mod test {
   fn workspace_at_start_dir(
     fs: &TestFileSystem,
     start_dir: &Path,
-  ) -> WorkspaceRc {
-    new_rc(
-      Workspace::discover(
-        WorkspaceDiscoverStart::Paths(&[start_dir.to_path_buf()]),
-        &WorkspaceDiscoverOptions {
-          fs,
-          discover_pkg_json: true,
-          ..Default::default()
-        },
-      )
-      .unwrap(),
+  ) -> WorkspaceContext {
+    WorkspaceContext::discover(
+      WorkspaceDiscoverStart::Paths(&[start_dir.to_path_buf()]),
+      &WorkspaceDiscoverOptions {
+        fs,
+        discover_pkg_json: true,
+        ..Default::default()
+      },
     )
+    .unwrap()
   }
 }
