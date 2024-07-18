@@ -123,13 +123,8 @@ impl ConfigFolder {
 
 #[derive(Debug)]
 pub enum ConfigFileDiscovery {
-  None {
-    maybe_vendor_dir: Option<PathBuf>,
-  },
-  Workspace {
-    workspace: WorkspaceRc,
-    maybe_vendor_dir: Option<PathBuf>,
-  },
+  None { maybe_vendor_dir: Option<PathBuf> },
+  Workspace { workspace: WorkspaceRc },
 }
 
 impl ConfigFileDiscovery {
@@ -331,24 +326,33 @@ fn discover_workspace_config_files_for_single_dir(
           // the workspace cache
           let config_folder =
             ConfigFolder::Single(DenoOrPkgJson::Deno(config_file));
+          let maybe_vendor_dir = resolve_vendor_dir(
+            config_folder.deno_json().map(|d| d.as_ref()),
+            opts.maybe_vendor_override.as_ref(),
+          );
           return Ok(ConfigFileDiscovery::Workspace {
-            maybe_vendor_dir: resolve_vendor_dir(
-              config_folder.deno_json().map(|d| d.as_ref()),
-              opts.maybe_vendor_override.as_ref(),
-            ),
-            workspace: new_rc(Workspace::new_single(config_folder)),
+            workspace: new_rc(Workspace::new_single(
+              config_folder,
+              maybe_vendor_dir,
+            )),
           });
         }
       };
 
       if let Some(workspace_cache) = &opts.workspace_cache {
         if let Some(workspace) = workspace_cache.get(&config_file.dir_path()) {
-          return Ok(ConfigFileDiscovery::Workspace {
-            workspace: workspace.clone(),
-            maybe_vendor_dir: resolve_vendor_dir(
+          if cfg!(debug_assertions) {
+            let expected_vendor_dir = resolve_vendor_dir(
               config_folder.deno_json().map(|d| d.as_ref()),
               opts.maybe_vendor_override.as_ref(),
-            ),
+            );
+            debug_assert_eq!(
+              expected_vendor_dir, workspace.vendor_dir,
+              "should not be using a different vendor dir across calls"
+            );
+          }
+          return Ok(ConfigFileDiscovery::Workspace {
+            workspace: workspace.clone(),
           });
         }
       }
@@ -381,13 +385,19 @@ fn discover_workspace_config_files_for_single_dir(
       .and_then(|c| c.get(current_dir))
       .filter(|w| w.config_folders.len() > 1)
     {
-      let maybe_vendor_dir = resolve_vendor_dir(
-        workspace_with_members.root_deno_json().map(|d| d.as_ref()),
-        opts.maybe_vendor_override.as_ref(),
-      );
+      if cfg!(debug_assertions) {
+        let expected_vendor_dir = resolve_vendor_dir(
+          workspace_with_members.root_deno_json().map(|d| d.as_ref()),
+          opts.maybe_vendor_override.as_ref(),
+        );
+        debug_assert_eq!(
+          expected_vendor_dir, workspace_with_members.vendor_dir,
+          "should not be using a different vendor dir across calls"
+        );
+      }
+
       return handle_workspace_with_members(
         workspace_with_members,
-        maybe_vendor_dir,
         first_config_folder_url.as_ref(),
         found_config_folders,
         opts,
@@ -405,14 +415,13 @@ fn discover_workspace_config_files_for_single_dir(
       );
       let root_workspace = resolve_workspace_for_config_folder(
         root_config_folder,
-        maybe_vendor_dir.as_ref(),
+        maybe_vendor_dir,
         opts,
         &mut found_config_folders,
         load_config_folder,
       )?;
       return handle_workspace_with_members(
         root_workspace,
-        maybe_vendor_dir,
         first_config_folder_url.as_ref(),
         found_config_folders,
         opts,
@@ -423,12 +432,18 @@ fn discover_workspace_config_files_for_single_dir(
     if first_config_folder_url.is_none() {
       if let Some(workspace_cache) = &opts.workspace_cache {
         if let Some(workspace) = workspace_cache.get(current_dir) {
-          return Ok(ConfigFileDiscovery::Workspace {
-            workspace: workspace.clone(),
-            maybe_vendor_dir: resolve_vendor_dir(
+          if cfg!(debug_assertions) {
+            let expected_vendor_dir = resolve_vendor_dir(
               root_config_folder.deno_json().map(|d| d.as_ref()),
               opts.maybe_vendor_override.as_ref(),
-            ),
+            );
+            debug_assert_eq!(
+              expected_vendor_dir, workspace.vendor_dir,
+              "should not be using a different vendor dir across calls"
+            );
+          }
+          return Ok(ConfigFileDiscovery::Workspace {
+            workspace: workspace.clone(),
           });
         }
       }
@@ -446,14 +461,12 @@ fn discover_workspace_config_files_for_single_dir(
       config_folder.deno_json().map(|d| d.as_ref()),
       opts.maybe_vendor_override.as_ref(),
     );
-    let workspace = new_rc(Workspace::new_single(config_folder));
+    let workspace =
+      new_rc(Workspace::new_single(config_folder, maybe_vendor_dir));
     if let Some(cache) = opts.workspace_cache {
       cache.set(workspace.root_dir_path(), workspace.clone());
     }
-    Ok(ConfigFileDiscovery::Workspace {
-      workspace,
-      maybe_vendor_dir,
-    })
+    Ok(ConfigFileDiscovery::Workspace { workspace })
   } else {
     Ok(ConfigFileDiscovery::None {
       maybe_vendor_dir: resolve_vendor_dir(
@@ -466,7 +479,6 @@ fn discover_workspace_config_files_for_single_dir(
 
 fn handle_workspace_with_members(
   root_workspace: WorkspaceRc,
-  maybe_vendor_dir: Option<PathBuf>,
   first_config_folder_url: Option<&Url>,
   mut found_config_folders: HashMap<Url, ConfigFolder>,
   opts: &WorkspaceDiscoverOptions,
@@ -486,14 +498,12 @@ fn handle_workspace_with_members(
           config_folder.deno_json().map(|d| d.as_ref()),
           opts.maybe_vendor_override.as_ref(),
         );
-        let workspace = new_rc(Workspace::new_single(config_folder));
+        let workspace =
+          new_rc(Workspace::new_single(config_folder, maybe_vendor_dir));
         if let Some(cache) = opts.workspace_cache {
           cache.set(workspace.root_dir_path(), workspace.clone());
         }
-        return Ok(ConfigFileDiscovery::Workspace {
-          maybe_vendor_dir,
-          workspace,
-        });
+        return Ok(ConfigFileDiscovery::Workspace { workspace });
       }
     }
   }
@@ -533,13 +543,12 @@ fn handle_workspace_with_members(
 
   Ok(ConfigFileDiscovery::Workspace {
     workspace: root_workspace,
-    maybe_vendor_dir,
   })
 }
 
 fn resolve_workspace_for_config_folder(
   root_config_folder: ConfigFolder,
-  maybe_vendor_dir: Option<&PathBuf>,
+  maybe_vendor_dir: Option<PathBuf>,
   opts: &WorkspaceDiscoverOptions,
   found_config_folders: &mut HashMap<Url, ConfigFolder>,
   load_config_folder: impl Fn(
@@ -657,7 +666,7 @@ fn resolve_workspace_for_config_folder(
         FileCollector::new(|_| true)
           .ignore_git_folder()
           .ignore_node_modules()
-          .set_vendor_folder(maybe_vendor_dir.cloned())
+          .set_vendor_folder(maybe_vendor_dir.clone())
           .collect_file_patterns(
             opts.fs,
             FilePatterns {
@@ -720,6 +729,7 @@ fn resolve_workspace_for_config_folder(
   let workspace = new_rc(Workspace::new_with_members(
     root_config_folder,
     final_members,
+    maybe_vendor_dir,
   ));
 
   if let Some(cache) = opts.workspace_cache {

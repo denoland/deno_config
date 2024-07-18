@@ -313,10 +313,14 @@ impl FolderConfigs {
 pub struct Workspace {
   root_dir: UrlRc,
   config_folders: IndexMap<UrlRc, FolderConfigs>,
+  pub(crate) vendor_dir: Option<PathBuf>,
 }
 
 impl Workspace {
-  pub(crate) fn new_single(config_folder: ConfigFolder) -> Self {
+  pub(crate) fn new_single(
+    config_folder: ConfigFolder,
+    vendor_dir: Option<PathBuf>,
+  ) -> Self {
     let root_dir = new_rc(config_folder.folder_url());
     Workspace {
       config_folders: IndexMap::from([(
@@ -324,12 +328,14 @@ impl Workspace {
         FolderConfigs::from_config_folder(config_folder),
       )]),
       root_dir: root_dir.clone(),
+      vendor_dir,
     }
   }
 
   pub(crate) fn new_with_members(
     root: ConfigFolder,
     members: BTreeMap<UrlRc, ConfigFolder>,
+    vendor_dir: Option<PathBuf>,
   ) -> Self {
     let root_dir = new_rc(root.folder_url());
     let mut config_folders = IndexMap::with_capacity(members.len() + 1);
@@ -343,6 +349,7 @@ impl Workspace {
     Workspace {
       root_dir,
       config_folders,
+      vendor_dir,
     }
   }
 
@@ -576,23 +583,22 @@ pub struct WorkspaceContext {
   pub workspace: WorkspaceRc,
   /// The member context about the directory that workspace discovery started from.
   pub start_ctx: WorkspaceMemberContext,
-  vendor_dir: Option<PathBuf>,
 }
 
 impl WorkspaceContext {
   pub fn empty(opts: WorkspaceEmptyOptions) -> Self {
     WorkspaceContext::new(
       &opts.root_dir,
-      match opts.use_vendor_dir {
-        VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
-        VendorEnablement::Disable => None,
-      },
       new_rc(Workspace {
         config_folders: IndexMap::from([(
           opts.root_dir.clone(),
           FolderConfigs::default(),
         )]),
         root_dir: opts.root_dir.clone(),
+        vendor_dir: match opts.use_vendor_dir {
+          VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
+          VendorEnablement::Disable => None,
+        },
       }),
     )
   }
@@ -676,13 +682,13 @@ impl WorkspaceContext {
             FolderConfigs::default(),
           )]),
           root_dir: start_dir.clone(),
+          vendor_dir,
         });
-        WorkspaceContext::new(&start_dir, vendor_dir, workspace)
+        WorkspaceContext::new(&start_dir, workspace)
       }
-      ConfigFileDiscovery::Workspace {
-        workspace,
-        maybe_vendor_dir: vendor_dir,
-      } => WorkspaceContext::new(&start_dir, vendor_dir, workspace),
+      ConfigFileDiscovery::Workspace { workspace } => {
+        WorkspaceContext::new(&start_dir, workspace)
+      }
     };
     debug_assert!(
       context
@@ -694,15 +700,10 @@ impl WorkspaceContext {
     Ok(context)
   }
 
-  fn new(
-    start_dir: &Url,
-    vendor_dir: Option<PathBuf>,
-    workspace: WorkspaceRc,
-  ) -> Self {
+  fn new(start_dir: &Url, workspace: WorkspaceRc) -> Self {
     let start_member_ctx = workspace.resolve_member_ctx(start_dir);
     Self {
       workspace,
-      vendor_dir,
       start_ctx: start_member_ctx,
     }
   }
@@ -855,7 +856,7 @@ impl WorkspaceContext {
   }
 
   pub fn vendor_dir_path(&self) -> Option<&PathBuf> {
-    self.vendor_dir.as_ref()
+    self.workspace.vendor_dir.as_ref()
   }
 
   pub fn to_compiler_options(
@@ -2042,8 +2043,7 @@ mod test {
     });
     // root
     {
-      let tasks_config =
-        workspace_ctx.start_ctx.to_tasks_config().unwrap();
+      let tasks_config = workspace_ctx.start_ctx.to_tasks_config().unwrap();
       assert_eq!(
         tasks_config,
         WorkspaceTasksConfig {
