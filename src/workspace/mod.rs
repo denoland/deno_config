@@ -4650,6 +4650,84 @@ mod test {
     assert_eq!(deno_json_cache.0.borrow().len(), 0);
   }
 
+  #[test]
+  fn deno_workspace_discovery_workspace_cache() {
+    let mut fs = TestFileSystem::default();
+    fs.insert(
+      root_dir().join("member/package-a/deno.json"),
+      r#"{ "name": "member-a" }"#,
+    );
+    fs.insert(
+      root_dir().join("member/package-b/deno.json"),
+      r#"{ "name": "member-b" }"#,
+    );
+    fs.insert(
+      root_dir().join("deno.json"),
+      r#"{ "workspace": ["member/package-a", "member/package-b"] }"#,
+    );
+    let deno_json_cache = DenoJsonMemCache::default();
+    let pkg_json_cache = PkgJsonMemCache::default();
+    let workspace_cache = WorkspaceMemCache::default();
+    for start_dir in [
+      root_dir(),
+      root_dir().join("member/package-a"),
+      root_dir().join("member/package-b"),
+    ] {
+      let workspace_ctx = WorkspaceContext::discover(
+        WorkspaceDiscoverStart::Paths(&[start_dir]),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          discover_pkg_json: true,
+          deno_json_cache: Some(&deno_json_cache),
+          pkg_json_cache: Some(&pkg_json_cache),
+          workspace_cache: Some(&workspace_cache),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+      assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 3);
+    }
+  }
+
+  #[test]
+  fn npm_workspace_discovery_workspace_cache() {
+    let mut fs = TestFileSystem::default();
+    fs.insert(
+      root_dir().join("member/package-a/package.json"),
+      r#"{ "name": "member-a" }"#,
+    );
+    fs.insert(
+      root_dir().join("member/package-b/package.json"),
+      r#"{ "name": "member-b" }"#,
+    );
+    fs.insert(
+      root_dir().join("package.json"),
+      r#"{ "workspaces": ["member/*"] }"#,
+    );
+    let deno_json_cache = DenoJsonMemCache::default();
+    let pkg_json_cache = PkgJsonMemCache::default();
+    let workspace_cache = WorkspaceMemCache::default();
+    for start_dir in [
+      root_dir(),
+      root_dir().join("member/package-a"),
+      root_dir().join("member/package-b"),
+    ] {
+      let workspace_ctx = WorkspaceContext::discover(
+        WorkspaceDiscoverStart::Paths(&[start_dir]),
+        &WorkspaceDiscoverOptions {
+          fs: &fs,
+          discover_pkg_json: true,
+          deno_json_cache: Some(&deno_json_cache),
+          pkg_json_cache: Some(&pkg_json_cache),
+          workspace_cache: Some(&workspace_cache),
+          ..Default::default()
+        },
+      )
+      .unwrap();
+      assert_eq!(workspace_ctx.workspace.package_jsons().count(), 3);
+    }
+  }
+
   fn workspace_for_root_and_member(
     root: serde_json::Value,
     member: serde_json::Value,
