@@ -74,14 +74,14 @@ type WorkspaceRc = crate::sync::MaybeArc<Workspace>;
 pub struct JsrPackageConfig {
   /// The package name.
   pub name: String,
-  pub member_ctx: WorkspaceContext,
+  pub member_dir: WorkspaceDirectory,
   pub config_file: ConfigFileRc,
 }
 
 #[derive(Debug, Clone)]
 pub struct NpmPackageConfig {
   pub nv: PackageNv,
-  pub member_ctx: WorkspaceContext,
+  pub workspace_dir: WorkspaceDirectory,
   pub pkg_json: PackageJsonRc,
 }
 
@@ -273,7 +273,7 @@ pub struct WorkspaceDiscoverOptions<'a> {
 }
 
 #[derive(Clone)]
-pub struct WorkspaceEmptyOptions<'a> {
+pub struct WorkspaceDirectoryEmptyOptions<'a> {
   pub root_dir: UrlRc,
   pub use_vendor_dir: VendorEnablement<'a>,
 }
@@ -399,7 +399,7 @@ impl Workspace {
           return None;
         }
         Some(JsrPackageConfig {
-          member_ctx: self.resolve_member_ctx(&c.specifier),
+          member_dir: self.resolve_member_dir(&c.specifier),
           name: c.json.name.clone()?,
           config_file: c.clone(),
         })
@@ -412,7 +412,7 @@ impl Workspace {
       .package_jsons()
       .filter_map(|c| {
         Some(NpmPackageConfig {
-          member_ctx: self.resolve_member_ctx(&c.specifier()),
+          workspace_dir: self.resolve_member_dir(&c.specifier()),
           nv: PackageNv {
             name: c.name.clone()?,
             version: {
@@ -428,11 +428,11 @@ impl Workspace {
 
   /// Resolves a workspace directory, which can be used for deriving
   /// configuration specific to a member.
-  pub fn resolve_member_ctx(
+  pub fn resolve_member_dir(
     self: &WorkspaceRc,
     specifier: &Url,
-  ) -> WorkspaceContext {
-    WorkspaceContext::new(specifier, self.clone())
+  ) -> WorkspaceDirectory {
+    WorkspaceDirectory::new(specifier, self.clone())
   }
 
   pub fn resolve_deno_json(
@@ -706,36 +706,36 @@ impl Workspace {
   pub fn resolve_bench_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceContext, BenchConfig)>, AnyError> {
-    self.resolve_config_for_members(cli_args, |ctx, patterns| {
-      ctx.to_bench_config(patterns)
+  ) -> Result<Vec<(WorkspaceDirectory, BenchConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |dir, patterns| {
+      dir.to_bench_config(patterns)
     })
   }
 
   pub fn resolve_lint_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceContext, LintConfig)>, AnyError> {
-    self.resolve_config_for_members(cli_args, |ctx, patterns| {
-      ctx.to_lint_config(patterns)
+  ) -> Result<Vec<(WorkspaceDirectory, LintConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |dir, patterns| {
+      dir.to_lint_config(patterns)
     })
   }
 
   pub fn resolve_fmt_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceContext, FmtConfig)>, AnyError> {
-    self.resolve_config_for_members(cli_args, |ctx, patterns| {
-      ctx.to_fmt_config(patterns)
+  ) -> Result<Vec<(WorkspaceDirectory, FmtConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |dir, patterns| {
+      dir.to_fmt_config(patterns)
     })
   }
 
   pub fn resolve_test_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceContext, TestConfig)>, AnyError> {
-    self.resolve_config_for_members(cli_args, |ctx, patterns| {
-      ctx.to_test_config(patterns)
+  ) -> Result<Vec<(WorkspaceDirectory, TestConfig)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |dir, patterns| {
+      dir.to_test_config(patterns)
     })
   }
 
@@ -743,16 +743,16 @@ impl Workspace {
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
     resolve_config: impl Fn(
-      &WorkspaceContext,
+      &WorkspaceDirectory,
       FilePatterns,
     ) -> Result<TConfig, AnyError>,
-  ) -> Result<Vec<(WorkspaceContext, TConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceDirectory, TConfig)>, AnyError> {
     let cli_args_by_folder = self.split_cli_args_by_deno_json_folder(cli_args);
     let mut result = Vec::with_capacity(cli_args_by_folder.len());
     for (folder_url, patterns) in cli_args_by_folder {
-      let ctx = self.resolve_member_ctx(&folder_url);
-      let config = resolve_config(&ctx, patterns)?;
-      result.push((ctx, config));
+      let dir = self.resolve_member_dir(&folder_url);
+      let config = resolve_config(&dir, patterns)?;
+      result.push((dir, config));
     }
     Ok(result)
   }
@@ -919,7 +919,7 @@ struct WorkspaceDirConfig<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkspaceContext {
+pub struct WorkspaceDirectory {
   pub workspace: WorkspaceRc,
   /// The directory that this context is for. This is generally the cwd.
   dir_url: UrlRc,
@@ -927,9 +927,9 @@ pub struct WorkspaceContext {
   deno_json: Option<WorkspaceDirConfig<ConfigFile>>,
 }
 
-impl WorkspaceContext {
-  pub fn empty(opts: WorkspaceEmptyOptions) -> Self {
-    WorkspaceContext::new(
+impl WorkspaceDirectory {
+  pub fn empty(opts: WorkspaceDirectoryEmptyOptions) -> Self {
+    WorkspaceDirectory::new(
       &opts.root_dir,
       new_rc(Workspace {
         config_folders: IndexMap::from([(
@@ -1026,10 +1026,10 @@ impl WorkspaceContext {
           root_dir: start_dir.clone(),
           vendor_dir,
         });
-        WorkspaceContext::new(&start_dir, workspace)
+        WorkspaceDirectory::new(&start_dir, workspace)
       }
       ConfigFileDiscovery::Workspace { workspace } => {
-        WorkspaceContext::new(&start_dir, workspace)
+        WorkspaceDirectory::new(&start_dir, workspace)
       }
     };
     debug_assert!(
@@ -1119,7 +1119,7 @@ impl WorkspaceContext {
     let root_folder =
       workspace.config_folders.get(&workspace.root_dir).unwrap();
     let dir_url = workspace.root_dir.clone();
-    WorkspaceContext {
+    WorkspaceDirectory {
       dir_url,
       pkg_json: root_folder.pkg_json.as_ref().map(|config| {
         WorkspaceDirConfig {
@@ -1153,11 +1153,11 @@ impl WorkspaceContext {
       return vec![package_config];
     }
     if let Some(pkg_json) = &self.pkg_json {
-      let ctx_dir_path = self.dir_url.to_file_path().unwrap();
+      let dir_path = self.dir_url.to_file_path().unwrap();
       // don't publish anything if in a package.json only directory within
       // a workspace
-      if pkg_json.member.dir_path().starts_with(&ctx_dir_path)
-        && ctx_dir_path != pkg_json.member.dir_path()
+      if pkg_json.member.dir_path().starts_with(&dir_path)
+        && dir_path != pkg_json.member.dir_path()
       {
         return Vec::new();
       }
@@ -1207,7 +1207,7 @@ impl WorkspaceContext {
     Some(JsrPackageConfig {
       name: pkg_name.clone(),
       config_file: deno_json.clone(),
-      member_ctx: self.clone(),
+      member_dir: self.clone(),
     })
   }
 
@@ -1829,7 +1829,7 @@ mod test {
       }),
     );
 
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir().join("sub_dir")]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -1839,7 +1839,7 @@ mod test {
     .unwrap();
 
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .deno_jsons()
         .map(|d| d.specifier.to_file_path().unwrap())
@@ -1859,7 +1859,7 @@ mod test {
     );
     fs.insert_json(root_dir().join("member/a/deno.json"), json!({}));
 
-    let workspace_config_err = WorkspaceContext::discover(
+    let workspace_config_err = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -1886,7 +1886,7 @@ mod test {
         }),
       );
 
-      let workspace_config_err = WorkspaceContext::discover(
+      let workspace_config_err = WorkspaceDirectory::discover(
         WorkspaceDiscoverStart::Paths(&[root_dir().join("sub_dir")]),
         &WorkspaceDiscoverOptions {
           fs: &fs,
@@ -1913,7 +1913,7 @@ mod test {
       }),
     );
 
-    let workspace_config_err = WorkspaceContext::discover(
+    let workspace_config_err = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -1951,7 +1951,7 @@ mod test {
     fs.insert_json(root_dir().join("a/deno.json"), config_text_a);
     fs.insert_json(root_dir().join("b/deno.jsonc"), config_text_b);
 
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -1959,7 +1959,7 @@ mod test {
       },
     )
     .unwrap();
-    assert_eq!(workspace_ctx.workspace.config_folders.len(), 3);
+    assert_eq!(workspace_dir.workspace.config_folders.len(), 3);
   }
 
   #[test]
@@ -1992,7 +1992,7 @@ mod test {
         }
       }),
     );
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       // start at root for this test
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
@@ -2002,7 +2002,7 @@ mod test {
       },
     )
     .unwrap();
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
     let root_deno_json = Some(WorkspaceMemberTasksConfigFile {
       folder_url: Url::from_directory_path(root_dir()).unwrap(),
       tasks: IndexMap::from([
@@ -2019,7 +2019,7 @@ mod test {
     });
     // root
     {
-      let tasks_config = workspace_ctx.to_tasks_config().unwrap();
+      let tasks_config = workspace_dir.to_tasks_config().unwrap();
       assert_eq!(
         tasks_config,
         WorkspaceTasksConfig {
@@ -2031,10 +2031,10 @@ mod test {
     }
     // member
     {
-      let member_ctx = workspace_ctx.workspace.resolve_member_ctx(
+      let member_dir = workspace_dir.workspace.resolve_member_dir(
         &Url::from_directory_path(root_dir().join("member/deno.json")).unwrap(),
       );
-      let tasks_config = member_ctx.to_tasks_config().unwrap();
+      let tasks_config = member_dir.to_tasks_config().unwrap();
       assert_eq!(
         tasks_config,
         WorkspaceTasksConfig {
@@ -2058,11 +2058,11 @@ mod test {
     }
     // pkg json
     {
-      let member_ctx = workspace_ctx.workspace.resolve_member_ctx(
+      let member_dir = workspace_dir.workspace.resolve_member_dir(
         &Url::from_directory_path(root_dir().join("pkg_json/package.json"))
           .unwrap(),
       );
-      let tasks_config = member_ctx.to_tasks_config().unwrap();
+      let tasks_config = member_dir.to_tasks_config().unwrap();
       assert_eq!(
         tasks_config,
         WorkspaceTasksConfig {
@@ -2085,7 +2085,7 @@ mod test {
 
   #[test]
   fn test_root_member_compiler_options() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "compilerOptions": {
           "checkJs": true,
@@ -2102,7 +2102,7 @@ mod test {
       }),
     );
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .to_compiler_options()
         .unwrap()
@@ -2116,14 +2116,14 @@ mod test {
       })
     );
     assert_eq!(
-      workspace_ctx.workspace.to_compiler_option_types().unwrap(),
+      workspace_dir.workspace.to_compiler_option_types().unwrap(),
       vec![(
         Url::from_file_path(root_dir().join("deno.json")).unwrap(),
         vec!["./types.d.ts".to_string()]
       )]
     );
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .to_maybe_jsx_import_source_config()
         .unwrap()
@@ -2135,9 +2135,9 @@ mod test {
         base_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
       }
     );
-    assert_eq!(workspace_ctx.workspace.check_js(), true);
+    assert_eq!(workspace_dir.workspace.check_js(), true);
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .resolve_ts_config_for_emit(TsConfigType::Emit)
         .unwrap(),
@@ -2161,7 +2161,7 @@ mod test {
       }
     );
     assert_eq!(
-      workspace_ctx.workspace.diagnostics(),
+      workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
@@ -2172,7 +2172,7 @@ mod test {
 
   #[test]
   fn test_root_member_import_map() {
-    let workspace_ctx = workspace_for_root_and_member_with_fs(
+    let workspace_dir = workspace_for_root_and_member_with_fs(
       json!({
         "importMap": "./other.json",
       }),
@@ -2185,7 +2185,7 @@ mod test {
       },
     );
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .to_import_map_specifier()
         .unwrap()
@@ -2193,7 +2193,7 @@ mod test {
       Url::from_file_path(root_dir().join("other.json")).unwrap()
     );
     assert_eq!(
-      workspace_ctx.workspace.diagnostics(),
+      workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("importMap"),
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
@@ -2204,7 +2204,7 @@ mod test {
 
   #[tokio::test]
   async fn test_root_member_imports_and_scopes() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "imports": {
           "@scope/pkg": "jsr:@scope/pkg@1"
@@ -2228,14 +2228,14 @@ mod test {
       }),
     );
     assert_eq!(
-      workspace_ctx.workspace.diagnostics(),
+      workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("scopes"),
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
           .unwrap(),
       }]
     );
-    let resolver = workspace_ctx
+    let resolver = workspace_dir
       .create_resolver(Default::default(), |_| async move {
         unreachable!();
       })
@@ -2267,7 +2267,7 @@ mod test {
 
   #[test]
   fn test_imports_with_import_map() {
-    let workspace_ctx = workspace_for_root_and_member_with_fs(
+    let workspace_dir = workspace_for_root_and_member_with_fs(
       json!({
         "imports": {},
         "importMap": "./other.json",
@@ -2278,7 +2278,7 @@ mod test {
       },
     );
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .to_import_map_specifier()
         .unwrap()
@@ -2286,7 +2286,7 @@ mod test {
       Url::from_file_path(root_dir().join("other.json")).unwrap()
     );
     assert_eq!(
-      workspace_ctx.workspace.diagnostics(),
+      workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::ImportMapReferencingImportMap,
         config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
@@ -2296,7 +2296,7 @@ mod test {
 
   #[test]
   fn test_root_member_exclude() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "exclude": [
           "./root",
@@ -2312,9 +2312,9 @@ mod test {
         ]
       }),
     );
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let lint_config = workspace_ctx
-      .to_lint_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let lint_config = workspace_dir
+      .to_lint_config(FilePatterns::new_with_base(workspace_dir.dir_path()))
       .unwrap();
     assert_eq!(
       lint_config.files,
@@ -2340,7 +2340,7 @@ mod test {
 
   #[test]
   fn test_root_member_lint_combinations() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "lint": {
           "report": "json",
@@ -2363,7 +2363,7 @@ mod test {
       }),
     );
     assert_eq!(
-      workspace_ctx.workspace.diagnostics(),
+      workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("lint.report"),
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
@@ -2371,13 +2371,13 @@ mod test {
       }]
     );
     assert_eq!(
-      workspace_ctx.workspace.to_lint_config().unwrap(),
+      workspace_dir.workspace.to_lint_config().unwrap(),
       WorkspaceLintConfig {
         report: Some("json".to_string()),
       }
     );
-    let lint_config = workspace_ctx
-      .to_lint_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
+    let lint_config = workspace_dir
+      .to_lint_config(FilePatterns::new_with_base(workspace_dir.dir_path()))
       .unwrap();
     assert_eq!(
       lint_config,
@@ -2400,9 +2400,9 @@ mod test {
     );
 
     // check the root context
-    let root_ctx = workspace_ctx
+    let root_ctx = workspace_dir
       .workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
     let root_lint_config = root_ctx
       .to_lint_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
@@ -2431,7 +2431,7 @@ mod test {
 
   #[test]
   fn test_root_member_fmt_combinations() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "fmt": {
           "useTabs": true,
@@ -2454,9 +2454,9 @@ mod test {
         }
       }),
     );
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let fmt_config = workspace_ctx
-      .to_fmt_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let fmt_config = workspace_dir
+      .to_fmt_config(FilePatterns::new_with_base(workspace_dir.dir_path()))
       .unwrap();
     assert_eq!(
       fmt_config,
@@ -2480,9 +2480,9 @@ mod test {
     );
 
     // check the root context
-    let root_ctx = workspace_ctx
+    let root_ctx = workspace_dir
       .workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
     let root_fmt_config = root_ctx
       .to_fmt_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
@@ -2512,7 +2512,7 @@ mod test {
 
   #[test]
   fn test_root_member_bench_combinations() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({}),
       json!({
         "bench": {
@@ -2520,9 +2520,9 @@ mod test {
         }
       }),
     );
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let bench_config = workspace_ctx
-      .to_bench_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let bench_config = workspace_dir
+      .to_bench_config(FilePatterns::new_with_base(workspace_dir.dir_path()))
       .unwrap();
     assert_eq!(
       bench_config,
@@ -2538,9 +2538,9 @@ mod test {
     );
 
     // check the root context
-    let root_ctx = workspace_ctx
+    let root_ctx = workspace_dir
       .workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
     let root_bench_config = root_ctx
       .to_bench_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
@@ -2562,7 +2562,7 @@ mod test {
 
   #[test]
   fn test_root_member_test_combinations() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({}),
       json!({
         "test": {
@@ -2570,9 +2570,9 @@ mod test {
         }
       }),
     );
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let config = workspace_ctx
-      .to_test_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let config = workspace_dir
+      .to_test_config(FilePatterns::new_with_base(workspace_dir.dir_path()))
       .unwrap();
     assert_eq!(
       config,
@@ -2588,9 +2588,9 @@ mod test {
     );
 
     // check the root context
-    let root_ctx = workspace_ctx
+    let root_ctx = workspace_dir
       .workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
     let root_test_config = root_ctx
       .to_test_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
@@ -2612,7 +2612,7 @@ mod test {
 
   #[test]
   fn test_root_member_publish_combinations() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "publish": {
           "exclude": ["other"]
@@ -2627,8 +2627,8 @@ mod test {
         ],
       }),
     );
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let config = workspace_ctx.to_publish_config().unwrap();
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let config = workspace_dir.to_publish_config().unwrap();
     assert_eq!(
       config,
       PublishConfig {
@@ -2645,9 +2645,9 @@ mod test {
     );
 
     // check the root context
-    let root_publish_config = workspace_ctx
+    let root_publish_config = workspace_dir
       .workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap())
+      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap())
       .to_publish_config()
       .unwrap();
     assert_eq!(
@@ -2669,8 +2669,8 @@ mod test {
 
   #[test]
   fn test_root_member_empty_config_resolves_excluded_members() {
-    let workspace_ctx = workspace_for_root_and_member(json!({}), json!({}));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
+    let workspace_dir = workspace_for_root_and_member(json!({}), json!({}));
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
     let expected_root_files = FilePatterns {
       base: root_dir(),
       include: None,
@@ -2680,9 +2680,9 @@ mod test {
         root_dir().join("member"),
       )])),
     };
-    let root_ctx = workspace_ctx
+    let root_ctx = workspace_dir
       .workspace
-      .resolve_member_ctx(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
     let expected_member_files = FilePatterns {
       base: root_dir().join("member"),
       include: None,
@@ -2691,7 +2691,7 @@ mod test {
 
     for (expected_files, ctx) in [
       (expected_root_files, root_ctx),
-      (expected_member_files, workspace_ctx),
+      (expected_member_files, workspace_dir),
     ] {
       assert_eq!(
         ctx
@@ -2738,7 +2738,7 @@ mod test {
 
   #[test]
   fn test_root_member_root_only_in_member() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "unstable": ["byonm"],
         "lock": false,
@@ -2754,26 +2754,26 @@ mod test {
     );
     // ignores member config
     assert_eq!(
-      workspace_ctx.workspace.unstable_features(),
+      workspace_dir.workspace.unstable_features(),
       &["byonm".to_string()]
     );
-    assert!(workspace_ctx.workspace.has_unstable("byonm"));
-    assert!(!workspace_ctx.workspace.has_unstable("sloppy-imports"));
+    assert!(workspace_dir.workspace.has_unstable("byonm"));
+    assert!(!workspace_dir.workspace.has_unstable("sloppy-imports"));
     assert_eq!(
-      workspace_ctx.workspace.resolve_lockfile_path().unwrap(),
+      workspace_dir.workspace.resolve_lockfile_path().unwrap(),
       None
     );
-    assert_eq!(workspace_ctx.workspace.node_modules_dir(), Some(false));
+    assert_eq!(workspace_dir.workspace.node_modules_dir(), Some(false));
     assert_eq!(
-      workspace_ctx.workspace.resolve_lockfile_path().unwrap(),
+      workspace_dir.workspace.resolve_lockfile_path().unwrap(),
       None
     );
     assert_eq!(
-      workspace_ctx.workspace.vendor_dir_path().unwrap(),
+      workspace_dir.workspace.vendor_dir_path().unwrap(),
       &root_dir().join("vendor")
     );
     assert_eq!(
-      workspace_ctx.workspace.diagnostics(),
+      workspace_dir.workspace.diagnostics(),
       vec![
         WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("lock"),
@@ -2801,7 +2801,7 @@ mod test {
 
   #[test]
   fn test_root_member_pkg_only_fields_on_workspace_root() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "name": "@scope/name",
         "version": "1.0.0",
@@ -2810,7 +2810,7 @@ mod test {
       json!({}),
     );
     // this is fine because we can tell it's a package by it having name and exports fields
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
   }
 
   #[test]
@@ -2828,7 +2828,7 @@ mod test {
         "workspace": ["./other_dir"]
       }),
     );
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       // start at root for this test
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
@@ -2838,7 +2838,7 @@ mod test {
     )
     .unwrap();
     assert_eq!(
-      workspace_ctx.workspace.diagnostics(),
+      workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("workspace"),
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
@@ -2873,7 +2873,7 @@ mod test {
   ) {
     let mut fs = TestFileSystem::default();
     fs.insert_json(root_dir().join("deno.json"), json);
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -2882,7 +2882,7 @@ mod test {
     )
     .unwrap();
     assert_eq!(
-      workspace_ctx.workspace.diagnostics(),
+      workspace_dir.workspace.diagnostics(),
       kinds
         .into_iter()
         .map(|kind| {
@@ -2912,7 +2912,7 @@ mod test {
     });
     fs.insert_json(root_dir().join("member1").join("deno.json"), pkg.clone());
     fs.insert_json(root_dir().join("member2").join("deno.json"), pkg.clone());
-    let err = WorkspaceContext::discover(
+    let err = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -2955,9 +2955,9 @@ mod test {
         "exports": "./main.ts",
       }),
     );
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("member"));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
     let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
   }
@@ -3001,37 +3001,37 @@ mod test {
     );
     // root
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/a", "@scope/b"]);
     }
     // member
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("a"));
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("a"));
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/a"]);
     }
     // member, not a package
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("c"));
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("c"));
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       assert!(jsr_pkgs.is_empty());
     }
     // package.json
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("d"));
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("d"));
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       assert!(jsr_pkgs.is_empty());
 
       // while we're here, test this
       assert_eq!(
-        workspace_ctx
+        workspace_dir
           .workspace
           .package_jsons()
           .map(|p| p.dir_path().to_path_buf())
@@ -3039,7 +3039,7 @@ mod test {
         vec![root_dir().join("d")]
       );
       assert_eq!(
-        workspace_ctx
+        workspace_dir
           .workspace
           .npm_packages()
           .into_iter()
@@ -3072,18 +3072,18 @@ mod test {
     );
     // in a member
     {
-      let workspace_ctx =
+      let workspace_dir =
         workspace_at_start_dir(&fs, &root_dir().join("member"));
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/pkg"]);
     }
     // at the root
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       // Only returns the root package because it allows for publishing
       // this individually. If someone wants the behaviour of publishing
@@ -3111,9 +3111,9 @@ mod test {
       }),
     );
     // the workspace is not a jsr package so publish the members
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
     let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
   }
@@ -3160,35 +3160,35 @@ mod test {
     );
     // root
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/a", "@scope/b"]);
     }
     // member
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("a"));
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("a"));
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
       assert_eq!(names, vec!["@scope/a"]);
     }
     // member, not a package
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("c"));
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("c"));
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       assert!(jsr_pkgs.is_empty());
     }
     // package.json
     {
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("d"));
-      assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-      let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("d"));
+      assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+      let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       assert!(jsr_pkgs.is_empty());
       assert_eq!(
-        workspace_ctx
+        workspace_dir
           .workspace
           .npm_packages()
           .into_iter()
@@ -3210,13 +3210,13 @@ mod test {
         "version": "1.0.0"
       }),
     );
-    let workspace_ctx = workspace_at_start_dir(
+    let workspace_dir = workspace_at_start_dir(
       &fs,
       &root_dir().join("node_modules/package/sub_dir"),
     );
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 0);
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 1);
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 0);
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
   }
 
   #[test]
@@ -3286,7 +3286,7 @@ mod test {
       assert_err(&err, &config_file_path);
 
       // try for when the config file is specified as well
-      let err = WorkspaceContext::discover(
+      let err = WorkspaceDirectory::discover(
         WorkspaceDiscoverStart::ConfigFile(&config_file_path),
         &WorkspaceDiscoverOptions {
           fs: &fs,
@@ -3317,7 +3317,7 @@ mod test {
       fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
       let config_file_path = root_dir().join("member-b").join(file_name);
       fs.insert_json(config_file_path.clone(), json!({}));
-      let workspace_ctx = WorkspaceContext::discover(
+      let workspace_dir = WorkspaceDirectory::discover(
         WorkspaceDiscoverStart::ConfigFile(&config_file_path),
         &WorkspaceDiscoverOptions {
           fs: &fs,
@@ -3327,7 +3327,7 @@ mod test {
       )
       .unwrap();
       assert_eq!(
-        workspace_ctx
+        workspace_dir
           .workspace
           .deno_jsons()
           .map(|c| c.specifier.to_file_path().unwrap())
@@ -3378,11 +3378,11 @@ mod test {
     );
     fs.insert_json(root_dir().join("member/deno.json"), json!({}));
     fs.insert_json(root_dir().join("package/package.json"), json!({}));
-    let workspace_ctx =
+    let workspace_dir =
       workspace_at_start_dir(&fs, &root_dir().join("package"));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 2);
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 2);
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 2);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
   }
 
   #[test]
@@ -3396,11 +3396,11 @@ mod test {
     );
     fs.insert_json(root_dir().join("member/deno.json"), json!({}));
     fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    let workspace_ctx =
+    let workspace_dir =
       workspace_at_start_dir(&fs, &root_dir().join("package"));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 1);
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 2);
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
   }
 
   #[test]
@@ -3449,10 +3449,10 @@ mod test {
       root_dir().join("packages/package-b/package.json"),
       json!({}),
     );
-    let workspace_ctx =
+    let workspace_dir =
       workspace_at_start_dir(&fs, &root_dir().join("packages"));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 3);
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 3);
   }
 
   #[test]
@@ -3483,10 +3483,10 @@ mod test {
         root_dir().join("vendor/package-c/package.json"),
         json!({}),
       );
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-      assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
       assert_eq!(
-        workspace_ctx.workspace.package_jsons().count(),
+        workspace_dir.workspace.package_jsons().count(),
         expected_count
       );
     }
@@ -3517,9 +3517,9 @@ mod test {
         root_dir().join("ignored/package-c/package.json"),
         json!({}),
       );
-      let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-      assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-      assert_eq!(workspace_ctx.workspace.package_jsons().count(), 3);
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+      assert_eq!(workspace_dir.workspace.package_jsons().count(), 3);
     }
   }
 
@@ -3538,9 +3538,9 @@ mod test {
       }),
     );
     fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-    assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 2);
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
   }
 
   #[test]
@@ -3560,17 +3560,17 @@ mod test {
     );
     fs.insert_json(root_dir().join("package/package.json"), json!({}));
     // only resolves the member because it's not part of the workspace
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("member"));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 1);
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
     assert_eq!(
-      workspace_ctx.workspace.root_dir().to_file_path().unwrap(),
+      workspace_dir.workspace.root_dir().to_file_path().unwrap(),
       root_dir().join("member")
     );
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 0);
-    assert!(workspace_ctx.workspace.has_unstable("byonm"));
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 0);
+    assert!(workspace_dir.workspace.has_unstable("byonm"));
     assert_eq!(
-      workspace_ctx.workspace.resolve_lockfile_path().unwrap(),
+      workspace_dir.workspace.resolve_lockfile_path().unwrap(),
       Some(root_dir().join("member/deno.lock"))
     );
   }
@@ -3592,9 +3592,9 @@ mod test {
       }),
     );
     fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("member"));
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .diagnostics()
         .into_iter()
@@ -3605,15 +3605,15 @@ mod test {
         WorkspaceDiagnosticKind::RootOnlyOption("unstable")
       ]
     );
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 1);
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
     assert_eq!(
-      workspace_ctx.workspace.root_dir().to_file_path().unwrap(),
+      workspace_dir.workspace.root_dir().to_file_path().unwrap(),
       root_dir()
     );
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 2);
-    assert!(!workspace_ctx.workspace.has_unstable("byonm"));
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
+    assert!(!workspace_dir.workspace.has_unstable("byonm"));
     assert_eq!(
-      workspace_ctx.workspace.resolve_lockfile_path().unwrap(),
+      workspace_dir.workspace.resolve_lockfile_path().unwrap(),
       Some(root_dir().join("deno.lock"))
     );
   }
@@ -3635,13 +3635,13 @@ mod test {
     );
     fs.insert_json(root_dir().join("member/package.json"), json!({}));
     fs.insert("member/sub/sub_folder/sub/file.ts", "");
-    let workspace_ctx = workspace_at_start_dir(
+    let workspace_dir = workspace_at_start_dir(
       &fs,
       // note how we're starting in a sub folder of the member
       &root_dir().join("member/sub/sub_folder/sub/"),
     );
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .diagnostics()
         .into_iter()
@@ -3649,13 +3649,13 @@ mod test {
         .collect::<Vec<_>>(),
       vec![WorkspaceDiagnosticKind::RootOnlyOption("unstable")]
     );
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 1);
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
     assert_eq!(
-      workspace_ctx.workspace.root_dir().to_file_path().unwrap(),
+      workspace_dir.workspace.root_dir().to_file_path().unwrap(),
       root_dir()
     );
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 2);
-    assert!(!workspace_ctx.workspace.has_unstable("byonm"));
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
+    assert!(!workspace_dir.workspace.has_unstable("byonm"));
   }
 
   #[test]
@@ -3679,20 +3679,20 @@ mod test {
     );
     fs.insert_json(root_dir().join("member/sub/package.json"), json!({}));
     fs.insert("member/sub/sub_folder/sub/file.ts", "");
-    let workspace_ctx = workspace_at_start_dir(
+    let workspace_dir = workspace_at_start_dir(
       &fs,
       // note how we're starting in a sub folder of the member
       &root_dir().join("member/sub/sub_folder/sub/"),
     );
-    assert_eq!(workspace_ctx.workspace.diagnostics().len(), 2); // for each unstable
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 2);
+    assert_eq!(workspace_dir.workspace.diagnostics().len(), 2); // for each unstable
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 2);
     assert_eq!(
-      workspace_ctx.workspace.root_dir.to_file_path().unwrap(),
+      workspace_dir.workspace.root_dir.to_file_path().unwrap(),
       root_dir()
     );
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 3);
-    assert!(!workspace_ctx.workspace.has_unstable("sloppy-imports"));
-    assert!(!workspace_ctx.workspace.has_unstable("byonm"));
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 3);
+    assert!(!workspace_dir.workspace.has_unstable("sloppy-imports"));
+    assert!(!workspace_dir.workspace.has_unstable("byonm"));
   }
 
   #[test]
@@ -3707,14 +3707,14 @@ mod test {
     fs.insert_json(root_dir().join("member/package.json"), json!({}));
     fs.insert_json(root_dir().join("package/package.json"), json!({}));
     // only resolves the member because it's not part of the workspace
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir().join("member"));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 0);
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 0);
     assert_eq!(
-      workspace_ctx.workspace.root_dir().to_file_path().unwrap(),
+      workspace_dir.workspace.root_dir().to_file_path().unwrap(),
       root_dir().join("member")
     );
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 1);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 1);
   }
 
   #[test]
@@ -3734,7 +3734,7 @@ mod test {
         "exports": "./main.ts",
       }),
     );
-    let workspace_ctx = workspace_at_start_dirs(
+    let workspace_dir = workspace_at_start_dirs(
       &fs,
       &[
         root_dir().join("workspace/member"),
@@ -3742,8 +3742,8 @@ mod test {
       ],
     )
     .unwrap();
-    assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let jsr_pkgs = workspace_ctx.jsr_packages_for_publish();
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
     let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["@scope/pkg"]);
   }
@@ -3761,12 +3761,12 @@ mod test {
     fs.insert_json(root_dir().join("member/package.json"), json!({}));
     fs.insert_json(root_dir().join("member/nested/package.json"), json!({}));
     // only resolves the member because it's not part of the workspace
-    let workspace_ctx =
+    let workspace_dir =
       workspace_at_start_dir(&fs, &root_dir().join("member/nested"));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 0);
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 0);
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .package_jsons()
         .map(|p| p.path.clone())
@@ -3791,11 +3791,11 @@ mod test {
     fs.insert_json(root_dir().join("member/deno.json"), json!({}));
     fs.insert_json(root_dir().join("member/nested/package.json"), json!({}));
     // only resolves the member because it's not part of the workspace
-    let workspace_ctx =
+    let workspace_dir =
       workspace_at_start_dir(&fs, &root_dir().join("member/nested"));
-    assert_eq!(workspace_ctx.workspace.diagnostics(), Vec::new());
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 0);
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 2);
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 0);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
   }
 
   #[test]
@@ -3864,7 +3864,7 @@ mod test {
     fs.insert_json(root_dir().join("sub_dir/deno.json"), json!({}));
     let other_deno_json = root_dir().join("sub_dir/deno_other_name.json");
     fs.insert_json(&other_deno_json, json!({}));
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::ConfigFile(&other_deno_json),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -3874,7 +3874,7 @@ mod test {
     )
     .unwrap();
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .deno_jsons()
         .map(|d| d.specifier.clone())
@@ -3894,10 +3894,10 @@ mod test {
     );
     fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
     fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
     // single member
     {
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
@@ -3924,7 +3924,7 @@ mod test {
     }
     // root and in single member
     {
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![
@@ -3964,7 +3964,7 @@ mod test {
     }
     // multiple members (one with glob) and outside folder
     {
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![
@@ -4029,7 +4029,7 @@ mod test {
       let root_glob = PathOrPattern::Pattern(
         GlobPattern::from_relative(&root_dir(), "**/*").unwrap(),
       );
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![root_glob.clone()])),
@@ -4072,7 +4072,7 @@ mod test {
     }
     // single path in descendant of member
     {
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
@@ -4099,7 +4099,7 @@ mod test {
     }
     // path in descendant of member then second path that goes to a parent folder
     {
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![
@@ -4134,7 +4134,7 @@ mod test {
     // path outside the root directory
     {
       let dir_outside = normalize_path(root_dir().join("../dir_outside"));
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
@@ -4161,7 +4161,7 @@ mod test {
     {
       let dir_outside_1 = normalize_path(root_dir().join("../dir_outside_1"));
       let dir_outside_2 = normalize_path(root_dir().join("../dir_outside_2"));
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![
@@ -4192,13 +4192,13 @@ mod test {
   fn test_split_cli_args_by_deno_json_folder_no_config() {
     let mut fs = TestFileSystem::default();
     fs.insert(root_dir().join("path"), ""); // create the root directory
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
     // two paths, looped to ensure that the order is maintained on
     // the output and not sorted
     let path1 = normalize_path(root_dir().join("./path-longer"));
     let path2 = normalize_path(root_dir().join("./path"));
     for (path1, path2) in [(&path1, &path2), (&path2, &path1)] {
-      let split = workspace_ctx.workspace.split_cli_args_by_deno_json_folder(
+      let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
         &FilePatterns {
           base: root_dir(),
           include: Some(PathOrPatternSet::new(vec![
@@ -4229,7 +4229,7 @@ mod test {
   fn test_resolve_config_for_members_include_root_and_sub_member() {
     fn run_test(
       config_key: &str,
-      workspace_to_file_patterns: impl Fn(&WorkspaceContext) -> Vec<FilePatterns>,
+      workspace_to_file_patterns: impl Fn(&WorkspaceDirectory) -> Vec<FilePatterns>,
     ) {
       let mut fs = TestFileSystem::default();
       fs.insert_json(
@@ -4289,8 +4289,8 @@ mod test {
       );
     }
 
-    run_test("bench", |workspace_ctx| {
-      let config_for_members = workspace_ctx
+    run_test("bench", |workspace_dir| {
+      let config_for_members = workspace_dir
         .workspace
         .resolve_bench_config_for_members(&FilePatterns::new_with_base(
           root_dir(),
@@ -4302,8 +4302,8 @@ mod test {
         .collect::<Vec<_>>()
     });
 
-    run_test("fmt", |workspace_ctx| {
-      let config_for_members = workspace_ctx
+    run_test("fmt", |workspace_dir| {
+      let config_for_members = workspace_dir
         .workspace
         .resolve_fmt_config_for_members(
           &FilePatterns::new_with_base(root_dir()),
@@ -4315,8 +4315,8 @@ mod test {
         .collect::<Vec<_>>()
     });
 
-    run_test("lint", |workspace_ctx| {
-      let config_for_members = workspace_ctx
+    run_test("lint", |workspace_dir| {
+      let config_for_members = workspace_dir
         .workspace
         .resolve_lint_config_for_members(&FilePatterns::new_with_base(
           root_dir(),
@@ -4328,8 +4328,8 @@ mod test {
         .collect::<Vec<_>>()
     });
 
-    run_test("test", |workspace_ctx| {
-      let config_for_members = workspace_ctx
+    run_test("test", |workspace_dir| {
+      let config_for_members = workspace_dir
         .workspace
         .resolve_test_config_for_members(&FilePatterns::new_with_base(
           root_dir(),
@@ -4356,8 +4356,8 @@ mod test {
     );
     fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
     fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-    let config_for_members = workspace_ctx
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let config_for_members = workspace_dir
       .workspace
       .resolve_lint_config_for_members(&FilePatterns::new_with_base(root_dir()))
       .unwrap();
@@ -4432,8 +4432,8 @@ mod test {
         }
       }),
     );
-    let workspace_ctx = workspace_at_start_dir(&fs, &root_dir());
-    let config_for_members = workspace_ctx
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let config_for_members = workspace_dir
       .workspace
       .resolve_lint_config_for_members(&FilePatterns::new_with_base(root_dir()))
       .unwrap();
@@ -4477,14 +4477,14 @@ mod test {
 
   #[test]
   fn test_lock_path() {
-    let workspace_ctx = workspace_for_root_and_member(
+    let workspace_dir = workspace_for_root_and_member(
       json!({
         "lock": "other.lock",
       }),
       json!({}),
     );
     assert_eq!(
-      workspace_ctx.workspace.resolve_lockfile_path().unwrap(),
+      workspace_dir.workspace.resolve_lockfile_path().unwrap(),
       Some(root_dir().join("other.lock"))
     );
   }
@@ -4533,7 +4533,7 @@ mod test {
     let mut fs = TestFileSystem::default();
     fs.insert(root_dir().join("deno.json"), "{ \"nodeModulesDir\": true }");
     let cache = DenoJsonMemCache::default();
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -4544,7 +4544,7 @@ mod test {
     )
     .unwrap();
     assert_eq!(cache.0.borrow().len(), 1); // writes to the cache
-    assert_eq!(workspace_ctx.workspace.node_modules_dir(), Some(true));
+    assert_eq!(workspace_dir.workspace.node_modules_dir(), Some(true));
     let new_config_file = ConfigFile::new(
       r#"{ "nodeModulesDir": false }"#,
       Url::from_file_path(root_dir().join("deno.json")).unwrap(),
@@ -4555,7 +4555,7 @@ mod test {
       .0
       .borrow_mut()
       .insert(root_dir().join("deno.json"), new_rc(new_config_file));
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -4565,7 +4565,7 @@ mod test {
       },
     )
     .unwrap();
-    assert_eq!(workspace_ctx.workspace.node_modules_dir(), Some(false)); // reads from the cache
+    assert_eq!(workspace_dir.workspace.node_modules_dir(), Some(false)); // reads from the cache
   }
 
   #[test]
@@ -4573,7 +4573,7 @@ mod test {
     let mut fs = TestFileSystem::default();
     fs.insert(root_dir().join("package.json"), "{ \"name\": \"member\" }");
     let cache = PkgJsonMemCache::default();
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -4584,7 +4584,7 @@ mod test {
     )
     .unwrap();
     assert_eq!(cache.0.borrow().len(), 1); // writes to the cache
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 1);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 1);
     let new_pkg_json = PackageJson::load_from_string(
       root_dir().join("package.json"),
       r#"{ "name": "cached-name" }"#.to_string(),
@@ -4594,7 +4594,7 @@ mod test {
       .0
       .borrow_mut()
       .insert(root_dir().join("package.json"), new_rc(new_pkg_json));
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -4606,7 +4606,7 @@ mod test {
     .unwrap();
     // reads from the cache
     assert_eq!(
-      workspace_ctx
+      workspace_dir
         .workspace
         .package_jsons()
         .map(|p| p.name.as_deref().unwrap())
@@ -4633,7 +4633,7 @@ mod test {
     let deno_json_cache = DenoJsonMemCache::default();
     let pkg_json_cache = PkgJsonMemCache::default();
     let workspace_cache = WorkspaceMemCache::default();
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -4645,7 +4645,7 @@ mod test {
       },
     )
     .unwrap();
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 1);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 1);
     // writes to the caches
     assert_eq!(pkg_json_cache.0.borrow().len(), 1);
     assert_eq!(deno_json_cache.0.borrow().len(), 2);
@@ -4654,7 +4654,7 @@ mod test {
     deno_json_cache.0.borrow_mut().clear();
     pkg_json_cache.0.borrow_mut().clear();
     // should load and not write to the caches
-    let workspace_ctx = WorkspaceContext::discover(
+    let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
         fs: &fs,
@@ -4666,8 +4666,8 @@ mod test {
       },
     )
     .unwrap();
-    assert_eq!(workspace_ctx.workspace.package_jsons().count(), 1);
-    assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 2);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 1);
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 2);
     // it wouldn't have written to these because it just
     // loads from the workspace cache
     assert_eq!(pkg_json_cache.0.borrow().len(), 0);
@@ -4697,7 +4697,7 @@ mod test {
       root_dir().join("member/package-a"),
       root_dir().join("member/package-b"),
     ] {
-      let workspace_ctx = WorkspaceContext::discover(
+      let workspace_dir = WorkspaceDirectory::discover(
         WorkspaceDiscoverStart::Paths(&[start_dir]),
         &WorkspaceDiscoverOptions {
           fs: &fs,
@@ -4709,7 +4709,7 @@ mod test {
         },
       )
       .unwrap();
-      assert_eq!(workspace_ctx.workspace.deno_jsons().count(), 3);
+      assert_eq!(workspace_dir.workspace.deno_jsons().count(), 3);
     }
   }
 
@@ -4736,7 +4736,7 @@ mod test {
       root_dir().join("member/package-a"),
       root_dir().join("member/package-b"),
     ] {
-      let workspace_ctx = WorkspaceContext::discover(
+      let workspace_dir = WorkspaceDirectory::discover(
         WorkspaceDiscoverStart::Paths(&[start_dir]),
         &WorkspaceDiscoverOptions {
           fs: &fs,
@@ -4748,14 +4748,14 @@ mod test {
         },
       )
       .unwrap();
-      assert_eq!(workspace_ctx.workspace.package_jsons().count(), 3);
+      assert_eq!(workspace_dir.workspace.package_jsons().count(), 3);
     }
   }
 
   fn workspace_for_root_and_member(
     root: serde_json::Value,
     member: serde_json::Value,
-  ) -> WorkspaceContext {
+  ) -> WorkspaceDirectory {
     workspace_for_root_and_member_with_fs(root, member, |_| {})
   }
 
@@ -4763,7 +4763,7 @@ mod test {
     mut root: serde_json::Value,
     member: serde_json::Value,
     with_fs: impl FnOnce(&mut TestFileSystem),
-  ) -> WorkspaceContext {
+  ) -> WorkspaceDirectory {
     root
       .as_object_mut()
       .unwrap()
@@ -4779,7 +4779,7 @@ mod test {
   fn workspace_at_start_dir(
     fs: &TestFileSystem,
     start_dir: &Path,
-  ) -> WorkspaceContext {
+  ) -> WorkspaceDirectory {
     workspace_at_start_dir_result(fs, start_dir).unwrap()
   }
 
@@ -4793,15 +4793,15 @@ mod test {
   fn workspace_at_start_dir_result(
     fs: &TestFileSystem,
     start_dir: &Path,
-  ) -> Result<WorkspaceContext, WorkspaceDiscoverError> {
+  ) -> Result<WorkspaceDirectory, WorkspaceDiscoverError> {
     workspace_at_start_dirs(fs, &[start_dir.to_path_buf()])
   }
 
   fn workspace_at_start_dirs(
     fs: &TestFileSystem,
     start_dirs: &[PathBuf],
-  ) -> Result<WorkspaceContext, WorkspaceDiscoverError> {
-    WorkspaceContext::discover(
+  ) -> Result<WorkspaceDirectory, WorkspaceDiscoverError> {
+    WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(start_dirs),
       &WorkspaceDiscoverOptions {
         fs,
