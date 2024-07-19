@@ -28,7 +28,7 @@ use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
 
 use super::UrlRc;
-use super::WorkspaceContext;
+use super::WorkspaceDirectory;
 
 #[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
@@ -162,20 +162,20 @@ impl WorkspaceResolver {
   pub(crate) async fn from_workspace<
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
-    workspace_ctx: &WorkspaceContext,
+    workspace_dir: &WorkspaceDirectory,
     options: CreateResolverOptions,
     fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     async fn resolve_import_map<
       TReturn: Future<Output = Result<String, AnyError>>,
     >(
-      workspace_ctx: &WorkspaceContext,
+      workspace_dir: &WorkspaceDirectory,
       specified_import_map: Option<SpecifiedImportMap>,
       fetch_text: impl FnOnce(&Url) -> TReturn,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
-      let root_deno_json = workspace_ctx.workspace.root_deno_json();
-      let deno_jsons = workspace_ctx
+      let root_deno_json = workspace_dir.workspace.root_deno_json();
+      let deno_jsons = workspace_dir
         .workspace
         .config_folders()
         .iter()
@@ -215,7 +215,7 @@ impl WorkspaceResolver {
               }),
             None => (
               Cow::Owned(
-                workspace_ctx
+                workspace_dir
                   .workspace
                   .root_dir()
                   .join("deno.json")
@@ -270,12 +270,12 @@ impl WorkspaceResolver {
     }
 
     let maybe_import_map = resolve_import_map(
-      workspace_ctx,
+      workspace_dir,
       options.specified_import_map,
       fetch_text,
     )
     .await?;
-    let pkg_jsons = workspace_ctx
+    let pkg_jsons = workspace_dir
       .workspace
       .config_folders()
       .iter()
@@ -289,7 +289,7 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
     Ok(Self {
-      workspace_root: workspace_ctx.workspace.root_dir().clone(),
+      workspace_root: workspace_dir.workspace.root_dir().clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       maybe_import_map,
       pkg_jsons,
@@ -545,7 +545,7 @@ mod test {
 
   use super::*;
   use crate::fs::TestFileSystem;
-  use crate::workspace::WorkspaceContext;
+  use crate::workspace::WorkspaceDirectory;
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
 
@@ -892,9 +892,9 @@ mod test {
   }
 
   async fn create_resolver(
-    workspace_ctx: &WorkspaceContext,
+    workspace_dir: &WorkspaceDirectory,
   ) -> WorkspaceResolver {
-    workspace_ctx
+    workspace_dir
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
@@ -909,8 +909,8 @@ mod test {
   fn workspace_at_start_dir(
     fs: &TestFileSystem,
     start_dir: &Path,
-  ) -> WorkspaceContext {
-    WorkspaceContext::discover(
+  ) -> WorkspaceDirectory {
+    WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[start_dir.to_path_buf()]),
       &WorkspaceDiscoverOptions {
         fs,

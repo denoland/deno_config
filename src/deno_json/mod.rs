@@ -40,14 +40,6 @@ pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
 pub use ts::TsConfig;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub enum ConfigFlag {
-  #[default]
-  Discover,
-  Path(String),
-  Disabled,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct LintRulesConfig {
@@ -174,11 +166,6 @@ impl SerializedLintConfig {
 }
 
 #[derive(Clone, Debug, Default, Hash, PartialEq)]
-pub struct WorkspaceLintConfig {
-  pub report: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Hash, PartialEq)]
 pub struct LintOptionsConfig {
   pub rules: LintRulesConfig,
 }
@@ -190,7 +177,7 @@ pub struct LintConfig {
 }
 
 impl LintConfig {
-  pub fn default_with_base(base: PathBuf) -> Self {
+  pub fn new_with_base(base: PathBuf) -> Self {
     // note: don't create Default implementations of these
     // config structs because the base of FilePatterns matters
     Self {
@@ -321,7 +308,7 @@ pub struct FmtConfig {
 }
 
 impl FmtConfig {
-  pub fn default_with_base(base: PathBuf) -> Self {
+  pub fn new_with_base(base: PathBuf) -> Self {
     Self {
       options: Default::default(),
       files: FilePatterns::new_with_base(base),
@@ -388,7 +375,7 @@ pub struct TestConfig {
 }
 
 impl TestConfig {
-  pub fn default_with_base(base: PathBuf) -> Self {
+  pub fn new_with_base(base: PathBuf) -> Self {
     Self {
       files: FilePatterns::new_with_base(base),
     }
@@ -425,7 +412,7 @@ pub struct PublishConfig {
 }
 
 impl PublishConfig {
-  pub fn default_with_base(base: PathBuf) -> Self {
+  pub fn new_with_base(base: PathBuf) -> Self {
     Self {
       files: FilePatterns::new_with_base(base),
     }
@@ -465,7 +452,7 @@ pub struct BenchConfig {
 }
 
 impl BenchConfig {
-  pub fn default_with_base(base: PathBuf) -> Self {
+  pub fn new_with_base(base: PathBuf) -> Self {
     Self {
       files: FilePatterns::new_with_base(base),
     }
