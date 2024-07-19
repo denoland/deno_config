@@ -74,14 +74,14 @@ type WorkspaceRc = crate::sync::MaybeArc<Workspace>;
 pub struct JsrPackageConfig {
   /// The package name.
   pub name: String,
-  pub member_ctx: WorkspaceMemberContext,
+  pub member_ctx: WorkspaceContext,
   pub config_file: ConfigFileRc,
 }
 
 #[derive(Debug, Clone)]
 pub struct NpmPackageConfig {
   pub nv: PackageNv,
-  pub member_ctx: WorkspaceMemberContext,
+  pub member_ctx: WorkspaceContext,
   pub pkg_json: PackageJsonRc,
 }
 
@@ -426,91 +426,13 @@ impl Workspace {
       .collect()
   }
 
-  /// Resolves a workspace member's context, which can be used for deriving
+  /// Resolves a workspace directory, which can be used for deriving
   /// configuration specific to a member.
   pub fn resolve_member_ctx(
     self: &WorkspaceRc,
     specifier: &Url,
-  ) -> WorkspaceMemberContext {
-    let maybe_folder = self.resolve_folder(specifier);
-    match maybe_folder {
-      Some((member_url, folder)) => {
-        if member_url == &self.root_dir {
-          WorkspaceMemberContext::create_from_root_folder(
-            self.clone(),
-            self.root_dir.clone(),
-            folder,
-          )
-        } else {
-          let maybe_deno_json = folder
-            .deno_json
-            .as_ref()
-            .map(|c| (member_url, c))
-            .or_else(|| {
-              let parent = parent_specifier_str(member_url.as_str())?;
-              self.resolve_deno_json_from_str(parent)
-            })
-            .or_else(|| {
-              let root = self.config_folders.get(&self.root_dir).unwrap();
-              root.deno_json.as_ref().map(|c| (&self.root_dir, c))
-            });
-          let maybe_pkg_json = folder
-            .pkg_json
-            .as_ref()
-            .map(|pkg_json| (member_url, pkg_json))
-            .or_else(|| {
-              let parent = parent_specifier_str(member_url.as_str())?;
-              self.resolve_pkg_json_from_str(parent)
-            })
-            .or_else(|| {
-              let root = self.config_folders.get(&self.root_dir).unwrap();
-              root.pkg_json.as_ref().map(|c| (&self.root_dir, c))
-            });
-          WorkspaceMemberContext {
-            workspace: self.clone(),
-            dir_url: member_url.clone(),
-            pkg_json: maybe_pkg_json.map(|(member_url, pkg_json)| {
-              WorkspaceMemberContextConfig {
-                root: if self.root_dir == *member_url {
-                  None
-                } else {
-                  self
-                    .config_folders
-                    .get(&self.root_dir)
-                    .unwrap()
-                    .pkg_json
-                    .clone()
-                },
-                member: pkg_json.clone(),
-              }
-            }),
-            deno_json: maybe_deno_json.map(|(member_url, config)| {
-              WorkspaceMemberContextConfig {
-                root: if self.root_dir == *member_url {
-                  None
-                } else {
-                  self
-                    .config_folders
-                    .get(&self.root_dir)
-                    .unwrap()
-                    .deno_json
-                    .clone()
-                },
-                member: config.clone(),
-              }
-            }),
-          }
-        }
-      }
-      None => {
-        let root = self.config_folders.get(&self.root_dir).unwrap();
-        WorkspaceMemberContext::create_from_root_folder(
-          self.clone(),
-          self.root_dir.clone(),
-          root,
-        )
-      }
-    }
+  ) -> WorkspaceContext {
+    WorkspaceContext::new(specifier, self.clone())
   }
 
   pub fn resolve_deno_json(
@@ -784,7 +706,7 @@ impl Workspace {
   pub fn resolve_bench_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceMemberContext, BenchConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceContext, BenchConfig)>, AnyError> {
     self.resolve_config_for_members(cli_args, |ctx, patterns| {
       ctx.to_bench_config(patterns)
     })
@@ -793,7 +715,7 @@ impl Workspace {
   pub fn resolve_lint_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceMemberContext, LintConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceContext, LintConfig)>, AnyError> {
     self.resolve_config_for_members(cli_args, |ctx, patterns| {
       ctx.to_lint_config(patterns)
     })
@@ -802,7 +724,7 @@ impl Workspace {
   pub fn resolve_fmt_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceMemberContext, FmtConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceContext, FmtConfig)>, AnyError> {
     self.resolve_config_for_members(cli_args, |ctx, patterns| {
       ctx.to_fmt_config(patterns)
     })
@@ -811,7 +733,7 @@ impl Workspace {
   pub fn resolve_test_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceMemberContext, TestConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceContext, TestConfig)>, AnyError> {
     self.resolve_config_for_members(cli_args, |ctx, patterns| {
       ctx.to_test_config(patterns)
     })
@@ -821,10 +743,10 @@ impl Workspace {
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
     resolve_config: impl Fn(
-      &WorkspaceMemberContext,
+      &WorkspaceContext,
       FilePatterns,
     ) -> Result<TConfig, AnyError>,
-  ) -> Result<Vec<(WorkspaceMemberContext, TConfig)>, AnyError> {
+  ) -> Result<Vec<(WorkspaceContext, TConfig)>, AnyError> {
     let cli_args_by_folder = self.split_cli_args_by_deno_json_folder(cli_args);
     let mut result = Vec::with_capacity(cli_args_by_folder.len());
     for (folder_url, patterns) in cli_args_by_folder {
@@ -986,11 +908,23 @@ impl Workspace {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+struct WorkspaceDirConfig<T> {
+  #[allow(clippy::disallowed_types)]
+  member: crate::sync::MaybeArc<T>,
+  // will be None when it doesn't exist or the member config
+  // is the root config
+  #[allow(clippy::disallowed_types)]
+  root: Option<crate::sync::MaybeArc<T>>,
+}
+
+#[derive(Debug, Clone)]
 pub struct WorkspaceContext {
   pub workspace: WorkspaceRc,
-  /// The member context about the directory that workspace discovery started from.
-  pub start_ctx: WorkspaceMemberContext,
+  /// The directory that this context is for. This is generally the cwd.
+  dir_url: UrlRc,
+  pkg_json: Option<WorkspaceDirConfig<PackageJson>>,
+  deno_json: Option<WorkspaceDirConfig<ConfigFile>>,
 }
 
 impl WorkspaceContext {
@@ -1108,11 +1042,98 @@ impl WorkspaceContext {
     Ok(context)
   }
 
-  fn new(start_dir: &Url, workspace: WorkspaceRc) -> Self {
-    let start_member_ctx = workspace.resolve_member_ctx(start_dir);
-    Self {
+  fn new(specifier: &Url, workspace: WorkspaceRc) -> Self {
+    let maybe_folder = workspace.resolve_folder(specifier);
+    match maybe_folder {
+      Some((member_url, folder)) => {
+        if member_url == &workspace.root_dir {
+          Self::create_from_root_folder(workspace)
+        } else {
+          let maybe_deno_json = folder
+            .deno_json
+            .as_ref()
+            .map(|c| (member_url, c))
+            .or_else(|| {
+              let parent = parent_specifier_str(member_url.as_str())?;
+              workspace.resolve_deno_json_from_str(parent)
+            })
+            .or_else(|| {
+              let root =
+                workspace.config_folders.get(&workspace.root_dir).unwrap();
+              root.deno_json.as_ref().map(|c| (&workspace.root_dir, c))
+            });
+          let maybe_pkg_json = folder
+            .pkg_json
+            .as_ref()
+            .map(|pkg_json| (member_url, pkg_json))
+            .or_else(|| {
+              let parent = parent_specifier_str(member_url.as_str())?;
+              workspace.resolve_pkg_json_from_str(parent)
+            })
+            .or_else(|| {
+              let root =
+                workspace.config_folders.get(&workspace.root_dir).unwrap();
+              root.pkg_json.as_ref().map(|c| (&workspace.root_dir, c))
+            });
+          Self {
+            dir_url: member_url.clone(),
+            pkg_json: maybe_pkg_json.map(|(member_url, pkg_json)| {
+              WorkspaceDirConfig {
+                root: if workspace.root_dir == *member_url {
+                  None
+                } else {
+                  workspace
+                    .config_folders
+                    .get(&workspace.root_dir)
+                    .unwrap()
+                    .pkg_json
+                    .clone()
+                },
+                member: pkg_json.clone(),
+              }
+            }),
+            deno_json: maybe_deno_json.map(|(member_url, config)| {
+              WorkspaceDirConfig {
+                root: if workspace.root_dir == *member_url {
+                  None
+                } else {
+                  workspace
+                    .config_folders
+                    .get(&workspace.root_dir)
+                    .unwrap()
+                    .deno_json
+                    .clone()
+                },
+                member: config.clone(),
+              }
+            }),
+            workspace,
+          }
+        }
+      }
+      None => Self::create_from_root_folder(workspace),
+    }
+  }
+
+  fn create_from_root_folder(workspace: WorkspaceRc) -> Self {
+    let root_folder =
+      workspace.config_folders.get(&workspace.root_dir).unwrap();
+    let dir_url = workspace.root_dir.clone();
+    WorkspaceContext {
+      dir_url,
+      pkg_json: root_folder.pkg_json.as_ref().map(|config| {
+        WorkspaceDirConfig {
+          member: config.clone(),
+          root: None,
+        }
+      }),
+      deno_json: root_folder.deno_json.as_ref().map(|config| {
+        WorkspaceDirConfig {
+          member: config.clone(),
+          root: None,
+        }
+      }),
       workspace,
-      start_ctx: start_member_ctx,
     }
   }
 
@@ -1127,13 +1148,12 @@ impl WorkspaceContext {
   }
 
   pub fn jsr_packages_for_publish(&self) -> Vec<JsrPackageConfig> {
-    let ctx = &self.start_ctx;
     // only publish the current folder if it's a package
-    if let Some(package_config) = ctx.maybe_package_config() {
+    if let Some(package_config) = self.maybe_package_config() {
       return vec![package_config];
     }
-    if let Some(pkg_json) = &ctx.pkg_json {
-      let ctx_dir_path = ctx.dir_url.to_file_path().unwrap();
+    if let Some(pkg_json) = &self.pkg_json {
+      let ctx_dir_path = self.dir_url.to_file_path().unwrap();
       // don't publish anything if in a package.json only directory within
       // a workspace
       if pkg_json.member.dir_path().starts_with(&ctx_dir_path)
@@ -1142,161 +1162,11 @@ impl WorkspaceContext {
         return Vec::new();
       }
     }
-    if ctx.dir_url == self.workspace.root_dir {
+    if self.dir_url == self.workspace.root_dir {
       self.workspace.jsr_packages()
     } else {
       // nothing to publish
       Vec::new()
-    }
-  }
-}
-
-pub enum TaskOrScript<'a> {
-  /// A task from a deno.json.
-  Task(&'a IndexMap<String, Task>, &'a str),
-  /// A script from a package.json.
-  Script(&'a IndexMap<String, String>, &'a str),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceMemberTasksConfigFile<TValue> {
-  pub folder_url: Url,
-  pub tasks: IndexMap<String, TValue>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceMemberTasksConfig {
-  pub deno_json: Option<WorkspaceMemberTasksConfigFile<Task>>,
-  pub package_json: Option<WorkspaceMemberTasksConfigFile<String>>,
-}
-
-impl WorkspaceMemberTasksConfig {
-  pub fn with_only_pkg_json(self) -> Self {
-    WorkspaceMemberTasksConfig {
-      deno_json: None,
-      package_json: self.package_json,
-    }
-  }
-
-  pub fn is_empty(&self) -> bool {
-    self
-      .deno_json
-      .as_ref()
-      .map(|d| d.tasks.is_empty())
-      .unwrap_or(true)
-      && self
-        .package_json
-        .as_ref()
-        .map(|d| d.tasks.is_empty())
-        .unwrap_or(true)
-  }
-
-  pub fn tasks_count(&self) -> usize {
-    self.deno_json.as_ref().map(|d| d.tasks.len()).unwrap_or(0)
-      + self
-        .package_json
-        .as_ref()
-        .map(|d| d.tasks.len())
-        .unwrap_or(0)
-  }
-
-  pub fn task(&self, name: &str) -> Option<(&Url, TaskOrScript)> {
-    self
-      .deno_json
-      .as_ref()
-      .and_then(|config| {
-        config.tasks.get(name).map(|t| {
-          (
-            &config.folder_url,
-            TaskOrScript::Task(&config.tasks, t.definition()),
-          )
-        })
-      })
-      .or_else(|| {
-        self.package_json.as_ref().and_then(|config| {
-          config.tasks.get(name).map(|task| {
-            (
-              &config.folder_url,
-              TaskOrScript::Script(&config.tasks, task),
-            )
-          })
-        })
-      })
-  }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceTasksConfig {
-  pub root: Option<WorkspaceMemberTasksConfig>,
-  pub member: Option<WorkspaceMemberTasksConfig>,
-}
-
-impl WorkspaceTasksConfig {
-  pub fn with_only_pkg_json(self) -> Self {
-    WorkspaceTasksConfig {
-      root: self.root.map(|c| c.with_only_pkg_json()),
-      member: self.member.map(|c| c.with_only_pkg_json()),
-    }
-  }
-
-  pub fn task(&self, name: &str) -> Option<(&Url, TaskOrScript)> {
-    self
-      .member
-      .as_ref()
-      .and_then(|m| m.task(name))
-      .or_else(|| self.root.as_ref().and_then(|r| r.task(name)))
-  }
-
-  pub fn is_empty(&self) -> bool {
-    self.root.as_ref().map(|r| r.is_empty()).unwrap_or(true)
-      && self.member.as_ref().map(|r| r.is_empty()).unwrap_or(true)
-  }
-
-  pub fn tasks_count(&self) -> usize {
-    self.root.as_ref().map(|r| r.tasks_count()).unwrap_or(0)
-      + self.member.as_ref().map(|r| r.tasks_count()).unwrap_or(0)
-  }
-}
-
-#[derive(Debug, Clone)]
-struct WorkspaceMemberContextConfig<T> {
-  #[allow(clippy::disallowed_types)]
-  member: crate::sync::MaybeArc<T>,
-  // will be None when it doesn't exist or the member config
-  // is the root config
-  #[allow(clippy::disallowed_types)]
-  root: Option<crate::sync::MaybeArc<T>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct WorkspaceMemberContext {
-  workspace: WorkspaceRc,
-  dir_url: UrlRc,
-  pkg_json: Option<WorkspaceMemberContextConfig<PackageJson>>,
-  deno_json: Option<WorkspaceMemberContextConfig<ConfigFile>>,
-}
-
-impl WorkspaceMemberContext {
-  fn create_from_root_folder(
-    workspace: WorkspaceRc,
-    dir_url: UrlRc,
-    root_folder: &FolderConfigs,
-  ) -> Self {
-    WorkspaceMemberContext {
-      workspace,
-      dir_url,
-      pkg_json: root_folder.pkg_json.as_ref().map(|config| {
-        WorkspaceMemberContextConfig {
-          member: config.clone(),
-          root: None,
-        }
-      }),
-      deno_json: root_folder.deno_json.as_ref().map(|config| {
-        WorkspaceMemberContextConfig {
-          member: config.clone(),
-          root: None,
-        }
-      }),
     }
   }
 
@@ -1639,6 +1509,113 @@ impl WorkspaceMemberContext {
         })
         .map(|d| PathOrPattern::Path(d.dir_path())),
     );
+  }
+}
+
+pub enum TaskOrScript<'a> {
+  /// A task from a deno.json.
+  Task(&'a IndexMap<String, Task>, &'a str),
+  /// A script from a package.json.
+  Script(&'a IndexMap<String, String>, &'a str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMemberTasksConfigFile<TValue> {
+  pub folder_url: Url,
+  pub tasks: IndexMap<String, TValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMemberTasksConfig {
+  pub deno_json: Option<WorkspaceMemberTasksConfigFile<Task>>,
+  pub package_json: Option<WorkspaceMemberTasksConfigFile<String>>,
+}
+
+impl WorkspaceMemberTasksConfig {
+  pub fn with_only_pkg_json(self) -> Self {
+    WorkspaceMemberTasksConfig {
+      deno_json: None,
+      package_json: self.package_json,
+    }
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self
+      .deno_json
+      .as_ref()
+      .map(|d| d.tasks.is_empty())
+      .unwrap_or(true)
+      && self
+        .package_json
+        .as_ref()
+        .map(|d| d.tasks.is_empty())
+        .unwrap_or(true)
+  }
+
+  pub fn tasks_count(&self) -> usize {
+    self.deno_json.as_ref().map(|d| d.tasks.len()).unwrap_or(0)
+      + self
+        .package_json
+        .as_ref()
+        .map(|d| d.tasks.len())
+        .unwrap_or(0)
+  }
+
+  pub fn task(&self, name: &str) -> Option<(&Url, TaskOrScript)> {
+    self
+      .deno_json
+      .as_ref()
+      .and_then(|config| {
+        config.tasks.get(name).map(|t| {
+          (
+            &config.folder_url,
+            TaskOrScript::Task(&config.tasks, t.definition()),
+          )
+        })
+      })
+      .or_else(|| {
+        self.package_json.as_ref().and_then(|config| {
+          config.tasks.get(name).map(|task| {
+            (
+              &config.folder_url,
+              TaskOrScript::Script(&config.tasks, task),
+            )
+          })
+        })
+      })
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceTasksConfig {
+  pub root: Option<WorkspaceMemberTasksConfig>,
+  pub member: Option<WorkspaceMemberTasksConfig>,
+}
+
+impl WorkspaceTasksConfig {
+  pub fn with_only_pkg_json(self) -> Self {
+    WorkspaceTasksConfig {
+      root: self.root.map(|c| c.with_only_pkg_json()),
+      member: self.member.map(|c| c.with_only_pkg_json()),
+    }
+  }
+
+  pub fn task(&self, name: &str) -> Option<(&Url, TaskOrScript)> {
+    self
+      .member
+      .as_ref()
+      .and_then(|m| m.task(name))
+      .or_else(|| self.root.as_ref().and_then(|r| r.task(name)))
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.root.as_ref().map(|r| r.is_empty()).unwrap_or(true)
+      && self.member.as_ref().map(|r| r.is_empty()).unwrap_or(true)
+  }
+
+  pub fn tasks_count(&self) -> usize {
+    self.root.as_ref().map(|r| r.tasks_count()).unwrap_or(0)
+      + self.member.as_ref().map(|r| r.tasks_count()).unwrap_or(0)
   }
 }
 
@@ -2042,7 +2019,7 @@ mod test {
     });
     // root
     {
-      let tasks_config = workspace_ctx.start_ctx.to_tasks_config().unwrap();
+      let tasks_config = workspace_ctx.to_tasks_config().unwrap();
       assert_eq!(
         tasks_config,
         WorkspaceTasksConfig {
@@ -2336,9 +2313,8 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let ctx = workspace_ctx.start_ctx;
-    let lint_config = ctx
-      .to_lint_config(FilePatterns::new_with_base(ctx.dir_path()))
+    let lint_config = workspace_ctx
+      .to_lint_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       lint_config.files,
@@ -2400,9 +2376,8 @@ mod test {
         report: Some("json".to_string()),
       }
     );
-    let start_ctx = workspace_ctx.start_ctx;
-    let lint_config = start_ctx
-      .to_lint_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+    let lint_config = workspace_ctx
+      .to_lint_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       lint_config,
@@ -2480,9 +2455,8 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let start_ctx = workspace_ctx.start_ctx;
-    let fmt_config = start_ctx
-      .to_fmt_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+    let fmt_config = workspace_ctx
+      .to_fmt_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       fmt_config,
@@ -2547,9 +2521,8 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let start_ctx = workspace_ctx.start_ctx;
-    let bench_config = start_ctx
-      .to_bench_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+    let bench_config = workspace_ctx
+      .to_bench_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       bench_config,
@@ -2598,9 +2571,8 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let start_ctx = workspace_ctx.start_ctx;
-    let config = start_ctx
-      .to_test_config(FilePatterns::new_with_base(start_ctx.dir_path()))
+    let config = workspace_ctx
+      .to_test_config(FilePatterns::new_with_base(workspace_ctx.dir_path()))
       .unwrap();
     assert_eq!(
       config,
@@ -2656,7 +2628,7 @@ mod test {
       }),
     );
     assert_eq!(workspace_ctx.workspace.diagnostics(), vec![]);
-    let config = workspace_ctx.start_ctx.to_publish_config().unwrap();
+    let config = workspace_ctx.to_publish_config().unwrap();
     assert_eq!(
       config,
       PublishConfig {
@@ -2716,11 +2688,10 @@ mod test {
       include: None,
       exclude: Default::default(),
     };
-    let member_ctx = &workspace_ctx.start_ctx;
 
     for (expected_files, ctx) in [
-      (expected_root_files, &root_ctx),
-      (expected_member_files, member_ctx),
+      (expected_root_files, root_ctx),
+      (expected_member_files, workspace_ctx),
     ] {
       assert_eq!(
         ctx
