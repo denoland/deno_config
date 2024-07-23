@@ -11,6 +11,9 @@ use std::path::PathBuf;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error as AnyError;
+use deno_package_json::PackageJson;
+use deno_package_json::PackageJsonLoadError;
+use deno_package_json::PackageJsonRc;
 use deno_semver::package::PackageNv;
 use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
@@ -46,9 +49,6 @@ use crate::glob::FilePatterns;
 use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternParseError;
 use crate::glob::PathOrPatternSet;
-use crate::package_json::PackageJson;
-use crate::package_json::PackageJsonLoadError;
-use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
 use crate::SpecifierToFilePathError;
 
@@ -262,7 +262,7 @@ pub struct WorkspaceDiscoverOptions<'a> {
   /// A cache for deno.json files. This is mostly only useful in the LSP where
   /// workspace discovery may occur multiple times.
   pub deno_json_cache: Option<&'a dyn crate::deno_json::DenoJsonCache>,
-  pub pkg_json_cache: Option<&'a dyn crate::package_json::PackageJsonCache>,
+  pub pkg_json_cache: Option<&'a dyn deno_package_json::PackageJsonCache>,
   /// A cache for workspaces. This is mostly only useful in the LSP where
   /// workspace discovery may occur multiple times.
   pub workspace_cache: Option<&'a dyn WorkspaceCache>,
@@ -4505,7 +4505,7 @@ mod test {
   #[derive(Default)]
   struct PkgJsonMemCache(RefCell<HashMap<PathBuf, PackageJsonRc>>);
 
-  impl crate::package_json::PackageJsonCache for PkgJsonMemCache {
+  impl deno_package_json::PackageJsonCache for PkgJsonMemCache {
     fn get(&self, path: &Path) -> Option<PackageJsonRc> {
       self.0.borrow().get(path).cloned()
     }

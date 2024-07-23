@@ -85,6 +85,21 @@ impl<'a> Default for &'a dyn DenoConfigFs {
   }
 }
 
+#[cfg(feature = "package_json")]
+pub struct DenoConfigPkgJsonAdapterFs<'a>(pub &'a dyn DenoConfigFs);
+
+#[cfg(feature = "package_json")]
+impl<'a> deno_package_json::fs::DenoPkgJsonFs
+  for DenoConfigPkgJsonAdapterFs<'a>
+{
+  fn read_to_string_lossy(
+    &self,
+    path: &Path,
+  ) -> Result<String, std::io::Error> {
+    self.0.read_to_string_lossy(path)
+  }
+}
+
 // Like String::from_utf8_lossy but operates on owned values
 #[inline(always)]
 fn string_from_utf8_lossy(buf: Vec<u8>) -> String {
