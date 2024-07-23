@@ -7,6 +7,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+use deno_package_json::PackageJson;
+use deno_package_json::PackageJsonLoadError;
+use deno_package_json::PackageJsonRc;
 use indexmap::IndexSet;
 use url::Url;
 
@@ -17,9 +20,6 @@ use crate::glob::FileCollector;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternSet;
-use crate::package_json::PackageJson;
-use crate::package_json::PackageJsonLoadError;
-use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_parent;
@@ -36,7 +36,7 @@ use super::WorkspaceRc;
 #[derive(Debug)]
 pub enum DenoOrPkgJson {
   Deno(ConfigFileRc),
-  PkgJson(crate::package_json::PackageJsonRc),
+  PkgJson(PackageJsonRc),
 }
 
 impl DenoOrPkgJson {
@@ -253,7 +253,7 @@ fn discover_workspace_config_files_for_single_dir(
       let pkg_json_path = folder_path.join("package.json");
       match PackageJson::load_from_path(
         &pkg_json_path,
-        opts.fs,
+        &crate::fs::DenoConfigPkgJsonAdapterFs(opts.fs),
         opts.pkg_json_cache,
       ) {
         Ok(pkg_json) => {

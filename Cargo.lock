@@ -111,6 +111,7 @@ name = "deno_config"
 version = "0.25.0"
 dependencies = [
  "anyhow",
+ "deno_package_json",
  "deno_semver",
  "glob",
  "ignore",
@@ -125,6 +126,20 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "url",
+]
+
+[[package]]
+name = "deno_package_json"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a28ee7c1cda095ea1cd77fd9c4e3591ab6d00cf1c3ade11288628664fb017490"
+dependencies = [
+ "deno_semver",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "thiserror",
  "url",
 ]
 

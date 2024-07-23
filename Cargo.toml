@@ -10,9 +10,9 @@ repository = "https://github.com/denoland/deno_config"
 [features]
 default = ["workspace"]
 deno_json = ["jsonc-parser", "glob", "ignore", "import_map"]
-package_json = ["deno_semver"]
-sync = []
-workspace = ["deno_json", "package_json"]
+package_json = ["deno_package_json"]
+sync = ["deno_package_json/sync"]
+workspace = ["deno_json", "deno_semver", "package_json"]
 
 [dependencies]
 anyhow = "1.0.57"
@@ -28,6 +28,7 @@ url = { version = "2.3.1" }
 import_map = { version = "0.20.0", features = ["ext"], optional = true }
 thiserror = "1.0.61"
 deno_semver = { version = "0.5.6", optional = true }
+deno_package_json = { version = "0.0.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.4.0"

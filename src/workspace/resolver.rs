@@ -6,6 +6,10 @@ use std::future::Future;
 use std::path::Path;
 
 use anyhow::Error as AnyError;
+use deno_package_json::PackageJsonDepValue;
+use deno_package_json::PackageJsonDepValueParseError;
+use deno_package_json::PackageJsonDeps;
+use deno_package_json::PackageJsonRc;
 use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
 use deno_semver::Version;
@@ -21,10 +25,6 @@ use thiserror::Error;
 use url::Url;
 
 use crate::deno_json::ConfigFile;
-use crate::package_json::PackageJsonDepValue;
-use crate::package_json::PackageJsonDepValueParseError;
-use crate::package_json::PackageJsonDeps;
-use crate::package_json::PackageJsonRc;
 use crate::sync::new_rc;
 
 use super::UrlRc;
