@@ -11,7 +11,7 @@ repository = "https://github.com/denoland/deno_config"
 default = ["workspace"]
 deno_json = ["jsonc-parser", "glob", "ignore", "import_map"]
 package_json = ["deno_package_json"]
-sync = []
+sync = ["deno_package_json/sync"]
 workspace = ["deno_json", "deno_semver", "package_json"]
 
 [dependencies]

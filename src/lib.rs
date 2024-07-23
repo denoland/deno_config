@@ -9,7 +9,7 @@ pub mod deno_json;
 pub mod fs;
 #[cfg(feature = "deno_json")]
 pub mod glob;
-#[cfg(any(feature = "deno_json", feature = "package_json"))]
+#[cfg(feature = "deno_json")]
 mod sync;
 #[cfg(feature = "deno_json")]
 mod util;
