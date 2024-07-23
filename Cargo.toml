@@ -27,8 +27,8 @@ serde_json = "1.0.85"
 url = { version = "2.3.1" }
 import_map = { version = "0.20.0", features = ["ext"], optional = true }
 thiserror = "1.0.61"
-deno_semver = { version = "0.5.6", optional = true }
-deno_package_json = { version = "0.1.0", optional = true }
+deno_semver = { version = "0.5.7", optional = true }
+deno_package_json = { version = "0.1.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.4.0"
