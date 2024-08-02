@@ -1,38 +1,10 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use std::marker::PhantomData;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
-
-#[derive(Default)]
-pub struct CheckedSet<T: std::hash::Hash> {
-  _kind: PhantomData<T>,
-  checked: std::collections::HashSet<u64>,
-}
-
-impl<T: std::hash::Hash> CheckedSet<T> {
-  pub fn with_capacity(capacity: usize) -> Self {
-    Self {
-      _kind: PhantomData,
-      checked: std::collections::HashSet::with_capacity(capacity),
-    }
-  }
-
-  pub fn insert(&mut self, value: &T) -> bool {
-    self.checked.insert(self.get_hash(value))
-  }
-
-  fn get_hash(&self, value: &T) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hasher;
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
-  }
-}
 
 pub fn is_skippable_io_error(e: &std::io::Error) -> bool {
   use std::io::ErrorKind::*;
@@ -69,7 +41,7 @@ pub fn specifier_parent(specifier: &Url) -> Url {
 
 #[derive(Debug, Error)]
 #[error("Could not convert specifier to file path.\n  Specifier: {0}")]
-pub struct SpecifierToFilePathError(Url);
+pub struct SpecifierToFilePathError(pub Url);
 
 /// Attempts to convert a specifier to a file path. By default, uses the Url
 /// crate's `to_file_path()` method, but falls back to try and resolve unix-style

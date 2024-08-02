@@ -40,14 +40,6 @@ pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
 pub use ts::TsConfig;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub enum ConfigFlag {
-  #[default]
-  Discover,
-  Path(String),
-  Disabled,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct LintRulesConfig {
@@ -166,7 +158,7 @@ impl SerializedLintConfig {
     let files = SerializedFilesConfig { include, exclude };
 
     Ok(LintConfig {
-      rules: self.rules,
+      options: LintOptionsConfig { rules: self.rules },
       files: choose_files(files, self.deprecated_files)
         .into_resolved(config_file_specifier)?,
     })
@@ -174,14 +166,25 @@ impl SerializedLintConfig {
 }
 
 #[derive(Clone, Debug, Default, Hash, PartialEq)]
-pub struct WorkspaceLintConfig {
-  pub report: Option<String>,
+pub struct LintOptionsConfig {
+  pub rules: LintRulesConfig,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct LintConfig {
-  pub rules: LintRulesConfig,
+  pub options: LintOptionsConfig,
   pub files: FilePatterns,
+}
+
+impl LintConfig {
+  pub fn new_with_base(base: PathBuf) -> Self {
+    // note: don't create Default implementations of these
+    // config structs because the base of FilePatterns matters
+    Self {
+      options: Default::default(),
+      files: FilePatterns::new_with_base(base),
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
@@ -304,6 +307,15 @@ pub struct FmtConfig {
   pub files: FilePatterns,
 }
 
+impl FmtConfig {
+  pub fn new_with_base(base: PathBuf) -> Self {
+    Self {
+      options: Default::default(),
+      files: FilePatterns::new_with_base(base),
+    }
+  }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportsConfig {
   base: Url,
@@ -362,6 +374,14 @@ pub struct TestConfig {
   pub files: FilePatterns,
 }
 
+impl TestConfig {
+  pub fn new_with_base(base: PathBuf) -> Self {
+    Self {
+      files: FilePatterns::new_with_base(base),
+    }
+  }
+}
+
 /// `publish` config representation for serde
 ///
 /// fields `include` and `exclude` are expanded from [SerializedFilesConfig].
@@ -389,6 +409,14 @@ impl SerializedPublishConfig {
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct PublishConfig {
   pub files: FilePatterns,
+}
+
+impl PublishConfig {
+  pub fn new_with_base(base: PathBuf) -> Self {
+    Self {
+      files: FilePatterns::new_with_base(base),
+    }
+  }
 }
 
 /// `bench` config representation for serde
@@ -423,6 +451,14 @@ pub struct BenchConfig {
   pub files: FilePatterns,
 }
 
+impl BenchConfig {
+  pub fn new_with_base(base: PathBuf) -> Self {
+    Self {
+      files: FilePatterns::new_with_base(base),
+    }
+  }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum LockConfig {
@@ -444,6 +480,16 @@ impl LockConfig {
       }
     )
   }
+}
+
+#[derive(Debug, Error)]
+#[error("Failed to parse \"workspace\" configuration.")]
+pub struct WorkspaceConfigParseError(#[source] serde_json::Error);
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceConfig {
+  pub members: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -523,7 +569,7 @@ pub struct ConfigFileJson {
 
   pub name: Option<String>,
   pub version: Option<String>,
-  pub workspace: Option<Vec<String>>,
+  pub workspace: Option<Value>,
   #[serde(rename = "workspaces")]
   pub(crate) deprecated_workspaces: Option<Vec<String>>,
   pub exports: Option<Value>,
@@ -627,6 +673,11 @@ fn decorate_tasks_json(
   Value::Object(new_tasks)
 }
 
+pub trait DenoJsonCache {
+  fn get(&self, path: &Path) -> Option<ConfigFileRc>;
+  fn set(&self, path: PathBuf, deno_json: ConfigFileRc);
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ConfigParseOptions {
   pub include_task_comments: bool,
@@ -660,12 +711,13 @@ impl ConfigFile {
     }
   }
 
-  pub fn discover_from(
+  pub(crate) fn maybe_find_in_folder(
     fs: &dyn DenoConfigFs,
-    start: &Path,
-    additional_config_file_names: &[&str],
+    maybe_cache: Option<&dyn DenoJsonCache>,
+    folder: &Path,
+    config_file_names: &[&str],
     parse_options: &ConfigParseOptions,
-  ) -> Result<Option<ConfigFile>, ConfigFileReadError> {
+  ) -> Result<Option<ConfigFileRc>, ConfigFileReadError> {
     fn is_skippable_err(e: &ConfigFileReadError) -> bool {
       if let ConfigFileReadError::FailedReading { source: ioerr, .. } = e {
         is_skippable_io_error(ioerr)
@@ -674,28 +726,28 @@ impl ConfigFile {
       }
     }
 
-    let config_file_names =
-      Self::resolve_config_file_names(additional_config_file_names);
-
-    debug_assert!(start.is_absolute());
-    for ancestor in start.ancestors() {
-      for config_filename in config_file_names.iter() {
-        let f = ancestor.join(config_filename);
-        match ConfigFile::read(fs, &f, parse_options) {
-          Ok(cf) => {
-            log::debug!("Config file found at '{}'", f.display());
-            return Ok(Some(cf));
+    for config_filename in config_file_names {
+      let file_path = folder.join(config_filename);
+      if let Some(item) = maybe_cache.and_then(|c| c.get(&file_path)) {
+        return Ok(Some(item));
+      }
+      match ConfigFile::read(fs, &file_path, parse_options) {
+        Ok(cf) => {
+          let cf = crate::sync::new_rc(cf);
+          log::debug!("Config file found at '{}'", file_path.display());
+          if let Some(cache) = maybe_cache {
+            cache.set(file_path, cf.clone());
           }
-          Err(e) if is_skippable_err(&e) => {
-            // ok, keep going
-          }
-          Err(e) => {
-            return Err(e);
-          }
+          return Ok(Some(cf));
+        }
+        Err(e) if is_skippable_err(&e) => {
+          // ok, keep going
+        }
+        Err(e) => {
+          return Err(e);
         }
       }
     }
-    // No config file found.
     Ok(None)
   }
 
@@ -725,7 +777,7 @@ impl ConfigFile {
     config_path: &Path,
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
-    let text = fs.read_to_string(config_path).map_err(|err| {
+    let text = fs.read_to_string_lossy(config_path).map_err(|err| {
       ConfigFileReadError::FailedReading {
         specifier: specifier.clone(),
         source: err,
@@ -850,20 +902,8 @@ impl ConfigFile {
     }
   }
 
-  pub fn vendor_dir_path(&self) -> Option<PathBuf> {
-    if self.json.vendor == Some(true) {
-      Some(
-        self
-          .specifier
-          .to_file_path()
-          .unwrap()
-          .parent()
-          .unwrap()
-          .join("vendor"),
-      )
-    } else {
-      None
-    }
+  pub fn vendor(&self) -> Option<bool> {
+    self.json.vendor
   }
 
   /// Resolves the import map potentially resolving the file specified
@@ -872,7 +912,7 @@ impl ConfigFile {
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
     &self,
-    fetch_text: impl Fn(&Url) -> TReturn,
+    fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Option<ImportMapWithDiagnostics>, AnyError> {
     let maybe_result = self.to_import_map_value(fetch_text).await?;
     match maybe_result {
@@ -891,7 +931,7 @@ impl ConfigFile {
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
     &self,
-    fetch_text: impl Fn(&Url) -> TReturn,
+    fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Option<(Cow<Url>, serde_json::Value)>, AnyError> {
     // has higher precedence over the path
     if self.json.imports.is_some() || self.json.scopes.is_some() {
@@ -1187,7 +1227,7 @@ impl ConfigFile {
           .context("Invalid lint config.")
       }
       None => Ok(LintConfig {
-        rules: Default::default(),
+        options: Default::default(),
         files: self.to_exclude_files_config()?,
       }),
     }
@@ -1233,6 +1273,27 @@ impl ConfigFile {
     }
   }
 
+  pub fn to_workspace_config(
+    &self,
+  ) -> Result<Option<WorkspaceConfig>, WorkspaceConfigParseError> {
+    match self.json.workspace.clone() {
+      Some(config) => match config {
+        Value::Null => Ok(None),
+        Value::Array(_) => {
+          let members: Vec<String> = serde_json::from_value(config)
+            .map_err(WorkspaceConfigParseError)?;
+          Ok(Some(WorkspaceConfig { members }))
+        }
+        _ => {
+          let config: WorkspaceConfig = serde_json::from_value(config)
+            .map_err(WorkspaceConfigParseError)?;
+          Ok(Some(config))
+        }
+      },
+      None => Ok(None),
+    }
+  }
+
   /// Return any tasks that are defined in the configuration file as a sequence
   /// of JSON objects providing the name of the task and the arguments of the
   /// task in a detail field.
@@ -1264,10 +1325,11 @@ impl ConfigFile {
     }
   }
 
-  /// If the configuration file contains "extra" modules (like TypeScript
-  /// `"types"`) options, return them as imports to be added to a module graph.
-  pub fn to_maybe_imports(&self) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
-    let Some(compiler_options_value) = self.json.compiler_options.as_ref() else {
+  pub fn to_compiler_option_types(
+    &self,
+  ) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
+    let Some(compiler_options_value) = self.json.compiler_options.as_ref()
+    else {
       return Ok(Vec::new());
     };
     let Some(types) = compiler_options_value.get("types") else {
@@ -1287,13 +1349,16 @@ impl ConfigFile {
   pub fn to_maybe_jsx_import_source_config(
     &self,
   ) -> Result<Option<JsxImportSourceConfig>, AnyError> {
-    let Some(compiler_options_value) = self.json.compiler_options.as_ref() else {
+    let Some(compiler_options_value) = self.json.compiler_options.as_ref()
+    else {
       return Ok(None);
     };
     let Some(compiler_options) =
-      serde_json::from_value::<CompilerOptions>(compiler_options_value.clone()).ok() else {
-        return Ok(None);
-      };
+      serde_json::from_value::<CompilerOptions>(compiler_options_value.clone())
+        .ok()
+    else {
+      return Ok(None);
+    };
     let module = match compiler_options.jsx.as_deref() {
       Some("react-jsx") => "jsx-runtime".to_string(),
       Some("react-jsxdev") => "jsx-dev-runtime".to_string(),
@@ -1626,11 +1691,13 @@ mod tests {
             PathBuf::from("/deno/src/testdata/")
           )]),
         },
-        rules: LintRulesConfig {
-          include: Some(vec!["ban-untagged-todo".to_string()]),
-          exclude: None,
-          tags: Some(vec!["recommended".to_string()]),
-        },
+        options: LintOptionsConfig {
+          rules: LintRulesConfig {
+            include: Some(vec!["ban-untagged-todo".to_string()]),
+            exclude: None,
+            tags: Some(vec!["recommended".to_string()]),
+          },
+        }
       }
     );
     assert_eq!(
@@ -2192,60 +2259,6 @@ Caused by:
       &ConfigParseOptions::default()
     )
     .is_ok());
-  }
-
-  #[test]
-  fn discover_from_success() {
-    // testdata/fmt/deno.jsonc exists
-    let testdata = testdata_path();
-    let c_md = testdata.join("fmt/with_config/subdir/c.md");
-    let config_file = ConfigFile::discover_from(
-      &RealDenoConfigFs,
-      &c_md,
-      &[],
-      &ConfigParseOptions::default(),
-    )
-    .unwrap()
-    .unwrap();
-    let fmt_config = config_file.to_fmt_config().unwrap();
-    let expected_exclude =
-      Url::from_file_path(testdata.join("fmt/with_config/subdir/b.ts"))
-        .unwrap()
-        .to_file_path()
-        .unwrap();
-    assert_eq!(
-      fmt_config.files.exclude,
-      PathOrPatternSet::new(vec![PathOrPattern::Path(expected_exclude)])
-    );
-  }
-
-  #[test]
-  fn discover_from_additional_config_file_names_success() {
-    let testdata = testdata_path();
-    let dir = testdata.join("additional_files/");
-    let config_file = ConfigFile::discover_from(
-      &RealDenoConfigFs,
-      &dir,
-      &["jsr.json"],
-      &ConfigParseOptions::default(),
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(config_file.json.name.unwrap(), "@foo/bar");
-  }
-
-  #[test]
-  fn discover_from_malformed() {
-    let testdata = testdata_path();
-    let d = testdata.join("malformed_config/");
-    let err = ConfigFile::discover_from(
-      &RealDenoConfigFs,
-      d.as_path(),
-      &[],
-      &ConfigParseOptions::default(),
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("Unable to parse config file"));
   }
 
   #[test]

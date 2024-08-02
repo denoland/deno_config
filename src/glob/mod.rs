@@ -5,12 +5,19 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::bail;
-use anyhow::Context;
 use indexmap::IndexMap;
+use thiserror::Error;
 use url::Url;
 
 use crate::util::normalize_path;
 use crate::util::specifier_to_file_path;
+use crate::SpecifierToFilePathError;
+
+mod collector;
+mod gitignore;
+
+pub use collector::FileCollector;
+pub use collector::WalkEntry;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FilePatternsMatch {
@@ -278,8 +285,17 @@ impl FilePatterns {
     // Sort by the longest base path first. This ensures that we visit opted into
     // nested directories first before visiting the parent directory. The directory
     // traverser will handle not going into directories it's already been in.
-    result
-      .sort_by(|a, b| b.base.as_os_str().len().cmp(&a.base.as_os_str().len()));
+    result.sort_by(|a, b| {
+      // try looking at the parents first so that files in the same
+      // folder are kept in the same order that they're provided
+      let (a, b) =
+        if let (Some(a), Some(b)) = (a.base.parent(), b.base.parent()) {
+          (a, b)
+        } else {
+          (a.base.as_path(), b.base.as_path())
+        };
+      b.as_os_str().len().cmp(&a.as_os_str().len())
+    });
 
     result
   }
@@ -313,7 +329,7 @@ impl PathOrPatternSet {
   pub fn from_include_relative_path_or_patterns(
     base: &Path,
     entries: &[String],
-  ) -> Result<Self, anyhow::Error> {
+  ) -> Result<Self, PathOrPatternParseError> {
     Ok(Self(
       entries
         .iter()
@@ -381,6 +397,10 @@ impl PathOrPatternSet {
     &self.0
   }
 
+  pub fn inner_mut(&mut self) -> &mut Vec<PathOrPattern> {
+    &mut self.0
+  }
+
   pub fn into_path_or_patterns(self) -> Vec<PathOrPattern> {
     self.0
   }
@@ -420,9 +440,31 @@ impl PathOrPatternSet {
     result
   }
 
+  pub fn push(&mut self, item: PathOrPattern) {
+    self.0.push(item);
+  }
+
   pub fn append(&mut self, items: impl Iterator<Item = PathOrPattern>) {
     self.0.extend(items)
   }
+}
+
+#[derive(Debug, Error, Clone)]
+#[error("Invalid URL '{}'", url)]
+pub struct UrlParseError {
+  url: String,
+  #[source]
+  source: url::ParseError,
+}
+
+#[derive(Debug, Error)]
+pub enum PathOrPatternParseError {
+  #[error(transparent)]
+  UrlParse(#[from] UrlParseError),
+  #[error(transparent)]
+  SpecifierToFilePath(#[from] SpecifierToFilePathError),
+  #[error(transparent)]
+  GlobParse(#[from] GlobPatternParseError),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -434,36 +476,42 @@ pub enum PathOrPattern {
 }
 
 impl PathOrPattern {
-  pub fn new(path: &str) -> Result<Self, anyhow::Error> {
+  pub fn new(path: &str) -> Result<Self, PathOrPatternParseError> {
     if path.starts_with("http://")
       || path.starts_with("https://")
       || path.starts_with("file://")
     {
-      let url =
-        Url::parse(path).with_context(|| format!("Invalid URL '{}'", path))?;
+      let url = Url::parse(path).map_err(|err| UrlParseError {
+        url: path.to_string(),
+        source: err,
+      })?;
       if url.scheme() == "file" {
         let path = url
           .to_file_path()
-          .map_err(|_| anyhow::anyhow!("Invalid file URL '{}'", path))?;
+          .map_err(|_| SpecifierToFilePathError(url.clone()))?;
         return Ok(Self::Path(path));
       } else {
         return Ok(Self::RemoteUrl(url));
       }
     }
 
-    GlobPattern::new_if_pattern(path).map(|maybe_pattern| {
-      maybe_pattern
-        .map(PathOrPattern::Pattern)
-        .unwrap_or_else(|| PathOrPattern::Path(normalize_path(path)))
-    })
+    GlobPattern::new_if_pattern(path)
+      .map(|maybe_pattern| {
+        maybe_pattern
+          .map(PathOrPattern::Pattern)
+          .unwrap_or_else(|| PathOrPattern::Path(normalize_path(path)))
+      })
+      .map_err(|err| err.into())
   }
 
   pub fn from_relative(
     base: &Path,
     p: &str,
-  ) -> Result<PathOrPattern, anyhow::Error> {
+  ) -> Result<PathOrPattern, PathOrPatternParseError> {
     if is_glob_pattern(p) {
-      GlobPattern::from_relative(base, p).map(PathOrPattern::Pattern)
+      GlobPattern::from_relative(base, p)
+        .map(PathOrPattern::Pattern)
+        .map_err(|err| err.into())
     } else if p.starts_with("http://")
       || p.starts_with("https://")
       || p.starts_with("file://")
@@ -524,6 +572,14 @@ pub enum PathGlobMatch {
   NotMatched,
 }
 
+#[derive(Debug, Error)]
+#[error("Failed to expand glob: \"{pattern}\"")]
+pub struct GlobPatternParseError {
+  pattern: String,
+  #[source]
+  source: glob::PatternError,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GlobPattern {
   is_negated: bool,
@@ -531,28 +587,36 @@ pub struct GlobPattern {
 }
 
 impl GlobPattern {
-  pub fn new_if_pattern(pattern: &str) -> Result<Option<Self>, anyhow::Error> {
+  pub fn new_if_pattern(
+    pattern: &str,
+  ) -> Result<Option<Self>, GlobPatternParseError> {
     if !is_glob_pattern(pattern) {
       return Ok(None);
     }
     Self::new(pattern).map(Some)
   }
 
-  pub fn new(pattern: &str) -> Result<Self, anyhow::Error> {
+  pub fn new(pattern: &str) -> Result<Self, GlobPatternParseError> {
     let (is_negated, pattern) = match pattern.strip_prefix('!') {
       Some(pattern) => (true, pattern),
       None => (false, pattern),
     };
     let pattern = escape_brackets(pattern).replace('\\', "/");
-    let pattern = glob::Pattern::new(&pattern)
-      .with_context(|| format!("Failed to expand glob: \"{}\"", pattern))?;
+    let pattern =
+      glob::Pattern::new(&pattern).map_err(|source| GlobPatternParseError {
+        pattern: pattern.to_string(),
+        source,
+      })?;
     Ok(Self {
       is_negated,
       pattern,
     })
   }
 
-  pub fn from_relative(base: &Path, p: &str) -> Result<Self, anyhow::Error> {
+  pub fn from_relative(
+    base: &Path,
+    p: &str,
+  ) -> Result<Self, GlobPatternParseError> {
     let (is_negated, p) = match p.strip_prefix('!') {
       Some(p) => (true, p),
       None => (false, p),
@@ -647,6 +711,8 @@ fn match_options() -> glob::MatchOptions {
 
 #[cfg(test)]
 mod test {
+  use std::error::Error;
+
   use pretty_assertions::assert_eq;
   use tempfile::TempDir;
 
@@ -1377,12 +1443,16 @@ mod test {
     // error for invalid url
     {
       let err = PathOrPattern::from_relative(&cwd, "https://raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts").unwrap_err();
-      assert_eq!(format!("{:#}", err), "Invalid URL 'https://raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts': invalid domain character");
+      assert_eq!(format!("{:#}", err), "Invalid URL 'https://raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts'");
+      assert_eq!(
+        format!("{:#}", err.source().unwrap()),
+        "invalid domain character"
+      );
     }
     // error for invalid file url
     if cfg!(windows) {
       let err = PathOrPattern::from_relative(&cwd, "file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts").unwrap_err();
-      assert_eq!(format!("{:#}", err), "Invalid file URL 'file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts'");
+      assert_eq!(format!("{:#}", err), "Could not convert specifier to file path.\n  Specifier: file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts");
     }
     // sibling dir
     {
