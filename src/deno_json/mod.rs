@@ -464,6 +464,22 @@ impl BenchConfig {
 pub enum LockConfig {
   Bool(bool),
   PathBuf(PathBuf),
+  Object {
+    path: Option<PathBuf>,
+    frozen: Option<bool>,
+  },
+}
+
+impl LockConfig {
+  pub fn frozen(&self) -> bool {
+    matches!(
+      self,
+      LockConfig::Object {
+        frozen: Some(true),
+        ..
+      }
+    )
+  }
 }
 
 #[derive(Debug, Error)]
@@ -1400,7 +1416,11 @@ impl ConfigFile {
     if let Some(config) = self.json.lock.clone() {
       let mut lock_config: LockConfig = serde_json::from_value(config)
         .context("Failed to parse \"lock\" configuration")?;
-      if let LockConfig::PathBuf(path) = &mut lock_config {
+      if let LockConfig::PathBuf(path)
+      | LockConfig::Object {
+        path: Some(path), ..
+      } = &mut lock_config
+      {
         *path = specifier_to_file_path(&self.specifier)?
           .parent()
           .unwrap()
@@ -1416,6 +1436,7 @@ impl ConfigFile {
     match self.to_lock_config()? {
       Some(LockConfig::Bool(lock)) if !lock => Ok(None),
       Some(LockConfig::PathBuf(lock)) => Ok(Some(lock)),
+      Some(LockConfig::Object { path, .. }) if path.is_some() => Ok(path),
       _ => {
         let mut path = specifier_to_file_path(&self.specifier)?;
         path.set_file_name("deno.lock");
@@ -2878,5 +2899,41 @@ Caused by:
         .as_str(),
       "file:///deno/import_map.json"
     );
+  }
+
+  #[test]
+  fn lock_object() {
+    fn root_joined(path: &str) -> PathBuf {
+      root_url().join(path).unwrap().to_file_path().unwrap()
+    }
+    let cases = [
+      (
+        r#"{ "lock": { "path": "mydeno.lock", "frozen": true } }"#,
+        (true, root_joined("mydeno.lock")),
+      ),
+      (
+        r#"{ "lock": { "frozen": false } }"#,
+        (false, root_joined("deno.lock")),
+      ),
+      (
+        r#"{ "lock": { "path": "mydeno.lock" } }"#,
+        (false, root_joined("mydeno.lock")),
+      ),
+      (r#"{ "lock": {} }"#, (false, root_joined("deno.lock"))),
+    ];
+    for (config_text, (frozen, resolved_path)) in cases {
+      let config_file = ConfigFile::new(
+        config_text,
+        root_url().join("deno.json").unwrap(),
+        &ConfigParseOptions::default(),
+      )
+      .unwrap();
+      let lock_config = config_file.to_lock_config().unwrap().unwrap();
+      assert_eq!(
+        config_file.resolve_lockfile_path().unwrap().unwrap(),
+        resolved_path,
+      );
+      assert_eq!(lock_config.frozen(), frozen);
+    }
   }
 }
