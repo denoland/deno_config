@@ -932,20 +932,44 @@ mod test {
 
     let workspace = workspace_at_start_dir(&fs, &root_dir());
     let resolver = create_resolver(&workspace).await;
-    let resolution = resolver
-      .resolve(
-        "@scope/jsr-pkg",
-        &Url::from_file_path(root_dir().join("b.ts")).unwrap(),
-      )
-      .unwrap();
-    match resolution {
-      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
-        assert_eq!(
-          specifier,
-          Url::from_file_path(root_dir().join("a/mod.ts")).unwrap()
-        );
+    {
+      let resolution = resolver
+        .resolve(
+          "@scope/jsr-pkg",
+          &Url::from_file_path(root_dir().join("b.ts")).unwrap(),
+        )
+        .unwrap();
+      match resolution {
+        MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+          assert_eq!(
+            specifier,
+            Url::from_file_path(root_dir().join("a/mod.ts")).unwrap()
+          );
+        }
+        _ => unreachable!(),
       }
-      _ => unreachable!(),
+    }
+    {
+      let resolution_err = resolver
+        .resolve(
+          "@scope/jsr-pkg/not-found-export",
+          &Url::from_file_path(root_dir().join("b.ts")).unwrap(),
+        )
+        .unwrap_err();
+      match resolution_err {
+        MappedResolutionError::Workspace(
+          WorkspaceResolveError::UnknownExport {
+            package_name,
+            export_name,
+            exports,
+          },
+        ) => {
+          assert_eq!(package_name, "@scope/jsr-pkg");
+          assert_eq!(export_name, "./not-found-export");
+          assert_eq!(exports, vec!["."]);
+        }
+        _ => unreachable!(),
+      }
     }
   }
 
