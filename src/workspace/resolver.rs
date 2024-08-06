@@ -533,8 +533,7 @@ impl WorkspaceResolver {
     pkg: &'a ResolverWorkspaceJsrPackage,
     pkg_req_ref: JsrPackageReqReference,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
-    let export_name =
-      normalize_export_name(pkg_req_ref.sub_path().unwrap_or("."));
+    let export_name = pkg_req_ref.export_name();
     match pkg.exports.get(export_name.as_ref()) {
       Some(sub_path) => match pkg.base.join(sub_path) {
         Ok(specifier) => Ok(MappedResolution::WorkspaceJsrPackage {
@@ -628,25 +627,6 @@ impl WorkspaceResolver {
 
   pub fn pkg_json_dep_resolution(&self) -> PackageJsonDepResolution {
     self.pkg_json_dep_resolution
-  }
-}
-
-fn normalize_export_name(sub_path: &str) -> Cow<str> {
-  if sub_path.is_empty() || matches!(sub_path, "/" | ".") {
-    Cow::Borrowed(".")
-  } else {
-    let sub_path = if sub_path.starts_with('/') {
-      Cow::Owned(format!(".{}", sub_path))
-    } else if !sub_path.starts_with("./") {
-      Cow::Owned(format!("./{}", sub_path))
-    } else {
-      Cow::Borrowed(sub_path)
-    };
-    if let Some(prefix) = sub_path.strip_suffix('/') {
-      Cow::Owned(prefix.to_string())
-    } else {
-      sub_path
-    }
   }
 }
 

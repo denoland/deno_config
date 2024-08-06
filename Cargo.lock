@@ -145,9 +145,9 @@ dependencies = [
 
 [[package]]
 name = "deno_semver"
-version = "0.5.7"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e23ce551a58eeefc05a48042a9c76d3409c96a1a6a522a82c4ced26930ece201"
+checksum = "cc1ed90f285a3933ed56f392571ac8b8291a82b9ae294fd03cdd2b054b0196f5"
 dependencies = [
  "monch",
  "once_cell",
