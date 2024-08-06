@@ -17,6 +17,7 @@ use deno_package_json::PackageJsonRc;
 use deno_semver::package::PackageNv;
 use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
+use deno_semver::Version;
 use deno_semver::VersionReq;
 use discovery::discover_workspace_config_files;
 use discovery::ConfigFileDiscovery;
@@ -59,6 +60,7 @@ pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionError;
 pub use resolver::PackageJsonDepResolution;
+pub use resolver::ResolverWorkspaceJsrPackage;
 pub use resolver::SpecifiedImportMap;
 pub use resolver::WorkspaceResolvePkgJsonFolderError;
 pub use resolver::WorkspaceResolvePkgJsonFolderErrorKind;
@@ -384,6 +386,26 @@ impl Workspace {
       .filter_map(|f| f.deno_json.as_ref())
   }
 
+  pub fn resolver_jsr_pkgs(
+    &self,
+  ) -> impl Iterator<Item = ResolverWorkspaceJsrPackage> + '_ {
+    self.deno_jsons().filter_map(|config_file| {
+      let name = config_file.json.name.as_ref()?;
+      let version = config_file
+        .json
+        .version
+        .as_ref()
+        .and_then(|v| Version::parse_standard(v).ok());
+      let exports_config = config_file.to_exports_config().ok()?;
+      Some(ResolverWorkspaceJsrPackage {
+        base: Url::from_directory_path(config_file.dir_path()).unwrap(),
+        name: name.to_string(),
+        version,
+        exports: exports_config.into_map(),
+      })
+    })
+  }
+
   pub fn package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
     self
       .config_folders
@@ -391,20 +413,19 @@ impl Workspace {
       .filter_map(|f| f.pkg_json.as_ref())
   }
 
-  pub fn jsr_packages(self: &WorkspaceRc) -> Vec<JsrPackageConfig> {
-    self
-      .deno_jsons()
-      .filter_map(|c| {
-        if !c.is_package() {
-          return None;
-        }
-        Some(JsrPackageConfig {
-          member_dir: self.resolve_member_dir(&c.specifier),
-          name: c.json.name.clone()?,
-          config_file: c.clone(),
-        })
+  pub fn jsr_packages<'a>(
+    self: &'a WorkspaceRc,
+  ) -> impl Iterator<Item = JsrPackageConfig> + 'a {
+    self.deno_jsons().filter_map(|c| {
+      if !c.is_package() {
+        return None;
+      }
+      Some(JsrPackageConfig {
+        member_dir: self.resolve_member_dir(&c.specifier),
+        name: c.json.name.clone()?,
+        config_file: c.clone(),
       })
-      .collect()
+    })
   }
 
   pub fn npm_packages(self: &WorkspaceRc) -> Vec<NpmPackageConfig> {
@@ -1163,7 +1184,7 @@ impl WorkspaceDirectory {
       }
     }
     if self.dir_url == self.workspace.root_dir {
-      self.workspace.jsr_packages()
+      self.workspace.jsr_packages().collect()
     } else {
       // nothing to publish
       Vec::new()
