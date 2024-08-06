@@ -10,6 +10,7 @@ use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDeps;
 use deno_package_json::PackageJsonRc;
+use deno_semver::jsr::JsrPackageReqReference;
 use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
 use deno_semver::Version;
@@ -19,16 +20,24 @@ use import_map::ImportMap;
 use import_map::ImportMapDiagnostic;
 use import_map::ImportMapError;
 use import_map::ImportMapWithDiagnostics;
+use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 use url::Url;
 
-use crate::deno_json::ConfigFile;
 use crate::sync::new_rc;
 
 use super::UrlRc;
 use super::WorkspaceDirectory;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolverWorkspaceJsrPackage {
+  pub base: Url,
+  pub name: String,
+  pub version: Option<Version>,
+  pub exports: IndexMap<String, String>,
+}
 
 #[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
@@ -78,6 +87,10 @@ pub struct SpecifiedImportMap {
 pub enum MappedResolution<'a> {
   Normal(Url),
   ImportMap(Url),
+  WorkspaceJsrPackage {
+    specifier: Url,
+    pkg_req_ref: JsrPackageReqReference,
+  },
   /// Resolved a bare specifier to a package.json that was a workspace member.
   WorkspaceNpmPackage {
     target_pkg_json: &'a PackageJsonRc,
@@ -92,12 +105,30 @@ pub enum MappedResolution<'a> {
   },
 }
 
+#[derive(Debug, Clone, Error)]
+pub enum WorkspaceResolveError {
+  #[error("Failed joining '{}' to '{}'. {:#}", .sub_path, .base, .error)]
+  InvalidExportPath {
+    base: Url,
+    sub_path: String,
+    error: url::ParseError,
+  },
+  #[error("Unknown export '{}' for '{}'.\n  Package exports:\n{}", export_name, package_name, .exports.iter().map(|e| format!(" * {}", e)).collect::<Vec<_>>().join("\n"))]
+  UnknownExport {
+    package_name: String,
+    export_name: String,
+    exports: Vec<String>,
+  },
+}
+
 #[derive(Debug, Error)]
 pub enum MappedResolutionError {
   #[error(transparent)]
   Specifier(#[from] SpecifierError),
   #[error(transparent)]
   ImportMap(#[from] ImportMapError),
+  #[error(transparent)]
+  Workspace(#[from] WorkspaceResolveError),
 }
 
 impl MappedResolutionError {
@@ -111,6 +142,7 @@ impl MappedResolutionError {
         ImportMapError::UnmappedBareSpecifier(_, _) => true,
         ImportMapError::Other(_) => false,
       },
+      MappedResolutionError::Workspace(_) => false,
     }
   }
 }
@@ -153,6 +185,7 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
 #[derive(Debug)]
 pub struct WorkspaceResolver {
   workspace_root: UrlRc,
+  jsr_pkgs: Vec<ResolverWorkspaceJsrPackage>,
   maybe_import_map: Option<ImportMapWithDiagnostics>,
   pkg_jsons: BTreeMap<UrlRc, PkgJsonResolverFolderConfig>,
   pkg_json_dep_resolution: PackageJsonDepResolution,
@@ -175,12 +208,7 @@ impl WorkspaceResolver {
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
       let root_deno_json = workspace_dir.workspace.root_deno_json();
-      let deno_jsons = workspace_dir
-        .workspace
-        .config_folders()
-        .iter()
-        .filter_map(|(_, f)| f.deno_json.as_ref())
-        .collect::<Vec<_>>();
+      let deno_jsons = workspace_dir.workspace.deno_jsons().collect::<Vec<_>>();
 
       let (import_map_url, import_map) = match specified_import_map {
         Some(SpecifiedImportMap {
@@ -251,10 +279,6 @@ impl WorkspaceResolver {
               base_import_map_config,
               child_import_map_configs,
             );
-          let import_map = enhance_import_map_value_with_workspace_members(
-            import_map,
-            deno_jsons.iter().map(|c| c.as_ref()),
-          );
           let import_map = import_map::ext::expand_import_map_value(import_map);
           log::debug!(
             "Workspace config generated this import map {}",
@@ -275,6 +299,10 @@ impl WorkspaceResolver {
       fetch_text,
     )
     .await?;
+    let jsr_pkgs = workspace_dir
+      .workspace
+      .resolver_jsr_pkgs()
+      .collect::<Vec<_>>();
     let pkg_jsons = workspace_dir
       .workspace
       .config_folders()
@@ -291,6 +319,7 @@ impl WorkspaceResolver {
     Ok(Self {
       workspace_root: workspace_dir.workspace.root_dir().clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
+      jsr_pkgs,
       maybe_import_map,
       pkg_jsons,
     })
@@ -302,6 +331,7 @@ impl WorkspaceResolver {
   pub fn new_raw(
     workspace_root: UrlRc,
     maybe_import_map: Option<ImportMap>,
+    jsr_pkgs: Vec<ResolverWorkspaceJsrPackage>,
     pkg_jsons: Vec<PackageJsonRc>,
     pkg_json_dep_resolution: PackageJsonDepResolution,
   ) -> Self {
@@ -324,6 +354,7 @@ impl WorkspaceResolver {
       .collect::<BTreeMap<_, _>>();
     Self {
       workspace_root,
+      jsr_pkgs,
       maybe_import_map,
       pkg_jsons,
       pkg_json_dep_resolution,
@@ -336,6 +367,12 @@ impl WorkspaceResolver {
 
   pub fn package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
     self.pkg_jsons.values().map(|c| &c.pkg_json)
+  }
+
+  pub fn jsr_packages(
+    &self,
+  ) -> impl Iterator<Item = &ResolverWorkspaceJsrPackage> {
+    self.jsr_pkgs.iter()
   }
 
   pub fn diagnostics(&self) -> &[ImportMapDiagnostic] {
@@ -355,17 +392,50 @@ impl WorkspaceResolver {
     let resolve_error = match &self.maybe_import_map {
       Some(import_map) => {
         match import_map.import_map.resolve(specifier, referrer) {
-          Ok(value) => return Ok(MappedResolution::ImportMap(value)),
+          Ok(value) => {
+            return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
+              MappedResolution::ImportMap(value),
+            )
+          }
           Err(err) => MappedResolutionError::ImportMap(err),
         }
       }
       None => {
         match import_map::specifier::resolve_import(specifier, referrer) {
-          Ok(value) => return Ok(MappedResolution::Normal(value)),
+          Ok(value) => {
+            return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
+              MappedResolution::Normal(value),
+            )
+          }
           Err(err) => MappedResolutionError::Specifier(err),
         }
       }
     };
+
+    // 2. Try to resolve the bare specifier to a workspace member
+    if resolve_error.is_unmapped_bare_specifier() {
+      for member in &self.jsr_pkgs {
+        if let Some(path) = specifier.strip_prefix(&member.name) {
+          if path.is_empty() || path.starts_with('/') {
+            let path = path.strip_prefix('/').unwrap_or(path);
+            return self.resolve_workspace_jsr_pkg(
+              member,
+              JsrPackageReqReference::from_str(&format!(
+                "jsr:{}{}/{}",
+                member.name,
+                member
+                  .version
+                  .as_ref()
+                  .map(|v| format!("@^{}", v))
+                  .unwrap_or_else(String::new),
+                path
+              ))
+              .unwrap(),
+            );
+          }
+        }
+      }
+    }
 
     if self.pkg_json_dep_resolution == PackageJsonDepResolution::Enabled {
       // 2. Attempt to resolve from the package.json dependencies.
@@ -426,6 +496,71 @@ impl WorkspaceResolver {
 
     // wasn't found, so surface the initial resolve error
     Err(resolve_error)
+  }
+
+  fn maybe_resolve_specifier_to_workspace_jsr_pkg<'a>(
+    &'a self,
+    resolution: MappedResolution<'a>,
+  ) -> Result<MappedResolution<'a>, MappedResolutionError> {
+    let specifier = match resolution {
+      MappedResolution::Normal(ref specifier) => specifier,
+      MappedResolution::ImportMap(ref specifier) => specifier,
+      _ => return Ok(resolution),
+    };
+    if specifier.scheme() != "jsr" {
+      return Ok(resolution);
+    }
+    if let Ok(package_req_ref) =
+      JsrPackageReqReference::from_specifier(specifier)
+    {
+      for pkg in &self.jsr_pkgs {
+        if pkg.name == package_req_ref.req().name {
+          if let Some(version) = &pkg.version {
+            if package_req_ref.req().version_req.matches(version) {
+              return self.resolve_workspace_jsr_pkg(pkg, package_req_ref);
+            } else {
+              // todo: warn
+            }
+          }
+        }
+      }
+    }
+    Ok(resolution)
+  }
+
+  fn resolve_workspace_jsr_pkg<'a>(
+    &'a self,
+    pkg: &'a ResolverWorkspaceJsrPackage,
+    pkg_req_ref: JsrPackageReqReference,
+  ) -> Result<MappedResolution<'a>, MappedResolutionError> {
+    let export_name =
+      normalize_export_name(pkg_req_ref.sub_path().unwrap_or("."));
+    match pkg.exports.get(export_name.as_ref()) {
+      Some(sub_path) => match pkg.base.join(sub_path) {
+        Ok(specifier) => Ok(MappedResolution::WorkspaceJsrPackage {
+          specifier,
+          pkg_req_ref,
+        }),
+        Err(err) => Err(
+          WorkspaceResolveError::InvalidExportPath {
+            base: pkg.base.clone(),
+            sub_path: sub_path.to_string(),
+            error: err,
+          }
+          .into(),
+        ),
+      },
+      None => {
+        return Err(
+          WorkspaceResolveError::UnknownExport {
+            package_name: pkg.name.clone(),
+            export_name: export_name.to_string(),
+            exports: pkg.exports.keys().cloned().collect(),
+          }
+          .into(),
+        )
+      }
+    }
   }
 
   pub fn resolve_workspace_pkg_json_folder_for_npm_specifier(
@@ -496,42 +631,23 @@ impl WorkspaceResolver {
   }
 }
 
-fn enhance_import_map_value_with_workspace_members<'a>(
-  mut import_map_value: serde_json::Value,
-  deno_jsons: impl Iterator<Item = &'a ConfigFile>,
-) -> serde_json::Value {
-  let maybe_imports = import_map_value
-    .as_object_mut()
-    .and_then(|o| o.remove("imports"));
-  let mut imports =
-    if let Some(serde_json::Value::Object(imports)) = maybe_imports {
-      imports
+fn normalize_export_name(sub_path: &str) -> Cow<str> {
+  if sub_path.is_empty() || matches!(sub_path, "/" | ".") {
+    Cow::Borrowed(".")
+  } else {
+    let sub_path = if sub_path.starts_with('/') {
+      Cow::Owned(format!(".{}", sub_path))
+    } else if !sub_path.starts_with("./") {
+      Cow::Owned(format!("./{}", sub_path))
     } else {
-      serde_json::Map::new()
+      Cow::Borrowed(sub_path)
     };
-
-  for deno_json in deno_jsons {
-    let Some(name) = &deno_json.json.name else {
-      continue;
-    };
-    // todo(dsherret): support and use `@workspace` here instead
-    // so it works even when no version is specified
-    let Some(version) = &deno_json.json.version else {
-      continue;
-    };
-    // Don't override existings, explicit imports
-    if imports.contains_key(name) {
-      continue;
+    if let Some(prefix) = sub_path.strip_suffix('/') {
+      Cow::Owned(prefix.to_string())
+    } else {
+      sub_path
     }
-
-    imports.insert(
-      name.to_string(),
-      serde_json::Value::String(format!("jsr:{}@^{}", name, version)),
-    );
   }
-
-  import_map_value["imports"] = serde_json::Value::Object(imports);
-  import_map_value
 }
 
 #[cfg(test)]
@@ -684,8 +800,11 @@ mod test {
       )
       .unwrap();
     match result {
-      MappedResolution::ImportMap(url) => {
-        assert_eq!(url, Url::parse("jsr:@scope/pkg@^1.0.0").unwrap());
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(
+          specifier,
+          Url::from_file_path(root_dir().join("mod.ts")).unwrap()
+        );
       }
       _ => unreachable!(),
     }
@@ -820,8 +939,11 @@ mod test {
       )
       .unwrap();
     match resolution {
-      MappedResolution::ImportMap(specifier) => {
-        assert_eq!(specifier, Url::parse("jsr:@scope/jsr-pkg@^1.0.0").unwrap());
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(
+          specifier,
+          Url::from_file_path(root_dir().join("a/mod.ts")).unwrap()
+        );
       }
       _ => unreachable!(),
     }
