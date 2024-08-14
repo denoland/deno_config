@@ -506,8 +506,10 @@ impl WorkspaceResolver {
             if package_req_ref.req().version_req.matches(version) {
               return self.resolve_workspace_jsr_pkg(pkg, package_req_ref);
             } else {
-              // todo: warn
+              // todo(THIS PR): warn
             }
+          } else {
+            return self.resolve_workspace_jsr_pkg(pkg, package_req_ref);
           }
         }
       }
