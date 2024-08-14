@@ -27,9 +27,9 @@ use thiserror::Error;
 use url::Url;
 
 use crate::sync::new_rc;
+use crate::workspace::Workspace;
 
 use super::UrlRc;
-use super::WorkspaceDirectory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolverWorkspaceJsrPackage {
@@ -195,20 +195,20 @@ impl WorkspaceResolver {
   pub(crate) async fn from_workspace<
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
-    workspace_dir: &WorkspaceDirectory,
+    workspace: &Workspace,
     options: CreateResolverOptions,
     fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     async fn resolve_import_map<
       TReturn: Future<Output = Result<String, AnyError>>,
     >(
-      workspace_dir: &WorkspaceDirectory,
+      workspace: &Workspace,
       specified_import_map: Option<SpecifiedImportMap>,
       fetch_text: impl FnOnce(&Url) -> TReturn,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
-      let root_deno_json = workspace_dir.workspace.root_deno_json();
-      let deno_jsons = workspace_dir.workspace.deno_jsons().collect::<Vec<_>>();
+      let root_deno_json = workspace.root_deno_json();
+      let deno_jsons = workspace.resolver_deno_jsons().collect::<Vec<_>>();
 
       let (import_map_url, import_map) = match specified_import_map {
         Some(SpecifiedImportMap {
@@ -242,13 +242,7 @@ impl WorkspaceResolver {
                 )
               }),
             None => (
-              Cow::Owned(
-                workspace_dir
-                  .workspace
-                  .root_dir()
-                  .join("deno.json")
-                  .unwrap(),
-              ),
+              Cow::Owned(workspace.root_dir().join("deno.json").unwrap()),
               serde_json::Value::Object(Default::default()),
             ),
           };
@@ -293,18 +287,11 @@ impl WorkspaceResolver {
       )?))
     }
 
-    let maybe_import_map = resolve_import_map(
-      workspace_dir,
-      options.specified_import_map,
-      fetch_text,
-    )
-    .await?;
-    let jsr_pkgs = workspace_dir
-      .workspace
-      .resolver_jsr_pkgs()
-      .collect::<Vec<_>>();
-    let pkg_jsons = workspace_dir
-      .workspace
+    let maybe_import_map =
+      resolve_import_map(workspace, options.specified_import_map, fetch_text)
+        .await?;
+    let jsr_pkgs = workspace.resolver_jsr_pkgs().collect::<Vec<_>>();
+    let pkg_jsons = workspace
       .config_folders()
       .iter()
       .filter_map(|(dir_url, f)| {
@@ -317,7 +304,7 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
     Ok(Self {
-      workspace_root: workspace_dir.workspace.root_dir().clone(),
+      workspace_root: workspace.root_dir().clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       jsr_pkgs,
       maybe_import_map,
@@ -957,8 +944,9 @@ mod test {
   async fn specified_import_map() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(root_dir().join("deno.json"), json!({}));
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
-    let resolver = workspace
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
@@ -997,8 +985,9 @@ mod test {
       }),
     );
     fs.insert_json(root_dir().join("a").join("deno.json"), json!({}));
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
-    workspace
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    workspace_dir
+      .workspace
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
@@ -1021,6 +1010,7 @@ mod test {
     workspace_dir: &WorkspaceDirectory,
   ) -> WorkspaceResolver {
     workspace_dir
+      .workspace
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,

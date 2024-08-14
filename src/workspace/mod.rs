@@ -40,6 +40,7 @@ use crate::deno_json::JsxImportSourceConfig;
 use crate::deno_json::LintConfig;
 use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
+use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 use crate::deno_json::Task;
 use crate::deno_json::TestConfig;
@@ -136,17 +137,35 @@ pub struct WorkspaceDiagnostic {
 }
 
 #[derive(Debug, Error)]
+pub enum ResolveWorkspacePatchError {
+  #[error(transparent)]
+  ConfigRead(#[from] ConfigReadError),
+  #[error("Could not find patch member in '{}'.", .dir_url)]
+  NotFound { dir_url: Url },
+  #[error(transparent)]
+  InvalidPatch(#[from] url::ParseError),
+  #[error(transparent)]
+  Workspace(Box<WorkspaceDiscoverError>),
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigReadError {
+  #[error(transparent)]
+  DenoJsonRead(#[from] ConfigFileReadError),
+  #[error(transparent)]
+  PackageJsonRead(#[from] PackageJsonLoadError),
+}
+
+#[derive(Debug, Error)]
 pub enum ResolveWorkspaceMemberError {
+  #[error(transparent)]
+  ConfigRead(#[from] ConfigReadError),
   #[error("Could not find config file for workspace member in '{}'.", .dir_url)]
   NotFound { dir_url: Url },
   #[error("Could not find package.json for workspace member in '{}'.", .dir_url)]
   NotFoundPackageJson { dir_url: Url },
   #[error("Could not find config file for workspace member in '{}'. Ensure you specify the directory and not the configuration file in the workspace member.", .dir_url)]
   NotFoundMaybeSpecifiedFile { dir_url: Url },
-  #[error(transparent)]
-  ConfigReadError(#[from] ConfigFileReadError),
-  #[error(transparent)]
-  PackageJsonReadError(#[from] PackageJsonLoadError),
   #[error("Workspace member must be nested in a directory under the workspace.\n  Member: {member_url}\n  Workspace: {workspace_url}")]
   NonDescendant { workspace_url: Url, member_url: Url },
   #[error("Cannot specify a workspace member twice ('{}').", .member)]
@@ -178,6 +197,13 @@ pub enum ResolveWorkspaceMemberError {
     #[source]
     source: PathOrPatternParseError,
   },
+  #[error("Failed loading patch '{}' in config '{}'.", patch, base)]
+  Patch {
+    patch: String,
+    base: Url,
+    #[source]
+    source: ResolveWorkspacePatchError,
+  },
 }
 
 #[derive(Error, Debug)]
@@ -208,9 +234,11 @@ pub enum WorkspaceDiscoverErrorKind {
   #[error("Failed resolving start directory.")]
   FailedResolvingStartDirectory(#[source] anyhow::Error),
   #[error(transparent)]
-  ConfigRead(#[from] ConfigFileReadError),
+  ConfigRead(#[from] ConfigReadError),
   #[error(transparent)]
   PackageJsonReadError(#[from] PackageJsonLoadError),
+  #[error(transparent)]
+  PatchConfigParseError(#[from] PatchConfigParseError),
   #[error(transparent)]
   WorkspaceConfigParse(#[from] WorkspaceConfigParseError),
   #[error(transparent)]
@@ -315,12 +343,14 @@ impl FolderConfigs {
 pub struct Workspace {
   root_dir: UrlRc,
   config_folders: IndexMap<UrlRc, FolderConfigs>,
+  patches: BTreeMap<UrlRc, FolderConfigs>,
   pub(crate) vendor_dir: Option<PathBuf>,
 }
 
 impl Workspace {
   pub(crate) fn new_single(
     config_folder: ConfigFolder,
+    patches: BTreeMap<UrlRc, ConfigFolder>,
     vendor_dir: Option<PathBuf>,
   ) -> Self {
     let root_dir = new_rc(config_folder.folder_url());
@@ -329,6 +359,10 @@ impl Workspace {
         root_dir.clone(),
         FolderConfigs::from_config_folder(config_folder),
       )]),
+      patches: patches
+        .into_iter()
+        .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
+        .collect(),
       root_dir: root_dir.clone(),
       vendor_dir,
     }
@@ -337,6 +371,7 @@ impl Workspace {
   pub(crate) fn new_with_members(
     root: ConfigFolder,
     members: BTreeMap<UrlRc, ConfigFolder>,
+    patches: BTreeMap<UrlRc, ConfigFolder>,
     vendor_dir: Option<PathBuf>,
   ) -> Self {
     let root_dir = new_rc(root.folder_url());
@@ -351,6 +386,10 @@ impl Workspace {
     Workspace {
       root_dir,
       config_folders,
+      patches: patches
+        .into_iter()
+        .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
+        .collect(),
       vendor_dir,
     }
   }
@@ -386,10 +425,16 @@ impl Workspace {
       .filter_map(|f| f.deno_json.as_ref())
   }
 
+  pub fn resolver_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
+    self
+      .deno_jsons()
+      .chain(self.patches.values().filter_map(|f| f.deno_json.as_ref()))
+  }
+
   pub fn resolver_jsr_pkgs(
     &self,
   ) -> impl Iterator<Item = ResolverWorkspaceJsrPackage> + '_ {
-    self.deno_jsons().filter_map(|config_file| {
+    self.resolver_deno_jsons().filter_map(|config_file| {
       let name = config_file.json.name.as_ref()?;
       let version = config_file
         .json
@@ -445,6 +490,16 @@ impl Workspace {
         })
       })
       .collect()
+  }
+
+  pub async fn create_resolver<
+    TReturn: Future<Output = Result<String, AnyError>>,
+  >(
+    &self,
+    options: CreateResolverOptions,
+    fetch_text: impl FnOnce(&Url) -> TReturn,
+  ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
+    WorkspaceResolver::from_workspace(self, options, fetch_text).await
   }
 
   /// Resolves a workspace directory, which can be used for deriving
@@ -547,6 +602,12 @@ impl Workspace {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
+        });
+      }
+      if member_config.json.patch.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
         });
       }
       if member_config.json.scopes.is_some() {
@@ -957,6 +1018,7 @@ impl WorkspaceDirectory {
           opts.root_dir.clone(),
           FolderConfigs::default(),
         )]),
+        patches: BTreeMap::new(),
         root_dir: opts.root_dir.clone(),
         vendor_dir: match opts.use_vendor_dir {
           VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
@@ -1045,6 +1107,7 @@ impl WorkspaceDirectory {
             FolderConfigs::default(),
           )]),
           root_dir: start_dir.clone(),
+          patches: BTreeMap::new(),
           vendor_dir,
         });
         WorkspaceDirectory::new(&start_dir, workspace)
@@ -1156,16 +1219,6 @@ impl WorkspaceDirectory {
       }),
       workspace,
     }
-  }
-
-  pub async fn create_resolver<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
-    &self,
-    options: CreateResolverOptions,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
-  ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(self, options, fetch_text).await
   }
 
   pub fn jsr_packages_for_publish(&self) -> Vec<JsrPackageConfig> {
@@ -2223,6 +2276,31 @@ mod test {
     );
   }
 
+  #[test]
+  fn test_root_member_patch() {
+    let workspace_dir = workspace_for_root_and_member_with_fs(
+      json!({
+        "patch": ["../dir"],
+      }),
+      json!({
+        "patch": [
+          "../../dir"
+        ],
+      }),
+      |fs| {
+        fs.insert_json(root_dir().join("../dir/deno.json"), json!({}));
+      },
+    );
+    assert_eq!(
+      workspace_dir.workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+          .unwrap(),
+      }]
+    );
+  }
+
   #[tokio::test]
   async fn test_root_member_imports_and_scopes() {
     let workspace_dir = workspace_for_root_and_member(
@@ -2257,6 +2335,7 @@ mod test {
       }]
     );
     let resolver = workspace_dir
+      .workspace
       .create_resolver(Default::default(), |_| async move {
         unreachable!();
       })

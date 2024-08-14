@@ -492,6 +492,10 @@ pub struct WorkspaceConfig {
   pub members: Vec<String>,
 }
 
+#[derive(Debug, Error)]
+#[error("Failed to parse \"patch\" configuration.")]
+pub struct PatchConfigParseError(#[source] serde_json::Error);
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Task {
@@ -570,6 +574,7 @@ pub struct ConfigFileJson {
   pub name: Option<String>,
   pub version: Option<String>,
   pub workspace: Option<Value>,
+  pub patch: Option<Value>,
   #[serde(rename = "workspaces")]
   pub(crate) deprecated_workspaces: Option<Vec<String>>,
   pub exports: Option<Value>,
@@ -1270,6 +1275,22 @@ impl ConfigFile {
       None => Ok(PublishConfig {
         files: self.to_exclude_files_config()?,
       }),
+    }
+  }
+
+  pub fn to_patch_config(
+    &self,
+  ) -> Result<Option<Vec<String>>, PatchConfigParseError> {
+    match self.json.patch.clone() {
+      Some(config) => match config {
+        Value::Null => Ok(None),
+        config => {
+          let members: Vec<String> =
+            serde_json::from_value(config).map_err(PatchConfigParseError)?;
+          Ok(Some(members))
+        }
+      },
+      None => Ok(None),
     }
   }
 
