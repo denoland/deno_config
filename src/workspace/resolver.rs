@@ -1275,6 +1275,79 @@ mod test {
     }
   }
 
+  #[tokio::test]
+  async fn resolves_patch_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "imports": {
+          "@std/fs": "jsr:@std/fs@0.200.0"
+        },
+        "patch": ["../patch"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/member/deno.json"),
+      json!({
+        "name": "@scope/patch",
+        "version": "1.0.0",
+        "exports": "./mod.ts",
+        "imports": {
+          "@std/fs": "jsr:@std/fs@1"
+        }
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/member/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // resolving @std/fs from root
+    match resolver
+      .resolve("@std/fs", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap { specifier, .. } => {
+        assert_eq!(specifier, Url::parse("jsr:@std/fs@0.200.0").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // resolving @std/fs in patched package
+    match resolver
+      .resolve("@std/fs", &root.join("../patch/member/mod.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap { specifier, .. } => {
+        assert_eq!(specifier, Url::parse("jsr:@std/fs@1").unwrap());
+      }
+      _ => unreachable!(),
+    }
+  }
+
   async fn create_resolver(
     workspace_dir: &WorkspaceDirectory,
   ) -> WorkspaceResolver {
