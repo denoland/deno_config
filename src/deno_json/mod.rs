@@ -1295,6 +1295,15 @@ impl ConfigFile {
     }
   }
 
+  pub fn to_license(&self) -> Option<String> {
+    self.json.license.as_ref().and_then(|value| match value {
+      Value::String(license) if !license.trim().is_empty() => {
+        Some(license.trim().to_string())
+      }
+      _ => None,
+    })
+  }
+
   /// Return any tasks that are defined in the configuration file as a sequence
   /// of JSON objects providing the name of the task and the arguments of the
   /// task in a detail field.
