@@ -84,7 +84,7 @@ pub struct SpecifiedImportMap {
   pub value: serde_json::Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MappedResolutionDiagnostic {
   ConstraintNotMatchedLocalVersion {
     /// If it was for a patch (true) or workspace (false) member.
@@ -1071,6 +1071,208 @@ mod test {
       )
       .await
       .unwrap();
+  }
+
+  #[tokio::test]
+  async fn resolves_patch_member_with_version() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["../patch"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/deno.json"),
+      json!({
+        "name": "@scope/patch",
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // matching version
+    match resolver
+      .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // not matching version
+    match resolver
+      .resolve("jsr:@scope/patch@2", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap {
+        specifier,
+        maybe_diagnostic,
+      } => {
+        assert_eq!(specifier, Url::parse("jsr:@scope/patch@2").unwrap());
+        assert_eq!(
+          maybe_diagnostic,
+          Some(Box::new(
+            MappedResolutionDiagnostic::ConstraintNotMatchedLocalVersion {
+              is_patch: true,
+              reference: JsrPackageReqReference::from_str("jsr:@scope/patch@2")
+                .unwrap(),
+              local_version: Version::parse_from_npm("1.0.0").unwrap(),
+            }
+          ))
+        );
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn resolves_patch_member_no_version() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["../patch"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/deno.json"),
+      json!({
+        "name": "@scope/patch",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // always resolves, no matter what version
+    match resolver
+      .resolve("jsr:@scope/patch@12", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn resolves_workspace_member() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("./member/deno.json"),
+      json!({
+        "name": "@scope/member",
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("@scope/member", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("./member/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // matching version
+    match resolver
+      .resolve("jsr:@scope/member@1", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("./member/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // not matching version
+    match resolver
+      .resolve("jsr:@scope/member@2", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap {
+        specifier,
+        maybe_diagnostic,
+      } => {
+        assert_eq!(specifier, Url::parse("jsr:@scope/member@2").unwrap());
+        assert_eq!(
+          maybe_diagnostic,
+          Some(Box::new(
+            MappedResolutionDiagnostic::ConstraintNotMatchedLocalVersion {
+              is_patch: false,
+              reference: JsrPackageReqReference::from_str(
+                "jsr:@scope/member@2"
+              )
+              .unwrap(),
+              local_version: Version::parse_from_npm("1.0.0").unwrap(),
+            }
+          ))
+        );
+      }
+      _ => unreachable!(),
+    }
   }
 
   async fn create_resolver(

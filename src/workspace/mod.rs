@@ -688,6 +688,19 @@ impl Workspace {
         check_all_configs(config, &mut diagnostics);
       }
     }
+
+    for folder in self.patches.values() {
+      if let Some(config) = &folder.deno_json {
+        if config.json.patch.is_some() {
+          // supporting patching in patches is too complicated
+          diagnostics.push(WorkspaceDiagnostic {
+            config_url: config.specifier.clone(),
+            kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+          });
+        }
+      }
+    }
+
     diagnostics
   }
 
@@ -2305,6 +2318,34 @@ mod test {
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+          .unwrap(),
+      }]
+    );
+  }
+
+  #[test]
+  fn test_patch_of_patch() {
+    let workspace_dir = workspace_for_root_and_member_with_fs(
+      json!({
+        "patch": ["../dir"],
+      }),
+      json!({}),
+      |fs| {
+        fs.insert_json(
+          root_dir().join("../dir/deno.json"),
+          json!({
+            "patch": ["./subdir"] // will be ignored
+          }),
+        );
+      },
+    );
+    assert_eq!(
+      workspace_dir.workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+        config_url: Url::from_directory_path(root_dir())
+          .unwrap()
+          .join("../dir/deno.json")
           .unwrap(),
       }]
     );
