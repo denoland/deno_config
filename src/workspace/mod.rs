@@ -59,6 +59,7 @@ mod resolver;
 
 pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
+pub use resolver::MappedResolutionDiagnostic;
 pub use resolver::MappedResolutionError;
 pub use resolver::PackageJsonDepResolution;
 pub use resolver::ResolverWorkspaceJsrPackage;
@@ -434,7 +435,14 @@ impl Workspace {
   pub fn resolver_jsr_pkgs(
     &self,
   ) -> impl Iterator<Item = ResolverWorkspaceJsrPackage> + '_ {
-    self.resolver_deno_jsons().filter_map(|config_file| {
+    let resolver_deno_jsons = self.deno_jsons().map(|c| (false, c)).chain(
+      self
+        .patches
+        .values()
+        .filter_map(|f| f.deno_json.as_ref())
+        .map(|c| (true, c)),
+    );
+    resolver_deno_jsons.filter_map(|(is_patch, config_file)| {
       let name = config_file.json.name.as_ref()?;
       let version = config_file
         .json
@@ -443,6 +451,7 @@ impl Workspace {
         .and_then(|v| Version::parse_standard(v).ok());
       let exports_config = config_file.to_exports_config().ok()?;
       Some(ResolverWorkspaceJsrPackage {
+        is_patch,
         base: Url::from_directory_path(config_file.dir_path()).unwrap(),
         name: name.to_string(),
         version,

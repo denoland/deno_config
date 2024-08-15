@@ -37,6 +37,7 @@ pub struct ResolverWorkspaceJsrPackage {
   pub name: String,
   pub version: Option<Version>,
   pub exports: IndexMap<String, String>,
+  pub is_patch: bool,
 }
 
 #[derive(Debug)]
@@ -84,9 +85,48 @@ pub struct SpecifiedImportMap {
 }
 
 #[derive(Debug, Clone)]
+pub enum MappedResolutionDiagnostic {
+  ConstraintNotMatchedLocalVersion {
+    /// If it was for a patch (true) or workspace (false) member.
+    is_patch: bool,
+    reference: JsrPackageReqReference,
+    local_version: Version,
+  },
+}
+
+impl std::fmt::Display for MappedResolutionDiagnostic {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::ConstraintNotMatchedLocalVersion {
+        is_patch,
+        reference,
+        local_version,
+      } => {
+        if *is_patch {
+          write!(f, "Patch '{}@{}' was not used because it did not match the version constraint '{}'", reference.req().name, local_version, reference.req().version_req)
+        } else {
+          write!(
+            f,
+            "Version constraint '{}' did not match workspace member version '{}'",
+            reference.req(),
+            local_version,
+          )
+        }
+      }
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
 pub enum MappedResolution<'a> {
-  Normal(Url),
-  ImportMap(Url),
+  Normal {
+    specifier: Url,
+    maybe_diagnostic: Option<Box<MappedResolutionDiagnostic>>,
+  },
+  ImportMap {
+    specifier: Url,
+    maybe_diagnostic: Option<Box<MappedResolutionDiagnostic>>,
+  },
   WorkspaceJsrPackage {
     specifier: Url,
     pkg_req_ref: JsrPackageReqReference,
@@ -381,7 +421,10 @@ impl WorkspaceResolver {
         match import_map.import_map.resolve(specifier, referrer) {
           Ok(value) => {
             return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
-              MappedResolution::ImportMap(value),
+              MappedResolution::ImportMap {
+                specifier: value,
+                maybe_diagnostic: None,
+              },
             )
           }
           Err(err) => MappedResolutionError::ImportMap(err),
@@ -391,7 +434,10 @@ impl WorkspaceResolver {
         match import_map::specifier::resolve_import(specifier, referrer) {
           Ok(value) => {
             return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
-              MappedResolution::Normal(value),
+              MappedResolution::Normal {
+                specifier: value,
+                maybe_diagnostic: None,
+              },
             )
           }
           Err(err) => MappedResolutionError::Specifier(err),
@@ -490,13 +536,14 @@ impl WorkspaceResolver {
     resolution: MappedResolution<'a>,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
     let specifier = match resolution {
-      MappedResolution::Normal(ref specifier) => specifier,
-      MappedResolution::ImportMap(ref specifier) => specifier,
+      MappedResolution::Normal { ref specifier, .. } => specifier,
+      MappedResolution::ImportMap { ref specifier, .. } => specifier,
       _ => return Ok(resolution),
     };
     if specifier.scheme() != "jsr" {
       return Ok(resolution);
     }
+    let mut maybe_diagnostic = None;
     if let Ok(package_req_ref) =
       JsrPackageReqReference::from_specifier(specifier)
     {
@@ -506,7 +553,13 @@ impl WorkspaceResolver {
             if package_req_ref.req().version_req.matches(version) {
               return self.resolve_workspace_jsr_pkg(pkg, package_req_ref);
             } else {
-              // todo(THIS PR): warn
+              maybe_diagnostic = Some(Box::new(
+                MappedResolutionDiagnostic::ConstraintNotMatchedLocalVersion {
+                  is_patch: pkg.is_patch,
+                  reference: package_req_ref.clone(),
+                  local_version: version.clone(),
+                },
+              ));
             }
           } else {
             return self.resolve_workspace_jsr_pkg(pkg, package_req_ref);
@@ -514,7 +567,19 @@ impl WorkspaceResolver {
         }
       }
     }
-    Ok(resolution)
+    Ok(match resolution {
+      MappedResolution::Normal { specifier, .. } => MappedResolution::Normal {
+        specifier,
+        maybe_diagnostic,
+      },
+      MappedResolution::ImportMap { specifier, .. } => {
+        MappedResolution::ImportMap {
+          specifier,
+          maybe_diagnostic,
+        }
+      }
+      _ => return Ok(resolution),
+    })
   }
 
   fn resolve_workspace_jsr_pkg<'a>(
@@ -970,8 +1035,8 @@ mod test {
       .resolve("b", &root.join("main.ts").unwrap())
       .unwrap()
     {
-      MappedResolution::ImportMap(url) => {
-        assert_eq!(url, root.join("b/mod.ts").unwrap());
+      MappedResolution::ImportMap { specifier, .. } => {
+        assert_eq!(specifier, root.join("b/mod.ts").unwrap());
       }
       _ => unreachable!(),
     }

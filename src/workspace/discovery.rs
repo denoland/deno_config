@@ -830,12 +830,9 @@ fn resolve_patch_member_config_folders(
   let patch_dir_path = patch_dir_url.to_file_path().unwrap();
   let maybe_config_folder = load_config_folder(&patch_dir_path)?;
   let Some(config_folder) = maybe_config_folder else {
-    return Err(
-      ResolveWorkspacePatchError::NotFound {
-        dir_url: patch_dir_url.clone(),
-      }
-      .into(),
-    );
+    return Err(ResolveWorkspacePatchError::NotFound {
+      dir_url: patch_dir_url.clone(),
+    });
   };
   if config_folder.has_workspace_members() {
     let maybe_vendor_dir =
