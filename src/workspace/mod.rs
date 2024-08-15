@@ -78,6 +78,7 @@ pub struct JsrPackageConfig {
   pub name: String,
   pub member_dir: WorkspaceDirectory,
   pub config_file: ConfigFileRc,
+  pub license: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -424,6 +425,12 @@ impl Workspace {
         member_dir: self.resolve_member_dir(&c.specifier),
         name: c.json.name.clone()?,
         config_file: c.clone(),
+        license: c
+          .json
+          .license
+          .as_ref()
+          .and_then(|l| l.as_str())
+          .map(|s| s.to_string()),
       })
     })
   }
@@ -1229,6 +1236,12 @@ impl WorkspaceDirectory {
       name: pkg_name.clone(),
       config_file: deno_json.clone(),
       member_dir: self.clone(),
+      license: deno_json
+        .json
+        .license
+        .as_ref()
+        .and_then(|l| l.as_str())
+        .map(|s| s.to_string()),
     })
   }
 
