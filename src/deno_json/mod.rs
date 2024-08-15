@@ -565,6 +565,7 @@ pub struct ConfigFileJson {
   pub exclude: Option<Value>,
   pub node_modules_dir: Option<bool>,
   pub vendor: Option<bool>,
+  pub license: Option<Value>,
   pub publish: Option<Value>,
 
   pub name: Option<String>,
