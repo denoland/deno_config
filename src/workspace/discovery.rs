@@ -793,11 +793,11 @@ fn resolve_patch_config_folders(
   };
   let root_config_file_directory_url = root_config_folder.folder_url();
   let resolve_patch_dir_url =
-    |raw_patch: &str| -> Result<Url, ResolveWorkspaceMemberError> {
+    |raw_patch: &str| -> Result<Url, WorkspaceDiscoverError> {
       let patch = ensure_trailing_slash(raw_patch);
       let patch_dir_url =
         root_config_file_directory_url.join(&patch).map_err(|err| {
-          ResolveWorkspaceMemberError::Patch {
+          WorkspaceDiscoverErrorKind::ResolvePatch {
             base: root_config_file_directory_url.clone(),
             patch: raw_patch.to_owned(),
             source: err.into(),
@@ -810,7 +810,7 @@ fn resolve_patch_config_folders(
     let patch_dir_url = resolve_patch_dir_url(raw_member)?;
     let patch_configs =
       resolve_patch_member_config_folders(&patch_dir_url, &load_config_folder)
-        .map_err(|err| ResolveWorkspaceMemberError::Patch {
+        .map_err(|err| WorkspaceDiscoverErrorKind::ResolvePatch {
           base: root_config_file_directory_url.clone(),
           patch: raw_member.to_string(),
           source: err,

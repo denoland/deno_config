@@ -198,13 +198,6 @@ pub enum ResolveWorkspaceMemberError {
     #[source]
     source: PathOrPatternParseError,
   },
-  #[error("Failed loading patch '{}' in config '{}'.", patch, base)]
-  Patch {
-    patch: String,
-    base: Url,
-    #[source]
-    source: ResolveWorkspacePatchError,
-  },
 }
 
 #[derive(Error, Debug)]
@@ -244,6 +237,13 @@ pub enum WorkspaceDiscoverErrorKind {
   WorkspaceConfigParse(#[from] WorkspaceConfigParseError),
   #[error(transparent)]
   ResolveMember(#[from] ResolveWorkspaceMemberError),
+  #[error("Failed loading patch '{}' in config '{}'.", patch, base)]
+  ResolvePatch {
+    patch: String,
+    base: Url,
+    #[source]
+    source: ResolveWorkspacePatchError,
+  },
   #[error("Command resolved to multiple config files. Ensure all specified paths are within the same workspace.\n  First: {base_workspace_url}\n  Second: {other_workspace_url}")]
   MultipleWorkspaces {
     base_workspace_url: Url,
@@ -2349,6 +2349,38 @@ mod test {
           .unwrap(),
       }]
     );
+  }
+
+  #[test]
+  fn test_patch_not_exists() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["./member"]
+      }),
+    );
+    let err = workspace_at_start_dir_err(&fs, &root_dir());
+    match err.into_kind() {
+      WorkspaceDiscoverErrorKind::ResolvePatch {
+        patch,
+        base,
+        source,
+      } => {
+        assert_eq!(patch, "./member");
+        assert_eq!(base, Url::from_directory_path(root_dir()).unwrap());
+        match source {
+          ResolveWorkspacePatchError::NotFound { dir_url } => {
+            assert_eq!(
+              dir_url,
+              Url::from_directory_path(root_dir().join("member")).unwrap()
+            );
+          }
+          _ => unreachable!(),
+        }
+      }
+      _ => unreachable!(),
+    }
   }
 
   #[tokio::test]
