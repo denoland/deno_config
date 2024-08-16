@@ -144,6 +144,8 @@ pub enum ResolveWorkspacePatchError {
   ConfigRead(#[from] ConfigReadError),
   #[error("Could not find patch member in '{}'.", .dir_url)]
   NotFound { dir_url: Url },
+  #[error("Workspace member cannot be specified as a patch.")]
+  WorkspaceMemberNotAllowed,
   #[error(transparent)]
   InvalidPatch(#[from] url::ParseError),
   #[error(transparent)]
@@ -420,6 +422,10 @@ impl Workspace {
     &self.config_folders
   }
 
+  pub fn patch_folders(&self) -> impl Iterator<Item = &FolderConfigs> {
+    self.patches.values()
+  }
+
   pub fn deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
     self
       .config_folders
@@ -431,6 +437,12 @@ impl Workspace {
     self
       .deno_jsons()
       .chain(self.patches.values().filter_map(|f| f.deno_json.as_ref()))
+  }
+
+  pub fn resolver_package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
+    self
+      .package_jsons()
+      .chain(self.patches.values().filter_map(|f| f.pkg_json.as_ref()))
   }
 
   pub fn resolver_jsr_pkgs(
@@ -2381,6 +2393,35 @@ mod test {
           }
           _ => unreachable!(),
         }
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[test]
+  fn test_patch_workspace_member() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"],
+        "patch": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    let err = workspace_at_start_dir_err(&fs, &root_dir());
+    match err.into_kind() {
+      WorkspaceDiscoverErrorKind::ResolvePatch {
+        patch,
+        base,
+        source,
+      } => {
+        assert_eq!(patch, "./member");
+        assert_eq!(base, Url::from_directory_path(root_dir()).unwrap());
+        assert!(matches!(
+          source,
+          ResolveWorkspacePatchError::WorkspaceMemberNotAllowed
+        ));
       }
       _ => unreachable!(),
     }

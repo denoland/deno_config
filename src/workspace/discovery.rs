@@ -815,6 +815,20 @@ fn resolve_patch_config_folders(
           patch: raw_member.to_string(),
           source: err,
         })?;
+
+    for patch_config_url in patch_configs.keys() {
+      if *patch_config_url.as_ref() == root_config_file_directory_url {
+        return Err(WorkspaceDiscoverError(
+          WorkspaceDiscoverErrorKind::ResolvePatch {
+            base: root_config_file_directory_url.clone(),
+            patch: raw_member.to_string(),
+            source: ResolveWorkspacePatchError::WorkspaceMemberNotAllowed,
+          }
+          .into(),
+        ));
+      }
+    }
+
     final_config_folders.extend(patch_configs);
   }
 
