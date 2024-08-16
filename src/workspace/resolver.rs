@@ -1374,7 +1374,17 @@ mod test {
         "exports": "./mod.ts"
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = WorkspaceDirectory::discover(
+      WorkspaceDiscoverStart::Paths(&[root_dir().to_path_buf()]),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        using_global_npm_resolver: true,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     let resolver = workspace_dir
       .workspace
       .create_resolver(
