@@ -102,16 +102,18 @@ impl std::fmt::Display for MappedResolutionDiagnostic {
         reference,
         local_version,
       } => {
-        if *is_patch {
-          write!(f, "Patch '{}@{}' was not used because it did not match the version constraint '{}'", reference.req().name, local_version, reference.req().version_req)
-        } else {
-          write!(
-            f,
-            "Version constraint '{}' did not match workspace member version '{}'",
-            reference.req(),
-            local_version,
-          )
-        }
+        write!(
+          f,
+          "{0} '{1}@{2}' was not used because it did not match '{1}@{3}'",
+          if *is_patch {
+            "Patch"
+          } else {
+            "Workspace member"
+          },
+          reference.req().name,
+          local_version,
+          reference.req().version_req
+        )
       }
     }
   }
