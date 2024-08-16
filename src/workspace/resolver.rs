@@ -334,15 +334,16 @@ impl WorkspaceResolver {
         .await?;
     let jsr_pkgs = workspace.resolver_jsr_pkgs().collect::<Vec<_>>();
     let pkg_jsons = workspace
-      .config_folders()
-      .iter()
-      .filter_map(|(dir_url, f)| {
-        let pkg_json = f.pkg_json.clone()?;
+      .resolver_package_jsons()
+      .map(|(dir_url, pkg_json)| {
         let deps = pkg_json.resolve_local_package_json_deps();
-        Some((
+        (
           dir_url.clone(),
-          PkgJsonResolverFolderConfig { deps, pkg_json },
-        ))
+          PkgJsonResolverFolderConfig {
+            deps,
+            pkg_json: pkg_json.clone(),
+          },
+        )
       })
       .collect::<BTreeMap<_, _>>();
     Ok(Self {
@@ -1345,6 +1346,66 @@ mod test {
     {
       MappedResolution::ImportMap { specifier, .. } => {
         assert_eq!(specifier, Url::parse("jsr:@std/fs@1").unwrap());
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn resolves_patch_npm_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["../patch"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/package.json"),
+      json!({
+        "workspaces": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/member/package.json"),
+      json!({
+        "name": "@scope/patch",
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceNpmPackage {
+        pkg_name,
+        sub_path,
+        target_pkg_json,
+      } => {
+        assert_eq!(
+          target_pkg_json.dir_path(),
+          root
+            .join("../patch/member/")
+            .unwrap()
+            .to_file_path()
+            .unwrap()
+        );
+        assert_eq!(pkg_name, "@scope/patch");
+        assert_eq!(sub_path, None);
       }
       _ => unreachable!(),
     }

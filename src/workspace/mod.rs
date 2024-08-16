@@ -439,10 +439,19 @@ impl Workspace {
       .chain(self.patches.values().filter_map(|f| f.deno_json.as_ref()))
   }
 
-  pub fn resolver_package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
+  pub fn resolver_package_jsons(
+    &self,
+  ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
     self
-      .package_jsons()
-      .chain(self.patches.values().filter_map(|f| f.pkg_json.as_ref()))
+      .config_folders
+      .iter()
+      .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?)))
+      .chain(
+        self
+          .patches
+          .iter()
+          .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?))),
+      )
   }
 
   pub fn resolver_jsr_pkgs(
