@@ -129,8 +129,6 @@ pub enum WorkspaceDiagnosticKind {
   MissingExports,
   #[error("\"importMap\" field is ignored when \"imports\" or \"scopes\" are specified in the config file.")]
   ImportMapReferencingImportMap,
-  #[error("npm depenencies cannot be patched when using a node_modules directory. Use `--unstable-byonm` with `npm link` instead.")]
-  LocalNpmResolverPackageJson,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -306,8 +304,6 @@ pub struct WorkspaceDiscoverOptions<'a> {
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
   pub maybe_vendor_override: Option<VendorEnablement<'a>>,
-  /// Enables discovering npm packages with patch. Otherwise causes diagnostics.
-  pub using_global_npm_resolver: bool,
 }
 
 #[derive(Clone)]
@@ -352,7 +348,6 @@ pub struct Workspace {
   root_dir: UrlRc,
   config_folders: IndexMap<UrlRc, FolderConfigs>,
   patches: BTreeMap<UrlRc, FolderConfigs>,
-  using_global_npm_resolver: bool,
   pub(crate) vendor_dir: Option<PathBuf>,
 }
 
@@ -361,7 +356,6 @@ impl Workspace {
     config_folder: ConfigFolder,
     patches: BTreeMap<UrlRc, ConfigFolder>,
     vendor_dir: Option<PathBuf>,
-    using_global_npm_resolver: bool,
   ) -> Self {
     let root_dir = new_rc(config_folder.folder_url());
     Workspace {
@@ -374,7 +368,6 @@ impl Workspace {
         .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
         .collect(),
       root_dir: root_dir.clone(),
-      using_global_npm_resolver,
       vendor_dir,
     }
   }
@@ -384,7 +377,6 @@ impl Workspace {
     members: BTreeMap<UrlRc, ConfigFolder>,
     patches: BTreeMap<UrlRc, ConfigFolder>,
     vendor_dir: Option<PathBuf>,
-    using_global_npm_resolver: bool,
   ) -> Self {
     let root_dir = new_rc(root.folder_url());
     let mut config_folders = IndexMap::with_capacity(members.len() + 1);
@@ -402,7 +394,6 @@ impl Workspace {
         .into_iter()
         .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
         .collect(),
-      using_global_npm_resolver,
       vendor_dir,
     }
   }
@@ -459,7 +450,6 @@ impl Workspace {
         self
           .patches
           .iter()
-          .filter(|_| self.using_global_npm_resolver)
           .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?))),
       )
   }
@@ -730,16 +720,6 @@ impl Workspace {
             config_url: config.specifier.clone(),
             kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
           });
-        }
-      }
-      if !self.using_global_npm_resolver {
-        if let Some(pkg_json) = &folder.pkg_json {
-          if pkg_json.name.is_some() {
-            diagnostics.push(WorkspaceDiagnostic {
-              config_url: pkg_json.specifier(),
-              kind: WorkspaceDiagnosticKind::LocalNpmResolverPackageJson,
-            });
-          }
         }
       }
     }
@@ -1085,7 +1065,6 @@ impl WorkspaceDirectory {
         )]),
         patches: BTreeMap::new(),
         root_dir: opts.root_dir.clone(),
-        using_global_npm_resolver: false,
         vendor_dir: match opts.use_vendor_dir {
           VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
           VendorEnablement::Disable => None,
@@ -1174,7 +1153,6 @@ impl WorkspaceDirectory {
           )]),
           root_dir: start_dir.clone(),
           patches: BTreeMap::new(),
-          using_global_npm_resolver: opts.using_global_npm_resolver,
           vendor_dir,
         });
         WorkspaceDirectory::new(&start_dir, workspace)
@@ -5006,57 +4984,6 @@ mod test {
       )
       .unwrap();
       assert_eq!(workspace_dir.workspace.package_jsons().count(), 3);
-    }
-  }
-
-  #[tokio::test]
-  async fn patch_npm_workspace_not_global_resolver_causes_diagnostics() {
-    for using_global_npm_resolver in [true, false] {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
-        root_dir().join("deno.json"),
-        json!({
-          "patch": ["../patch"]
-        }),
-      );
-      fs.insert_json(
-        root_dir().join("../patch/package.json"),
-        json!({
-          "workspaces": ["./member"]
-        }),
-      );
-      fs.insert_json(
-        root_dir().join("../patch/member/package.json"),
-        json!({
-          "name": "@scope/patch",
-          "version": "1.0.0",
-          "exports": "./mod.ts"
-        }),
-      );
-      let workspace_dir = WorkspaceDirectory::discover(
-        WorkspaceDiscoverStart::Paths(&[root_dir().to_path_buf()]),
-        &WorkspaceDiscoverOptions {
-          fs: &fs,
-          discover_pkg_json: true,
-          using_global_npm_resolver,
-          ..Default::default()
-        },
-      )
-      .unwrap();
-      if using_global_npm_resolver {
-        assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
-      } else {
-        assert_eq!(
-          workspace_dir.workspace.diagnostics(),
-          vec![WorkspaceDiagnostic {
-            kind: WorkspaceDiagnosticKind::LocalNpmResolverPackageJson,
-            config_url: Url::from_directory_path(root_dir())
-              .unwrap()
-              .join("../patch/member/package.json")
-              .unwrap(),
-          }]
-        );
-      }
     }
   }
 

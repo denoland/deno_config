@@ -342,7 +342,6 @@ fn discover_workspace_config_files_for_single_dir(
               config_folder,
               patches,
               maybe_vendor_dir,
-              opts.using_global_npm_resolver,
             )),
           });
         }
@@ -439,7 +438,6 @@ fn discover_workspace_config_files_for_single_dir(
         raw_root_workspace.members,
         patches,
         raw_root_workspace.vendor_dir,
-        opts.using_global_npm_resolver,
       ));
       if let Some(cache) = opts.workspace_cache {
         cache.set(root_workspace.root_dir_path(), root_workspace.clone());
@@ -492,7 +490,6 @@ fn discover_workspace_config_files_for_single_dir(
       config_folder,
       patches,
       maybe_vendor_dir,
-      opts.using_global_npm_resolver,
     ));
     if let Some(cache) = opts.workspace_cache {
       cache.set(workspace.root_dir_path(), workspace.clone());
@@ -542,7 +539,6 @@ fn handle_workspace_with_members(
             config_folder,
             patches,
             maybe_vendor_dir,
-            opts.using_global_npm_resolver,
           ));
           if let Some(cache) = opts.workspace_cache {
             cache.set(workspace.root_dir_path(), workspace.clone());
