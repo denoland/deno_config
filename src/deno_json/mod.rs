@@ -569,6 +569,7 @@ pub struct ConfigFileJson {
   pub exclude: Option<Value>,
   pub node_modules_dir: Option<bool>,
   pub vendor: Option<bool>,
+  pub license: Option<Value>,
   pub publish: Option<Value>,
 
   pub name: Option<String>,
@@ -1313,6 +1314,15 @@ impl ConfigFile {
       },
       None => Ok(None),
     }
+  }
+
+  pub fn to_license(&self) -> Option<String> {
+    self.json.license.as_ref().and_then(|value| match value {
+      Value::String(license) if !license.trim().is_empty() => {
+        Some(license.trim().to_string())
+      }
+      _ => None,
+    })
   }
 
   /// Return any tasks that are defined in the configuration file as a sequence
