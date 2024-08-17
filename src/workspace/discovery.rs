@@ -343,7 +343,6 @@ fn discover_workspace_config_files_for_single_dir(
               Default::default(),
               patches,
               maybe_vendor_dir,
-              opts.node_modules_dir_flag,
             )),
           });
         }
@@ -440,7 +439,6 @@ fn discover_workspace_config_files_for_single_dir(
         raw_root_workspace.members,
         patches,
         raw_root_workspace.vendor_dir,
-        opts.node_modules_dir_flag,
       ));
       if let Some(cache) = opts.workspace_cache {
         cache.set(root_workspace.root_dir_path(), root_workspace.clone());
@@ -494,7 +492,6 @@ fn discover_workspace_config_files_for_single_dir(
       Default::default(),
       patches,
       maybe_vendor_dir,
-      opts.node_modules_dir_flag,
     ));
     if let Some(cache) = opts.workspace_cache {
       cache.set(workspace.root_dir_path(), workspace.clone());
@@ -545,7 +542,6 @@ fn handle_workspace_with_members(
             Default::default(),
             patches,
             maybe_vendor_dir,
-            opts.node_modules_dir_flag,
           ));
           if let Some(cache) = opts.workspace_cache {
             cache.set(workspace.root_dir_path(), workspace.clone());

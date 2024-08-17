@@ -129,16 +129,8 @@ pub enum WorkspaceDiagnosticKind {
   MissingExports,
   #[error("\"importMap\" field is ignored when \"imports\" or \"scopes\" are specified in the config file.")]
   ImportMapReferencingImportMap,
-  /// npm dependencies can't be patched when using a node_modules directory
-  /// at the moment because I can't think of a way to get it to work well
-  /// due to node resolution. For example, resolving a package to a separate
-  /// folder means that dependencies will resolve using the node_modules directory
-  /// in that folder, which sounds very error prone because the node_modules
-  /// might have duplicate copies of packages in the root node_modules directory.
-  /// When using the global resolver it's somewhat fine though because all
-  /// dependencies resolve to the same global cache directory and are thus deduplicated.
-  #[error("Patching npm dependencies is not supported when using a node_modules directory (Use `--node-modules-dir=false`)")]
-  NpmPatchIgnored,
+  #[error("Patching npm packages ({package_json_url}) is not implemented.")]
+  NpmPatchNotImplemented { package_json_url: Url },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -314,12 +306,6 @@ pub struct WorkspaceDiscoverOptions<'a> {
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
   pub maybe_vendor_override: Option<VendorEnablement<'a>>,
-  /// The value of the `--node-modules-dir` flag.
-  ///
-  /// This is currently only used to inform whether "patch" functionality
-  /// should support patching npm dependencies as only the global resolver
-  /// is supported.
-  pub node_modules_dir_flag: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -364,8 +350,6 @@ pub struct Workspace {
   root_dir: UrlRc,
   config_folders: IndexMap<UrlRc, FolderConfigs>,
   patches: BTreeMap<UrlRc, FolderConfigs>,
-  /// Whether npm patches were removed from the collection of patches.
-  removed_npm_patches: bool,
   pub(crate) vendor_dir: Option<PathBuf>,
 }
 
@@ -375,7 +359,6 @@ impl Workspace {
     members: BTreeMap<UrlRc, ConfigFolder>,
     patches: BTreeMap<UrlRc, ConfigFolder>,
     vendor_dir: Option<PathBuf>,
-    node_modules_dir_flag: Option<bool>,
   ) -> Self {
     let root_dir = new_rc(root.folder_url());
     let mut config_folders = IndexMap::with_capacity(members.len() + 1);
@@ -386,33 +369,15 @@ impl Workspace {
         (folder_url, FolderConfigs::from_config_folder(config_folder))
       },
     ));
-    let mut workspace = Workspace {
+    Workspace {
       root_dir,
       config_folders,
       patches: patches
         .into_iter()
         .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
         .collect(),
-      removed_npm_patches: false,
       vendor_dir,
-    };
-    if workspace.patches.values().any(|f| f.pkg_json.is_some()) {
-      let uses_node_modules_dir = node_modules_dir_flag
-        .or_else(|| {
-          workspace
-            .root_deno_json()
-            .and_then(|c| c.json.node_modules_dir)
-        })
-        .unwrap_or_else(|| {
-          workspace.vendor_dir.is_some()
-            || workspace.package_jsons().next().is_some()
-        });
-      if uses_node_modules_dir {
-        workspace.patches.retain(|_, f| f.pkg_json.is_none());
-        workspace.removed_npm_patches = true;
-      }
     }
-    workspace
   }
 
   pub fn root_dir(&self) -> &UrlRc {
@@ -501,17 +466,6 @@ impl Workspace {
     self.patches.values().filter_map(|f| f.deno_json.as_ref())
   }
 
-  pub fn patch_npm_packages(self: &WorkspaceRc) -> Vec<NpmPackageConfig> {
-    self
-      .patch_pkg_jsons()
-      .filter_map(|c| self.package_json_to_npm_package_config(c))
-      .collect()
-  }
-
-  pub fn patch_pkg_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
-    self.patches.values().filter_map(|f| f.pkg_json.as_ref())
-  }
-
   pub fn resolver_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
     self
       .deno_jsons()
@@ -525,12 +479,6 @@ impl Workspace {
       .config_folders
       .iter()
       .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?)))
-      .chain(
-        self
-          .patches
-          .iter()
-          .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?))),
-      )
   }
 
   pub fn resolver_jsr_pkgs(
@@ -749,16 +697,6 @@ impl Workspace {
       }
     }
 
-    if self.removed_npm_patches {
-      diagnostics.push(WorkspaceDiagnostic {
-        config_url: self
-          .root_deno_json()
-          .map(|c| c.specifier.clone())
-          .unwrap_or_else(|| (*self.root_dir).clone()),
-        kind: WorkspaceDiagnosticKind::NpmPatchIgnored,
-      });
-    }
-
     for folder in self.patches.values() {
       if let Some(config) = &folder.deno_json {
         if config.json.patch.is_some() {
@@ -766,6 +704,17 @@ impl Workspace {
           diagnostics.push(WorkspaceDiagnostic {
             config_url: config.specifier.clone(),
             kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+          });
+        }
+      }
+
+      if let Some(root_deno_json) = self.root_deno_json() {
+        if let Some(pkg_json) = &folder.pkg_json {
+          diagnostics.push(WorkspaceDiagnostic {
+            config_url: root_deno_json.specifier.clone(),
+            kind: WorkspaceDiagnosticKind::NpmPatchNotImplemented {
+              package_json_url: pkg_json.specifier(),
+            },
           });
         }
       }
@@ -1112,7 +1061,6 @@ impl WorkspaceDirectory {
         )]),
         root_dir: opts.root_dir.clone(),
         patches: BTreeMap::new(),
-        removed_npm_patches: false,
         vendor_dir: match opts.use_vendor_dir {
           VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
           VendorEnablement::Disable => None,
@@ -1201,7 +1149,6 @@ impl WorkspaceDirectory {
           )]),
           root_dir: start_dir.clone(),
           patches: BTreeMap::new(),
-          removed_npm_patches: false,
           vendor_dir,
         });
         WorkspaceDirectory::new(&start_dir, workspace)
@@ -2483,6 +2430,31 @@ mod test {
       }
       _ => unreachable!(),
     }
+  }
+
+  #[test]
+  fn test_patch_npm_package() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    assert_eq!(
+      workspace_dir.workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::NpmPatchNotImplemented {
+          package_json_url: Url::from_file_path(
+            root_dir().join("member/package.json")
+          )
+          .unwrap()
+        },
+        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }]
+    );
   }
 
   #[tokio::test]
