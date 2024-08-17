@@ -72,10 +72,19 @@ pub enum PackageJsonDepResolution {
   Disabled,
 }
 
+#[derive(
+  Debug, Default, Serialize, Deserialize, Copy, Clone, PartialEq, Eq,
+)]
+pub enum NpmResolverMode {
+  Global,
+  #[default]
+  Local,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct CreateResolverOptions {
   pub pkg_json_dep_resolution: PackageJsonDepResolution,
-  pub using_node_modules_dir: bool,
+  pub npm_resolver_mode: NpmResolverMode,
   pub specified_import_map: Option<SpecifiedImportMap>,
 }
 
@@ -374,33 +383,24 @@ impl WorkspaceResolver {
         },
       )
     };
-    let (pkg_jsons, maybe_diagnostic) = if options.using_node_modules_dir {
-      (
-        workspace
-          .resolver_package_jsons()
-          .map(map_pkg_json)
-          .collect::<BTreeMap<_, _>>(),
-        workspace
-          .root_deno_json()
-          .as_ref()
-          .filter(|_| {
-            workspace
-              .patch_folders()
-              .filter_map(|f| f.pkg_json.as_ref())
-              .any(|p| p.name.is_some())
-          })
-          .map(|d| NpmPatchIgnoredDiagnostic {
-            deno_json_url: d.specifier.clone(),
-          }),
-      )
-    } else {
-      (
-        workspace
-          .resolver_package_jsons_with_patches()
-          .map(map_pkg_json)
-          .collect::<BTreeMap<_, _>>(),
-        None,
-      )
+    let pkg_jsons = workspace
+      .resolver_package_jsons(options.npm_resolver_mode)
+      .map(map_pkg_json)
+      .collect::<BTreeMap<_, _>>();
+    let maybe_diagnostic = match options.npm_resolver_mode {
+      NpmResolverMode::Global => None,
+      NpmResolverMode::Local => workspace
+        .root_deno_json()
+        .as_ref()
+        .filter(|_| {
+          workspace
+            .patch_folders()
+            .filter_map(|f| f.pkg_json.as_ref())
+            .any(|p| p.name.is_some())
+        })
+        .map(|d| NpmPatchIgnoredDiagnostic {
+          deno_json_url: d.specifier.clone(),
+        }),
     };
 
     Ok(Self {
@@ -1094,7 +1094,7 @@ mod test {
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-          using_node_modules_dir: true,
+          npm_resolver_mode: NpmResolverMode::Local,
           specified_import_map: Some(SpecifiedImportMap {
             base_url: Url::from_directory_path(root_dir()).unwrap(),
             value: json!({
@@ -1136,7 +1136,7 @@ mod test {
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-          using_node_modules_dir: true,
+          npm_resolver_mode: NpmResolverMode::Local,
           specified_import_map: Some(SpecifiedImportMap {
             base_url: Url::from_directory_path(root_dir()).unwrap(),
             value: json!({
@@ -1175,7 +1175,7 @@ mod test {
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-          using_node_modules_dir: true,
+          npm_resolver_mode: NpmResolverMode::Local,
           specified_import_map: None,
         },
         |_| async move { unreachable!() },
@@ -1250,7 +1250,7 @@ mod test {
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-          using_node_modules_dir: true,
+          npm_resolver_mode: NpmResolverMode::Local,
           specified_import_map: None,
         },
         |_| async move { unreachable!() },
@@ -1302,7 +1302,7 @@ mod test {
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-          using_node_modules_dir: true,
+          npm_resolver_mode: NpmResolverMode::Local,
           specified_import_map: None,
         },
         |_| async move { unreachable!() },
@@ -1392,7 +1392,7 @@ mod test {
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-          using_node_modules_dir: true,
+          npm_resolver_mode: NpmResolverMode::Local,
           specified_import_map: None,
         },
         |_| async move { unreachable!() },
@@ -1460,7 +1460,7 @@ mod test {
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-          using_node_modules_dir: false,
+          npm_resolver_mode: NpmResolverMode::Global,
           specified_import_map: None,
         },
         |_| async move { unreachable!() },
@@ -1494,7 +1494,7 @@ mod test {
 
   #[tokio::test]
   async fn patch_npm_workspace_not_global_resolver_causes_diagnostics() {
-    for using_node_modules_dir in [true, false] {
+    for npm_resolver_mode in [NpmResolverMode::Local, NpmResolverMode::Global] {
       let mut fs = TestFileSystem::default();
       fs.insert_json(
         root_dir().join("deno.json"),
@@ -1522,14 +1522,14 @@ mod test {
         .create_resolver(
           super::CreateResolverOptions {
             pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-            using_node_modules_dir,
+            npm_resolver_mode,
             specified_import_map: None,
           },
           |_| async move { unreachable!() },
         )
         .await
         .unwrap();
-      if using_node_modules_dir {
+      if npm_resolver_mode == NpmResolverMode::Local {
         assert_eq!(
           resolver.diagnostics().collect::<Vec<_>>(),
           vec![WorkspaceResolverDiagnostic::NpmPatchIgnored(
@@ -1553,7 +1553,7 @@ mod test {
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
-          using_node_modules_dir: true,
+          npm_resolver_mode: NpmResolverMode::Local,
           specified_import_map: None,
         },
         |_| async move { unreachable!() },

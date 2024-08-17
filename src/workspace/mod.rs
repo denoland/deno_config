@@ -61,6 +61,7 @@ pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionDiagnostic;
 pub use resolver::MappedResolutionError;
+pub use resolver::NpmResolverMode;
 pub use resolver::PackageJsonDepResolution;
 pub use resolver::ResolverWorkspaceJsrPackage;
 pub use resolver::SpecifiedImportMap;
@@ -427,6 +428,10 @@ impl Workspace {
     self.patches.values()
   }
 
+  pub fn patch_package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
+    self.patches.values().filter_map(|f| f.pkg_json.as_ref())
+  }
+
   pub fn deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
     self
       .config_folders
@@ -442,15 +447,7 @@ impl Workspace {
 
   pub fn resolver_package_jsons(
     &self,
-  ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
-    self
-      .config_folders
-      .iter()
-      .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?)))
-  }
-
-  pub fn resolver_package_jsons_with_patches(
-    &self,
+    node_resolver_mode: NpmResolverMode,
   ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
     self
       .config_folders
@@ -460,6 +457,11 @@ impl Workspace {
         self
           .patches
           .iter()
+          .filter(move |_| match node_resolver_mode {
+            NpmResolverMode::Global => true,
+            // don't use these for local resolver
+            NpmResolverMode::Local => false,
+          })
           .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?))),
       )
   }
@@ -467,14 +469,15 @@ impl Workspace {
   pub fn resolver_jsr_pkgs(
     &self,
   ) -> impl Iterator<Item = ResolverWorkspaceJsrPackage> + '_ {
-    let resolver_deno_jsons = self.deno_jsons().map(|c| (false, c)).chain(
-      self
-        .patches
-        .values()
-        .filter_map(|f| f.deno_json.as_ref())
-        .map(|c| (true, c)),
-    );
-    resolver_deno_jsons.filter_map(|(is_patch, config_file)| {
+    let deno_jsons = self
+      .config_folders
+      .iter()
+      .filter_map(|(dir_url, f)| Some((dir_url, f.deno_json.as_ref()?, false)));
+    let resolver_deno_jsons =
+      deno_jsons.chain(self.patches.iter().filter_map(|(dir_url, f)| {
+        Some((dir_url, f.deno_json.as_ref()?, true))
+      }));
+    resolver_deno_jsons.filter_map(|(dir_url, config_file, is_patch)| {
       let name = config_file.json.name.as_ref()?;
       let version = config_file
         .json
@@ -484,7 +487,7 @@ impl Workspace {
       let exports_config = config_file.to_exports_config().ok()?;
       Some(ResolverWorkspaceJsrPackage {
         is_patch,
-        base: Url::from_directory_path(config_file.dir_path()).unwrap(),
+        base: dir_url.as_ref().clone(),
         name: name.to_string(),
         version,
         exports: exports_config.into_map(),
