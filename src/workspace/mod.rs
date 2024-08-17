@@ -743,7 +743,10 @@ impl Workspace {
 
     if self.removed_npm_patches {
       diagnostics.push(WorkspaceDiagnostic {
-        config_url: (*self.root_dir).clone(),
+        config_url: self
+          .root_deno_json()
+          .map(|c| c.specifier.clone())
+          .unwrap_or_else(|| (*self.root_dir).clone()),
         kind: WorkspaceDiagnosticKind::NpmPatchIgnored,
       });
     }
