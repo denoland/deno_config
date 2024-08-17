@@ -68,6 +68,7 @@ pub use resolver::WorkspaceResolvePkgJsonFolderError;
 pub use resolver::WorkspaceResolvePkgJsonFolderErrorKind;
 pub use resolver::WorkspaceResolver;
 pub use resolver::WorkspaceResolverCreateError;
+pub use resolver::WorkspaceResolverDiagnostic;
 
 #[allow(clippy::disallowed_types)]
 type UrlRc = crate::sync::MaybeArc<Url>;
@@ -440,6 +441,15 @@ impl Workspace {
   }
 
   pub fn resolver_package_jsons(
+    &self,
+  ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
+    self
+      .config_folders
+      .iter()
+      .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?)))
+  }
+
+  pub fn resolver_package_jsons_with_patches(
     &self,
   ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
     self
