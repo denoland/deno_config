@@ -129,6 +129,14 @@ pub enum WorkspaceDiagnosticKind {
   MissingExports,
   #[error("\"importMap\" field is ignored when \"imports\" or \"scopes\" are specified in the config file.")]
   ImportMapReferencingImportMap,
+  /// npm dependencies can't be patched when using a node_modules directory
+  /// at the moment because I can't think of a way to get it to work well
+  /// due to node resolution. For example, resolving a package to a separate
+  /// folder means that dependencies will resolve using the node_modules directory
+  /// in that folder, which sounds very error prone because the node_modules
+  /// might have duplicate copies of packages in the root node_modules directory.
+  /// When using the global resolver it's somewhat fine though because all
+  /// dependencies resolve to the same global cache directory and are thus deduplicated.
   #[error("Patching npm dependencies is not supported when using a node_modules directory (Use `--node-modules-dir=false`)")]
   NpmPatchIgnored,
 }
