@@ -566,6 +566,7 @@ impl WorkspaceResolver {
               ));
             }
           } else {
+            // always resolve to workspace packages with no version
             return self.resolve_workspace_jsr_pkg(pkg, package_req_ref);
           }
         }

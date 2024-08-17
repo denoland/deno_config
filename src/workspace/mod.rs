@@ -314,7 +314,7 @@ pub struct WorkspaceDiscoverOptions<'a> {
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
   pub maybe_vendor_override: Option<VendorEnablement<'a>>,
-  /// Whether a node_modules directory should be forced to be used.
+  /// The value of the `--node-modules-dir` flag.
   ///
   /// This is currently only used to inform whether "patch" functionality
   /// should support patching npm dependencies as only the global resolver
