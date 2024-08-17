@@ -338,10 +338,12 @@ fn discover_workspace_config_files_for_single_dir(
           let patches =
             resolve_patch_config_folders(&config_folder, load_config_folder)?;
           return Ok(ConfigFileDiscovery::Workspace {
-            workspace: new_rc(Workspace::new_single(
+            workspace: new_rc(Workspace::new(
               config_folder,
+              Default::default(),
               patches,
               maybe_vendor_dir,
+              opts.node_modules_dir_flag,
             )),
           });
         }
@@ -433,11 +435,12 @@ fn discover_workspace_config_files_for_single_dir(
         &raw_root_workspace.root,
         load_config_folder,
       )?;
-      let root_workspace = new_rc(Workspace::new_with_members(
+      let root_workspace = new_rc(Workspace::new(
         raw_root_workspace.root,
         raw_root_workspace.members,
         patches,
         raw_root_workspace.vendor_dir,
+        opts.node_modules_dir_flag,
       ));
       if let Some(cache) = opts.workspace_cache {
         cache.set(root_workspace.root_dir_path(), root_workspace.clone());
@@ -486,10 +489,12 @@ fn discover_workspace_config_files_for_single_dir(
     );
     let patches =
       resolve_patch_config_folders(&config_folder, load_config_folder)?;
-    let workspace = new_rc(Workspace::new_single(
+    let workspace = new_rc(Workspace::new(
       config_folder,
+      Default::default(),
       patches,
       maybe_vendor_dir,
+      opts.node_modules_dir_flag,
     ));
     if let Some(cache) = opts.workspace_cache {
       cache.set(workspace.root_dir_path(), workspace.clone());
@@ -535,10 +540,12 @@ fn handle_workspace_with_members(
           );
           let patches =
             resolve_patch_config_folders(&config_folder, load_config_folder)?;
-          let workspace = new_rc(Workspace::new_single(
+          let workspace = new_rc(Workspace::new(
             config_folder,
+            Default::default(),
             patches,
             maybe_vendor_dir,
+            opts.node_modules_dir_flag,
           ));
           if let Some(cache) = opts.workspace_cache {
             cache.set(workspace.root_dir_path(), workspace.clone());

@@ -61,7 +61,6 @@ pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionDiagnostic;
 pub use resolver::MappedResolutionError;
-pub use resolver::NpmResolverMode;
 pub use resolver::PackageJsonDepResolution;
 pub use resolver::ResolverWorkspaceJsrPackage;
 pub use resolver::SpecifiedImportMap;
@@ -69,7 +68,6 @@ pub use resolver::WorkspaceResolvePkgJsonFolderError;
 pub use resolver::WorkspaceResolvePkgJsonFolderErrorKind;
 pub use resolver::WorkspaceResolver;
 pub use resolver::WorkspaceResolverCreateError;
-pub use resolver::WorkspaceResolverDiagnostic;
 
 #[allow(clippy::disallowed_types)]
 type UrlRc = crate::sync::MaybeArc<Url>;
@@ -131,6 +129,8 @@ pub enum WorkspaceDiagnosticKind {
   MissingExports,
   #[error("\"importMap\" field is ignored when \"imports\" or \"scopes\" are specified in the config file.")]
   ImportMapReferencingImportMap,
+  #[error("Patching npm dependencies is not supported when using a node_modules directory (Use `--node-modules-dir=false`)")]
+  NpmPatchIgnored,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -306,6 +306,12 @@ pub struct WorkspaceDiscoverOptions<'a> {
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
   pub maybe_vendor_override: Option<VendorEnablement<'a>>,
+  /// Whether a node_modules directory should be forced to be used.
+  ///
+  /// This is currently only used to inform whether "patch" functionality
+  /// should support patching npm dependencies as only the global resolver
+  /// is supported.
+  pub node_modules_dir_flag: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -350,35 +356,18 @@ pub struct Workspace {
   root_dir: UrlRc,
   config_folders: IndexMap<UrlRc, FolderConfigs>,
   patches: BTreeMap<UrlRc, FolderConfigs>,
+  /// Whether npm patches were removed from the collection of patches.
+  removed_npm_patches: bool,
   pub(crate) vendor_dir: Option<PathBuf>,
 }
 
 impl Workspace {
-  pub(crate) fn new_single(
-    config_folder: ConfigFolder,
-    patches: BTreeMap<UrlRc, ConfigFolder>,
-    vendor_dir: Option<PathBuf>,
-  ) -> Self {
-    let root_dir = new_rc(config_folder.folder_url());
-    Workspace {
-      config_folders: IndexMap::from([(
-        root_dir.clone(),
-        FolderConfigs::from_config_folder(config_folder),
-      )]),
-      patches: patches
-        .into_iter()
-        .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
-        .collect(),
-      root_dir: root_dir.clone(),
-      vendor_dir,
-    }
-  }
-
-  pub(crate) fn new_with_members(
+  pub(crate) fn new(
     root: ConfigFolder,
     members: BTreeMap<UrlRc, ConfigFolder>,
     patches: BTreeMap<UrlRc, ConfigFolder>,
     vendor_dir: Option<PathBuf>,
+    node_modules_dir_flag: Option<bool>,
   ) -> Self {
     let root_dir = new_rc(root.folder_url());
     let mut config_folders = IndexMap::with_capacity(members.len() + 1);
@@ -389,15 +378,33 @@ impl Workspace {
         (folder_url, FolderConfigs::from_config_folder(config_folder))
       },
     ));
-    Workspace {
+    let mut workspace = Workspace {
       root_dir,
       config_folders,
       patches: patches
         .into_iter()
         .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
         .collect(),
+      removed_npm_patches: false,
       vendor_dir,
+    };
+    if workspace.patches.values().any(|f| f.pkg_json.is_some()) {
+      let uses_node_modules_dir = node_modules_dir_flag
+        .or_else(|| {
+          workspace
+            .root_deno_json()
+            .and_then(|c| c.json.node_modules_dir)
+        })
+        .unwrap_or_else(|| {
+          workspace.vendor_dir.is_some()
+            || workspace.package_jsons().next().is_some()
+        });
+      if uses_node_modules_dir {
+        workspace.patches.retain(|_, f| f.pkg_json.is_none());
+        workspace.removed_npm_patches = true;
+      }
     }
+    workspace
   }
 
   pub fn root_dir(&self) -> &UrlRc {
@@ -461,7 +468,10 @@ impl Workspace {
       .collect()
   }
 
-  fn package_json_to_npm_package_config(self: &WorkspaceRc, pkg_json: &PackageJsonRc) -> Option<NpmPackageConfig> {
+  fn package_json_to_npm_package_config(
+    self: &WorkspaceRc,
+    pkg_json: &PackageJsonRc,
+  ) -> Option<NpmPackageConfig> {
     Some(NpmPackageConfig {
       workspace_dir: self.resolve_member_dir(&pkg_json.specifier()),
       nv: PackageNv {
@@ -502,7 +512,6 @@ impl Workspace {
 
   pub fn resolver_pkg_jsons(
     &self,
-    node_resolver_mode: NpmResolverMode,
   ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
     self
       .config_folders
@@ -512,11 +521,6 @@ impl Workspace {
         self
           .patches
           .iter()
-          .filter(move |_| match node_resolver_mode {
-            NpmResolverMode::Global => true,
-            // don't use these for local resolver
-            NpmResolverMode::Local => false,
-          })
           .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?))),
       )
   }
@@ -735,6 +739,13 @@ impl Workspace {
 
         check_all_configs(config, &mut diagnostics);
       }
+    }
+
+    if self.removed_npm_patches {
+      diagnostics.push(WorkspaceDiagnostic {
+        config_url: (*self.root_dir).clone(),
+        kind: WorkspaceDiagnosticKind::NpmPatchIgnored,
+      });
     }
 
     for folder in self.patches.values() {
@@ -1088,8 +1099,9 @@ impl WorkspaceDirectory {
           opts.root_dir.clone(),
           FolderConfigs::default(),
         )]),
-        patches: BTreeMap::new(),
         root_dir: opts.root_dir.clone(),
+        patches: BTreeMap::new(),
+        removed_npm_patches: false,
         vendor_dir: match opts.use_vendor_dir {
           VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
           VendorEnablement::Disable => None,
@@ -1178,6 +1190,7 @@ impl WorkspaceDirectory {
           )]),
           root_dir: start_dir.clone(),
           patches: BTreeMap::new(),
+          removed_npm_patches: false,
           vendor_dir,
         });
         WorkspaceDirectory::new(&start_dir, workspace)
