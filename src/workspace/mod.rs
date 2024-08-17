@@ -424,75 +424,11 @@ impl Workspace {
     &self.config_folders
   }
 
-  pub fn patch_folders(&self) -> impl Iterator<Item = &FolderConfigs> {
-    self.patches.values()
-  }
-
-  pub fn patch_package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
-    self.patches.values().filter_map(|f| f.pkg_json.as_ref())
-  }
-
   pub fn deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
     self
       .config_folders
       .values()
       .filter_map(|f| f.deno_json.as_ref())
-  }
-
-  pub fn resolver_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
-    self
-      .deno_jsons()
-      .chain(self.patches.values().filter_map(|f| f.deno_json.as_ref()))
-  }
-
-  pub fn resolver_package_jsons(
-    &self,
-    node_resolver_mode: NpmResolverMode,
-  ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
-    self
-      .config_folders
-      .iter()
-      .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?)))
-      .chain(
-        self
-          .patches
-          .iter()
-          .filter(move |_| match node_resolver_mode {
-            NpmResolverMode::Global => true,
-            // don't use these for local resolver
-            NpmResolverMode::Local => false,
-          })
-          .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?))),
-      )
-  }
-
-  pub fn resolver_jsr_pkgs(
-    &self,
-  ) -> impl Iterator<Item = ResolverWorkspaceJsrPackage> + '_ {
-    let deno_jsons = self
-      .config_folders
-      .iter()
-      .filter_map(|(dir_url, f)| Some((dir_url, f.deno_json.as_ref()?, false)));
-    let resolver_deno_jsons =
-      deno_jsons.chain(self.patches.iter().filter_map(|(dir_url, f)| {
-        Some((dir_url, f.deno_json.as_ref()?, true))
-      }));
-    resolver_deno_jsons.filter_map(|(dir_url, config_file, is_patch)| {
-      let name = config_file.json.name.as_ref()?;
-      let version = config_file
-        .json
-        .version
-        .as_ref()
-        .and_then(|v| Version::parse_standard(v).ok());
-      let exports_config = config_file.to_exports_config().ok()?;
-      Some(ResolverWorkspaceJsrPackage {
-        is_patch,
-        base: dir_url.as_ref().clone(),
-        name: name.to_string(),
-        version,
-        exports: exports_config.into_map(),
-      })
-    })
   }
 
   pub fn package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
@@ -521,20 +457,96 @@ impl Workspace {
   pub fn npm_packages(self: &WorkspaceRc) -> Vec<NpmPackageConfig> {
     self
       .package_jsons()
-      .filter_map(|c| {
-        Some(NpmPackageConfig {
-          workspace_dir: self.resolve_member_dir(&c.specifier()),
-          nv: PackageNv {
-            name: c.name.clone()?,
-            version: {
-              let version = c.version.as_ref()?;
-              deno_semver::Version::parse_from_npm(version).ok()?
-            },
-          },
-          pkg_json: c.clone(),
+      .filter_map(|c| self.package_json_to_npm_package_config(c))
+      .collect()
+  }
+
+  fn package_json_to_npm_package_config(self: &WorkspaceRc, pkg_json: &PackageJsonRc) -> Option<NpmPackageConfig> {
+    Some(NpmPackageConfig {
+      workspace_dir: self.resolve_member_dir(&pkg_json.specifier()),
+      nv: PackageNv {
+        name: pkg_json.name.clone()?,
+        version: {
+          let version = pkg_json.version.as_ref()?;
+          deno_semver::Version::parse_from_npm(version).ok()?
+        },
+      },
+      pkg_json: pkg_json.clone(),
+    })
+  }
+
+  pub fn patch_folders(&self) -> impl Iterator<Item = &FolderConfigs> {
+    self.patches.values()
+  }
+
+  pub fn patch_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
+    self.patches.values().filter_map(|f| f.deno_json.as_ref())
+  }
+
+  pub fn patch_npm_packages(self: &WorkspaceRc) -> Vec<NpmPackageConfig> {
+    self
+      .patch_pkg_jsons()
+      .filter_map(|c| self.package_json_to_npm_package_config(c))
+      .collect()
+  }
+
+  pub fn patch_pkg_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
+    self.patches.values().filter_map(|f| f.pkg_json.as_ref())
+  }
+
+  pub fn resolver_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
+    self
+      .deno_jsons()
+      .chain(self.patches.values().filter_map(|f| f.deno_json.as_ref()))
+  }
+
+  pub fn resolver_pkg_jsons(
+    &self,
+    node_resolver_mode: NpmResolverMode,
+  ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
+    self
+      .config_folders
+      .iter()
+      .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?)))
+      .chain(
+        self
+          .patches
+          .iter()
+          .filter(move |_| match node_resolver_mode {
+            NpmResolverMode::Global => true,
+            // don't use these for local resolver
+            NpmResolverMode::Local => false,
+          })
+          .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?))),
+      )
+  }
+
+  pub fn resolver_jsr_pkgs(
+    &self,
+  ) -> impl Iterator<Item = ResolverWorkspaceJsrPackage> + '_ {
+    self
+      .config_folders
+      .iter()
+      .filter_map(|(dir_url, f)| Some((dir_url, f.deno_json.as_ref()?, false)))
+      .chain(self.patches.iter().filter_map(|(dir_url, f)| {
+        Some((dir_url, f.deno_json.as_ref()?, true))
+      }))
+      .filter_map(|(dir_url, config_file, is_patch)| {
+        let name = config_file.json.name.as_ref()?;
+        let version = config_file
+          .json
+          .version
+          .as_ref()
+          .and_then(|v| Version::parse_standard(v).ok());
+        let exports_config = config_file.to_exports_config().ok()?;
+        Some(ResolverWorkspaceJsrPackage {
+          is_patch,
+          base: dir_url.as_ref().clone(),
+          name: name.to_string(),
+          version,
+          exports: exports_config.into_map(),
         })
       })
-      .collect()
   }
 
   pub async fn create_resolver<

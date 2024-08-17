@@ -384,7 +384,7 @@ impl WorkspaceResolver {
       )
     };
     let pkg_jsons = workspace
-      .resolver_package_jsons(options.npm_resolver_mode)
+      .resolver_pkg_jsons(options.npm_resolver_mode)
       .map(map_pkg_json)
       .collect::<BTreeMap<_, _>>();
     let maybe_diagnostic = match options.npm_resolver_mode {
