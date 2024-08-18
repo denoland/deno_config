@@ -27,9 +27,9 @@ use thiserror::Error;
 use url::Url;
 
 use crate::sync::new_rc;
+use crate::workspace::Workspace;
 
 use super::UrlRc;
-use super::WorkspaceDirectory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolverWorkspaceJsrPackage {
@@ -37,6 +37,7 @@ pub struct ResolverWorkspaceJsrPackage {
   pub name: String,
   pub version: Option<Version>,
   pub exports: IndexMap<String, String>,
+  pub is_patch: bool,
 }
 
 #[derive(Debug)]
@@ -83,10 +84,51 @@ pub struct SpecifiedImportMap {
   pub value: serde_json::Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MappedResolutionDiagnostic {
+  ConstraintNotMatchedLocalVersion {
+    /// If it was for a patch (true) or workspace (false) member.
+    is_patch: bool,
+    reference: JsrPackageReqReference,
+    local_version: Version,
+  },
+}
+
+impl std::fmt::Display for MappedResolutionDiagnostic {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::ConstraintNotMatchedLocalVersion {
+        is_patch,
+        reference,
+        local_version,
+      } => {
+        write!(
+          f,
+          "{0} '{1}@{2}' was not used because it did not match '{1}@{3}'",
+          if *is_patch {
+            "Patch"
+          } else {
+            "Workspace member"
+          },
+          reference.req().name,
+          local_version,
+          reference.req().version_req
+        )
+      }
+    }
+  }
+}
+
 #[derive(Debug, Clone)]
 pub enum MappedResolution<'a> {
-  Normal(Url),
-  ImportMap(Url),
+  Normal {
+    specifier: Url,
+    maybe_diagnostic: Option<Box<MappedResolutionDiagnostic>>,
+  },
+  ImportMap {
+    specifier: Url,
+    maybe_diagnostic: Option<Box<MappedResolutionDiagnostic>>,
+  },
   WorkspaceJsrPackage {
     specifier: Url,
     pkg_req_ref: JsrPackageReqReference,
@@ -195,20 +237,20 @@ impl WorkspaceResolver {
   pub(crate) async fn from_workspace<
     TReturn: Future<Output = Result<String, AnyError>>,
   >(
-    workspace_dir: &WorkspaceDirectory,
+    workspace: &Workspace,
     options: CreateResolverOptions,
     fetch_text: impl FnOnce(&Url) -> TReturn,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     async fn resolve_import_map<
       TReturn: Future<Output = Result<String, AnyError>>,
     >(
-      workspace_dir: &WorkspaceDirectory,
+      workspace: &Workspace,
       specified_import_map: Option<SpecifiedImportMap>,
       fetch_text: impl FnOnce(&Url) -> TReturn,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
-      let root_deno_json = workspace_dir.workspace.root_deno_json();
-      let deno_jsons = workspace_dir.workspace.deno_jsons().collect::<Vec<_>>();
+      let root_deno_json = workspace.root_deno_json();
+      let deno_jsons = workspace.resolver_deno_jsons().collect::<Vec<_>>();
 
       let (import_map_url, import_map) = match specified_import_map {
         Some(SpecifiedImportMap {
@@ -242,13 +284,7 @@ impl WorkspaceResolver {
                 )
               }),
             None => (
-              Cow::Owned(
-                workspace_dir
-                  .workspace
-                  .root_dir()
-                  .join("deno.json")
-                  .unwrap(),
-              ),
+              Cow::Owned(workspace.root_dir().join("deno.json").unwrap()),
               serde_json::Value::Object(Default::default()),
             ),
           };
@@ -293,31 +329,26 @@ impl WorkspaceResolver {
       )?))
     }
 
-    let maybe_import_map = resolve_import_map(
-      workspace_dir,
-      options.specified_import_map,
-      fetch_text,
-    )
-    .await?;
-    let jsr_pkgs = workspace_dir
-      .workspace
-      .resolver_jsr_pkgs()
-      .collect::<Vec<_>>();
-    let pkg_jsons = workspace_dir
-      .workspace
-      .config_folders()
-      .iter()
-      .filter_map(|(dir_url, f)| {
-        let pkg_json = f.pkg_json.clone()?;
+    let maybe_import_map =
+      resolve_import_map(workspace, options.specified_import_map, fetch_text)
+        .await?;
+    let jsr_pkgs = workspace.resolver_jsr_pkgs().collect::<Vec<_>>();
+    let pkg_jsons = workspace
+      .resolver_pkg_jsons()
+      .map(|(dir_url, pkg_json)| {
         let deps = pkg_json.resolve_local_package_json_deps();
-        Some((
+        (
           dir_url.clone(),
-          PkgJsonResolverFolderConfig { deps, pkg_json },
-        ))
+          PkgJsonResolverFolderConfig {
+            deps,
+            pkg_json: pkg_json.clone(),
+          },
+        )
       })
       .collect::<BTreeMap<_, _>>();
+
     Ok(Self {
-      workspace_root: workspace_dir.workspace.root_dir().clone(),
+      workspace_root: workspace.root_dir().clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       jsr_pkgs,
       maybe_import_map,
@@ -394,7 +425,10 @@ impl WorkspaceResolver {
         match import_map.import_map.resolve(specifier, referrer) {
           Ok(value) => {
             return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
-              MappedResolution::ImportMap(value),
+              MappedResolution::ImportMap {
+                specifier: value,
+                maybe_diagnostic: None,
+              },
             )
           }
           Err(err) => MappedResolutionError::ImportMap(err),
@@ -404,7 +438,10 @@ impl WorkspaceResolver {
         match import_map::specifier::resolve_import(specifier, referrer) {
           Ok(value) => {
             return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
-              MappedResolution::Normal(value),
+              MappedResolution::Normal {
+                specifier: value,
+                maybe_diagnostic: None,
+              },
             )
           }
           Err(err) => MappedResolutionError::Specifier(err),
@@ -503,13 +540,14 @@ impl WorkspaceResolver {
     resolution: MappedResolution<'a>,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
     let specifier = match resolution {
-      MappedResolution::Normal(ref specifier) => specifier,
-      MappedResolution::ImportMap(ref specifier) => specifier,
+      MappedResolution::Normal { ref specifier, .. } => specifier,
+      MappedResolution::ImportMap { ref specifier, .. } => specifier,
       _ => return Ok(resolution),
     };
     if specifier.scheme() != "jsr" {
       return Ok(resolution);
     }
+    let mut maybe_diagnostic = None;
     if let Ok(package_req_ref) =
       JsrPackageReqReference::from_specifier(specifier)
     {
@@ -519,13 +557,34 @@ impl WorkspaceResolver {
             if package_req_ref.req().version_req.matches(version) {
               return self.resolve_workspace_jsr_pkg(pkg, package_req_ref);
             } else {
-              // todo: warn
+              maybe_diagnostic = Some(Box::new(
+                MappedResolutionDiagnostic::ConstraintNotMatchedLocalVersion {
+                  is_patch: pkg.is_patch,
+                  reference: package_req_ref.clone(),
+                  local_version: version.clone(),
+                },
+              ));
             }
+          } else {
+            // always resolve to workspace packages with no version
+            return self.resolve_workspace_jsr_pkg(pkg, package_req_ref);
           }
         }
       }
     }
-    Ok(resolution)
+    Ok(match resolution {
+      MappedResolution::Normal { specifier, .. } => MappedResolution::Normal {
+        specifier,
+        maybe_diagnostic,
+      },
+      MappedResolution::ImportMap { specifier, .. } => {
+        MappedResolution::ImportMap {
+          specifier,
+          maybe_diagnostic,
+        }
+      }
+      _ => return Ok(resolution),
+    })
   }
 
   fn resolve_workspace_jsr_pkg<'a>(
@@ -691,7 +750,7 @@ mod test {
     );
     let workspace = workspace_at_start_dir(&fs, &root_dir());
     let resolver = create_resolver(&workspace).await;
-    assert!(resolver.diagnostics().is_empty());
+    assert_eq!(resolver.diagnostics(), Vec::new());
     let resolve = |name: &str, referrer: &str| {
       resolver.resolve(
         name,
@@ -772,7 +831,7 @@ mod test {
     );
     let workspace = workspace_at_start_dir(&fs, &root_dir());
     let resolver = create_resolver(&workspace).await;
-    assert!(resolver.diagnostics().is_empty());
+    assert_eq!(resolver.diagnostics(), Vec::new());
     let result = resolver
       .resolve(
         "@scope/pkg",
@@ -957,8 +1016,9 @@ mod test {
   async fn specified_import_map() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(root_dir().join("deno.json"), json!({}));
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
-    let resolver = workspace
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
@@ -980,8 +1040,8 @@ mod test {
       .resolve("b", &root.join("main.ts").unwrap())
       .unwrap()
     {
-      MappedResolution::ImportMap(url) => {
-        assert_eq!(url, root.join("b/mod.ts").unwrap());
+      MappedResolution::ImportMap { specifier, .. } => {
+        assert_eq!(specifier, root.join("b/mod.ts").unwrap());
       }
       _ => unreachable!(),
     }
@@ -997,8 +1057,9 @@ mod test {
       }),
     );
     fs.insert_json(root_dir().join("a").join("deno.json"), json!({}));
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
-    workspace
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    workspace_dir
+      .workspace
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
@@ -1017,10 +1078,286 @@ mod test {
       .unwrap();
   }
 
+  #[tokio::test]
+  async fn resolves_patch_member_with_version() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["../patch"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/deno.json"),
+      json!({
+        "name": "@scope/patch",
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // matching version
+    match resolver
+      .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // not matching version
+    match resolver
+      .resolve("jsr:@scope/patch@2", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap {
+        specifier,
+        maybe_diagnostic,
+      } => {
+        assert_eq!(specifier, Url::parse("jsr:@scope/patch@2").unwrap());
+        assert_eq!(
+          maybe_diagnostic,
+          Some(Box::new(
+            MappedResolutionDiagnostic::ConstraintNotMatchedLocalVersion {
+              is_patch: true,
+              reference: JsrPackageReqReference::from_str("jsr:@scope/patch@2")
+                .unwrap(),
+              local_version: Version::parse_from_npm("1.0.0").unwrap(),
+            }
+          ))
+        );
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn resolves_patch_member_no_version() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["../patch"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/deno.json"),
+      json!({
+        "name": "@scope/patch",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // always resolves, no matter what version
+    match resolver
+      .resolve("jsr:@scope/patch@12", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn resolves_workspace_member() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("./member/deno.json"),
+      json!({
+        "name": "@scope/member",
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("@scope/member", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("./member/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // matching version
+    match resolver
+      .resolve("jsr:@scope/member@1", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("./member/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // not matching version
+    match resolver
+      .resolve("jsr:@scope/member@2", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap {
+        specifier,
+        maybe_diagnostic,
+      } => {
+        assert_eq!(specifier, Url::parse("jsr:@scope/member@2").unwrap());
+        assert_eq!(
+          maybe_diagnostic,
+          Some(Box::new(
+            MappedResolutionDiagnostic::ConstraintNotMatchedLocalVersion {
+              is_patch: false,
+              reference: JsrPackageReqReference::from_str(
+                "jsr:@scope/member@2"
+              )
+              .unwrap(),
+              local_version: Version::parse_from_npm("1.0.0").unwrap(),
+            }
+          ))
+        );
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[tokio::test]
+  async fn resolves_patch_workspace() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "imports": {
+          "@std/fs": "jsr:@std/fs@0.200.0"
+        },
+        "patch": ["../patch"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/deno.json"),
+      json!({
+        "workspace": ["./member"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("../patch/member/deno.json"),
+      json!({
+        "name": "@scope/patch",
+        "version": "1.0.0",
+        "exports": "./mod.ts",
+        "imports": {
+          "@std/fs": "jsr:@std/fs@1"
+        }
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+        |_| async move { unreachable!() },
+      )
+      .await
+      .unwrap();
+    let root = Url::from_directory_path(root_dir()).unwrap();
+    match resolver
+      .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
+        assert_eq!(specifier, root.join("../patch/member/mod.ts").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // resolving @std/fs from root
+    match resolver
+      .resolve("@std/fs", &root.join("main.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap { specifier, .. } => {
+        assert_eq!(specifier, Url::parse("jsr:@std/fs@0.200.0").unwrap());
+      }
+      _ => unreachable!(),
+    }
+    // resolving @std/fs in patched package
+    match resolver
+      .resolve("@std/fs", &root.join("../patch/member/mod.ts").unwrap())
+      .unwrap()
+    {
+      MappedResolution::ImportMap { specifier, .. } => {
+        assert_eq!(specifier, Url::parse("jsr:@std/fs@1").unwrap());
+      }
+      _ => unreachable!(),
+    }
+  }
+
   async fn create_resolver(
     workspace_dir: &WorkspaceDirectory,
   ) -> WorkspaceResolver {
     workspace_dir
+      .workspace
       .create_resolver(
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,

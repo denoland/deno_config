@@ -40,6 +40,7 @@ use crate::deno_json::JsxImportSourceConfig;
 use crate::deno_json::LintConfig;
 use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
+use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 use crate::deno_json::Task;
 use crate::deno_json::TestConfig;
@@ -58,6 +59,7 @@ mod resolver;
 
 pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
+pub use resolver::MappedResolutionDiagnostic;
 pub use resolver::MappedResolutionError;
 pub use resolver::PackageJsonDepResolution;
 pub use resolver::ResolverWorkspaceJsrPackage;
@@ -127,6 +129,8 @@ pub enum WorkspaceDiagnosticKind {
   MissingExports,
   #[error("\"importMap\" field is ignored when \"imports\" or \"scopes\" are specified in the config file.")]
   ImportMapReferencingImportMap,
+  #[error("Patching npm packages ({package_json_url}) is not implemented.")]
+  NpmPatchNotImplemented { package_json_url: Url },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -137,17 +141,37 @@ pub struct WorkspaceDiagnostic {
 }
 
 #[derive(Debug, Error)]
+pub enum ResolveWorkspacePatchError {
+  #[error(transparent)]
+  ConfigRead(#[from] ConfigReadError),
+  #[error("Could not find patch member in '{}'.", .dir_url)]
+  NotFound { dir_url: Url },
+  #[error("Workspace member cannot be specified as a patch.")]
+  WorkspaceMemberNotAllowed,
+  #[error(transparent)]
+  InvalidPatch(#[from] url::ParseError),
+  #[error(transparent)]
+  Workspace(Box<WorkspaceDiscoverError>),
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigReadError {
+  #[error(transparent)]
+  DenoJsonRead(#[from] ConfigFileReadError),
+  #[error(transparent)]
+  PackageJsonRead(#[from] PackageJsonLoadError),
+}
+
+#[derive(Debug, Error)]
 pub enum ResolveWorkspaceMemberError {
+  #[error(transparent)]
+  ConfigRead(#[from] ConfigReadError),
   #[error("Could not find config file for workspace member in '{}'.", .dir_url)]
   NotFound { dir_url: Url },
   #[error("Could not find package.json for workspace member in '{}'.", .dir_url)]
   NotFoundPackageJson { dir_url: Url },
   #[error("Could not find config file for workspace member in '{}'. Ensure you specify the directory and not the configuration file in the workspace member.", .dir_url)]
   NotFoundMaybeSpecifiedFile { dir_url: Url },
-  #[error(transparent)]
-  ConfigReadError(#[from] ConfigFileReadError),
-  #[error(transparent)]
-  PackageJsonReadError(#[from] PackageJsonLoadError),
   #[error("Workspace member must be nested in a directory under the workspace.\n  Member: {member_url}\n  Workspace: {workspace_url}")]
   NonDescendant { workspace_url: Url, member_url: Url },
   #[error("Cannot specify a workspace member twice ('{}').", .member)]
@@ -209,13 +233,22 @@ pub enum WorkspaceDiscoverErrorKind {
   #[error("Failed resolving start directory.")]
   FailedResolvingStartDirectory(#[source] anyhow::Error),
   #[error(transparent)]
-  ConfigRead(#[from] ConfigFileReadError),
+  ConfigRead(#[from] ConfigReadError),
   #[error(transparent)]
   PackageJsonReadError(#[from] PackageJsonLoadError),
+  #[error(transparent)]
+  PatchConfigParseError(#[from] PatchConfigParseError),
   #[error(transparent)]
   WorkspaceConfigParse(#[from] WorkspaceConfigParseError),
   #[error(transparent)]
   ResolveMember(#[from] ResolveWorkspaceMemberError),
+  #[error("Failed loading patch '{}' in config '{}'.", patch, base)]
+  ResolvePatch {
+    patch: String,
+    base: Url,
+    #[source]
+    source: ResolveWorkspacePatchError,
+  },
   #[error("Command resolved to multiple config files. Ensure all specified paths are within the same workspace.\n  First: {base_workspace_url}\n  Second: {other_workspace_url}")]
   MultipleWorkspaces {
     base_workspace_url: Url,
@@ -316,28 +349,15 @@ impl FolderConfigs {
 pub struct Workspace {
   root_dir: UrlRc,
   config_folders: IndexMap<UrlRc, FolderConfigs>,
+  patches: BTreeMap<UrlRc, FolderConfigs>,
   pub(crate) vendor_dir: Option<PathBuf>,
 }
 
 impl Workspace {
-  pub(crate) fn new_single(
-    config_folder: ConfigFolder,
-    vendor_dir: Option<PathBuf>,
-  ) -> Self {
-    let root_dir = new_rc(config_folder.folder_url());
-    Workspace {
-      config_folders: IndexMap::from([(
-        root_dir.clone(),
-        FolderConfigs::from_config_folder(config_folder),
-      )]),
-      root_dir: root_dir.clone(),
-      vendor_dir,
-    }
-  }
-
-  pub(crate) fn new_with_members(
+  pub(crate) fn new(
     root: ConfigFolder,
     members: BTreeMap<UrlRc, ConfigFolder>,
+    patches: BTreeMap<UrlRc, ConfigFolder>,
     vendor_dir: Option<PathBuf>,
   ) -> Self {
     let root_dir = new_rc(root.folder_url());
@@ -352,6 +372,10 @@ impl Workspace {
     Workspace {
       root_dir,
       config_folders,
+      patches: patches
+        .into_iter()
+        .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
+        .collect(),
       vendor_dir,
     }
   }
@@ -387,26 +411,6 @@ impl Workspace {
       .filter_map(|f| f.deno_json.as_ref())
   }
 
-  pub fn resolver_jsr_pkgs(
-    &self,
-  ) -> impl Iterator<Item = ResolverWorkspaceJsrPackage> + '_ {
-    self.deno_jsons().filter_map(|config_file| {
-      let name = config_file.json.name.as_ref()?;
-      let version = config_file
-        .json
-        .version
-        .as_ref()
-        .and_then(|v| Version::parse_standard(v).ok());
-      let exports_config = config_file.to_exports_config().ok()?;
-      Some(ResolverWorkspaceJsrPackage {
-        base: Url::from_directory_path(config_file.dir_path()).unwrap(),
-        name: name.to_string(),
-        version,
-        exports: exports_config.into_map(),
-      })
-    })
-  }
-
   pub fn package_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
     self
       .config_folders
@@ -433,20 +437,86 @@ impl Workspace {
   pub fn npm_packages(self: &WorkspaceRc) -> Vec<NpmPackageConfig> {
     self
       .package_jsons()
-      .filter_map(|c| {
-        Some(NpmPackageConfig {
-          workspace_dir: self.resolve_member_dir(&c.specifier()),
-          nv: PackageNv {
-            name: c.name.clone()?,
-            version: {
-              let version = c.version.as_ref()?;
-              deno_semver::Version::parse_from_npm(version).ok()?
-            },
-          },
-          pkg_json: c.clone(),
+      .filter_map(|c| self.package_json_to_npm_package_config(c))
+      .collect()
+  }
+
+  fn package_json_to_npm_package_config(
+    self: &WorkspaceRc,
+    pkg_json: &PackageJsonRc,
+  ) -> Option<NpmPackageConfig> {
+    Some(NpmPackageConfig {
+      workspace_dir: self.resolve_member_dir(&pkg_json.specifier()),
+      nv: PackageNv {
+        name: pkg_json.name.clone()?,
+        version: {
+          let version = pkg_json.version.as_ref()?;
+          deno_semver::Version::parse_from_npm(version).ok()?
+        },
+      },
+      pkg_json: pkg_json.clone(),
+    })
+  }
+
+  pub fn patch_folders(&self) -> impl Iterator<Item = &FolderConfigs> {
+    self.patches.values()
+  }
+
+  pub fn patch_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
+    self.patches.values().filter_map(|f| f.deno_json.as_ref())
+  }
+
+  pub fn resolver_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
+    self
+      .deno_jsons()
+      .chain(self.patches.values().filter_map(|f| f.deno_json.as_ref()))
+  }
+
+  pub fn resolver_pkg_jsons(
+    &self,
+  ) -> impl Iterator<Item = (&UrlRc, &PackageJsonRc)> {
+    self
+      .config_folders
+      .iter()
+      .filter_map(|(k, v)| Some((k, v.pkg_json.as_ref()?)))
+  }
+
+  pub fn resolver_jsr_pkgs(
+    &self,
+  ) -> impl Iterator<Item = ResolverWorkspaceJsrPackage> + '_ {
+    self
+      .config_folders
+      .iter()
+      .filter_map(|(dir_url, f)| Some((dir_url, f.deno_json.as_ref()?, false)))
+      .chain(self.patches.iter().filter_map(|(dir_url, f)| {
+        Some((dir_url, f.deno_json.as_ref()?, true))
+      }))
+      .filter_map(|(dir_url, config_file, is_patch)| {
+        let name = config_file.json.name.as_ref()?;
+        let version = config_file
+          .json
+          .version
+          .as_ref()
+          .and_then(|v| Version::parse_standard(v).ok());
+        let exports_config = config_file.to_exports_config().ok()?;
+        Some(ResolverWorkspaceJsrPackage {
+          is_patch,
+          base: dir_url.as_ref().clone(),
+          name: name.to_string(),
+          version,
+          exports: exports_config.into_map(),
         })
       })
-      .collect()
+  }
+
+  pub async fn create_resolver<
+    TReturn: Future<Output = Result<String, AnyError>>,
+  >(
+    &self,
+    options: CreateResolverOptions,
+    fetch_text: impl FnOnce(&Url) -> TReturn,
+  ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
+    WorkspaceResolver::from_workspace(self, options, fetch_text).await
   }
 
   /// Resolves a workspace directory, which can be used for deriving
@@ -551,6 +621,12 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
         });
       }
+      if member_config.json.patch.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+        });
+      }
       if member_config.json.scopes.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
@@ -620,6 +696,30 @@ impl Workspace {
         check_all_configs(config, &mut diagnostics);
       }
     }
+
+    for folder in self.patches.values() {
+      if let Some(config) = &folder.deno_json {
+        if config.json.patch.is_some() {
+          // supporting patching in patches is too complicated
+          diagnostics.push(WorkspaceDiagnostic {
+            config_url: config.specifier.clone(),
+            kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+          });
+        }
+      }
+
+      if let Some(root_deno_json) = self.root_deno_json() {
+        if let Some(pkg_json) = &folder.pkg_json {
+          diagnostics.push(WorkspaceDiagnostic {
+            config_url: root_deno_json.specifier.clone(),
+            kind: WorkspaceDiagnosticKind::NpmPatchNotImplemented {
+              package_json_url: pkg_json.specifier(),
+            },
+          });
+        }
+      }
+    }
+
     diagnostics
   }
 
@@ -960,6 +1060,7 @@ impl WorkspaceDirectory {
           FolderConfigs::default(),
         )]),
         root_dir: opts.root_dir.clone(),
+        patches: BTreeMap::new(),
         vendor_dir: match opts.use_vendor_dir {
           VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
           VendorEnablement::Disable => None,
@@ -1047,6 +1148,7 @@ impl WorkspaceDirectory {
             FolderConfigs::default(),
           )]),
           root_dir: start_dir.clone(),
+          patches: BTreeMap::new(),
           vendor_dir,
         });
         WorkspaceDirectory::new(&start_dir, workspace)
@@ -1158,16 +1260,6 @@ impl WorkspaceDirectory {
       }),
       workspace,
     }
-  }
-
-  pub async fn create_resolver<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
-    &self,
-    options: CreateResolverOptions,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
-  ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(self, options, fetch_text).await
   }
 
   pub fn jsr_packages_for_publish(&self) -> Vec<JsrPackageConfig> {
@@ -2226,6 +2318,145 @@ mod test {
     );
   }
 
+  #[test]
+  fn test_root_member_patch() {
+    let workspace_dir = workspace_for_root_and_member_with_fs(
+      json!({
+        "patch": ["../dir"],
+      }),
+      json!({
+        "patch": [
+          "../../dir"
+        ],
+      }),
+      |fs| {
+        fs.insert_json(root_dir().join("../dir/deno.json"), json!({}));
+      },
+    );
+    assert_eq!(
+      workspace_dir.workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+          .unwrap(),
+      }]
+    );
+  }
+
+  #[test]
+  fn test_patch_of_patch() {
+    let workspace_dir = workspace_for_root_and_member_with_fs(
+      json!({
+        "patch": ["../dir"],
+      }),
+      json!({}),
+      |fs| {
+        fs.insert_json(
+          root_dir().join("../dir/deno.json"),
+          json!({
+            "patch": ["./subdir"] // will be ignored
+          }),
+        );
+      },
+    );
+    assert_eq!(
+      workspace_dir.workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+        config_url: Url::from_directory_path(root_dir())
+          .unwrap()
+          .join("../dir/deno.json")
+          .unwrap(),
+      }]
+    );
+  }
+
+  #[test]
+  fn test_patch_not_exists() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["./member"]
+      }),
+    );
+    let err = workspace_at_start_dir_err(&fs, &root_dir());
+    match err.into_kind() {
+      WorkspaceDiscoverErrorKind::ResolvePatch {
+        patch,
+        base,
+        source,
+      } => {
+        assert_eq!(patch, "./member");
+        assert_eq!(base, Url::from_directory_path(root_dir()).unwrap());
+        match source {
+          ResolveWorkspacePatchError::NotFound { dir_url } => {
+            assert_eq!(
+              dir_url,
+              Url::from_directory_path(root_dir().join("member")).unwrap()
+            );
+          }
+          _ => unreachable!(),
+        }
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[test]
+  fn test_patch_workspace_member() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"],
+        "patch": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
+    let err = workspace_at_start_dir_err(&fs, &root_dir());
+    match err.into_kind() {
+      WorkspaceDiscoverErrorKind::ResolvePatch {
+        patch,
+        base,
+        source,
+      } => {
+        assert_eq!(patch, "./member");
+        assert_eq!(base, Url::from_directory_path(root_dir()).unwrap());
+        assert!(matches!(
+          source,
+          ResolveWorkspacePatchError::WorkspaceMemberNotAllowed
+        ));
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[test]
+  fn test_patch_npm_package() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "patch": ["./member"]
+      }),
+    );
+    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    assert_eq!(
+      workspace_dir.workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::NpmPatchNotImplemented {
+          package_json_url: Url::from_file_path(
+            root_dir().join("member/package.json")
+          )
+          .unwrap()
+        },
+        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }]
+    );
+  }
+
   #[tokio::test]
   async fn test_root_member_imports_and_scopes() {
     let workspace_dir = workspace_for_root_and_member(
@@ -2260,6 +2491,7 @@ mod test {
       }]
     );
     let resolver = workspace_dir
+      .workspace
       .create_resolver(Default::default(), |_| async move {
         unreachable!();
       })

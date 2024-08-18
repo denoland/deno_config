@@ -23,9 +23,12 @@ use crate::glob::PathOrPatternSet;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_parent;
+use crate::workspace::ConfigReadError;
 use crate::workspace::Workspace;
 
 use super::ResolveWorkspaceMemberError;
+use super::ResolveWorkspacePatchError;
+use super::UrlRc;
 use super::VendorEnablement;
 use super::WorkspaceDiscoverError;
 use super::WorkspaceDiscoverErrorKind;
@@ -274,32 +277,34 @@ fn discover_workspace_config_files_for_single_dir(
       Ok(None)
     }
   };
-  let load_config_folder =
-    |folder_path: &Path| -> Result<_, ResolveWorkspaceMemberError> {
-      let maybe_config_file = ConfigFile::maybe_find_in_folder(
-        opts.fs,
-        opts.deno_json_cache,
-        folder_path,
-        &config_file_names,
-        &opts.config_parse_options,
-      )?;
-      let maybe_pkg_json = load_pkg_json_in_folder(folder_path)?;
-      Ok(ConfigFolder::from_maybe_both(
-        maybe_config_file,
-        maybe_pkg_json,
-      ))
-    };
+  let load_config_folder = |folder_path: &Path| -> Result<_, ConfigReadError> {
+    let maybe_config_file = ConfigFile::maybe_find_in_folder(
+      opts.fs,
+      opts.deno_json_cache,
+      folder_path,
+      &config_file_names,
+      &opts.config_parse_options,
+    )?;
+    let maybe_pkg_json = load_pkg_json_in_folder(folder_path)?;
+    Ok(ConfigFolder::from_maybe_both(
+      maybe_config_file,
+      maybe_pkg_json,
+    ))
+  };
   match start {
     DirOrConfigFile::Dir(dir) => {
       start_dir = Some(dir);
     }
     DirOrConfigFile::ConfigFile(file) => {
       let specifier = Url::from_file_path(file).unwrap();
-      let config_file = new_rc(ConfigFile::from_specifier(
-        opts.fs,
-        specifier.clone(),
-        &opts.config_parse_options,
-      )?);
+      let config_file = new_rc(
+        ConfigFile::from_specifier(
+          opts.fs,
+          specifier.clone(),
+          &opts.config_parse_options,
+        )
+        .map_err(ConfigReadError::DenoJsonRead)?,
+      );
 
       // see what config would be loaded if we just specified the parent directory
       let natural_config_folder_result =
@@ -330,9 +335,13 @@ fn discover_workspace_config_files_for_single_dir(
             config_folder.deno_json().map(|d| d.as_ref()),
             opts.maybe_vendor_override.as_ref(),
           );
+          let patches =
+            resolve_patch_config_folders(&config_folder, load_config_folder)?;
           return Ok(ConfigFileDiscovery::Workspace {
-            workspace: new_rc(Workspace::new_single(
+            workspace: new_rc(Workspace::new(
               config_folder,
+              Default::default(),
+              patches,
               maybe_vendor_dir,
             )),
           });
@@ -401,6 +410,7 @@ fn discover_workspace_config_files_for_single_dir(
         first_config_folder_url.as_ref(),
         found_config_folders,
         opts,
+        load_config_folder,
       );
     }
 
@@ -413,18 +423,32 @@ fn discover_workspace_config_files_for_single_dir(
         root_config_folder.deno_json().map(|d| d.as_ref()),
         opts.maybe_vendor_override.as_ref(),
       );
-      let root_workspace = resolve_workspace_for_config_folder(
+      let raw_root_workspace = resolve_workspace_for_config_folder(
         root_config_folder,
         maybe_vendor_dir,
         opts,
         &mut found_config_folders,
         load_config_folder,
       )?;
+      let patches = resolve_patch_config_folders(
+        &raw_root_workspace.root,
+        load_config_folder,
+      )?;
+      let root_workspace = new_rc(Workspace::new(
+        raw_root_workspace.root,
+        raw_root_workspace.members,
+        patches,
+        raw_root_workspace.vendor_dir,
+      ));
+      if let Some(cache) = opts.workspace_cache {
+        cache.set(root_workspace.root_dir_path(), root_workspace.clone());
+      }
       return handle_workspace_with_members(
         root_workspace,
         first_config_folder_url.as_ref(),
         found_config_folders,
         opts,
+        load_config_folder,
       );
     }
 
@@ -461,8 +485,14 @@ fn discover_workspace_config_files_for_single_dir(
       config_folder.deno_json().map(|d| d.as_ref()),
       opts.maybe_vendor_override.as_ref(),
     );
-    let workspace =
-      new_rc(Workspace::new_single(config_folder, maybe_vendor_dir));
+    let patches =
+      resolve_patch_config_folders(&config_folder, load_config_folder)?;
+    let workspace = new_rc(Workspace::new(
+      config_folder,
+      Default::default(),
+      patches,
+      maybe_vendor_dir,
+    ));
     if let Some(cache) = opts.workspace_cache {
       cache.set(workspace.root_dir_path(), workspace.clone());
     }
@@ -482,6 +512,9 @@ fn handle_workspace_with_members(
   first_config_folder_url: Option<&Url>,
   mut found_config_folders: HashMap<Url, ConfigFolder>,
   opts: &WorkspaceDiscoverOptions,
+  load_config_folder: impl Fn(
+    &Path,
+  ) -> Result<Option<ConfigFolder>, ConfigReadError>,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
   let is_root_deno_json_workspace = root_workspace
     .root_deno_json()
@@ -502,8 +535,14 @@ fn handle_workspace_with_members(
             config_folder.deno_json().map(|d| d.as_ref()),
             opts.maybe_vendor_override.as_ref(),
           );
-          let workspace =
-            new_rc(Workspace::new_single(config_folder, maybe_vendor_dir));
+          let patches =
+            resolve_patch_config_folders(&config_folder, load_config_folder)?;
+          let workspace = new_rc(Workspace::new(
+            config_folder,
+            Default::default(),
+            patches,
+            maybe_vendor_dir,
+          ));
           if let Some(cache) = opts.workspace_cache {
             cache.set(workspace.root_dir_path(), workspace.clone());
           }
@@ -553,6 +592,12 @@ fn handle_workspace_with_members(
   })
 }
 
+struct RawResolvedWorkspace {
+  root: ConfigFolder,
+  members: BTreeMap<UrlRc, ConfigFolder>,
+  vendor_dir: Option<PathBuf>,
+}
+
 fn resolve_workspace_for_config_folder(
   root_config_folder: ConfigFolder,
   maybe_vendor_dir: Option<PathBuf>,
@@ -560,11 +605,8 @@ fn resolve_workspace_for_config_folder(
   found_config_folders: &mut HashMap<Url, ConfigFolder>,
   load_config_folder: impl Fn(
     &Path,
-  ) -> Result<
-    Option<ConfigFolder>,
-    ResolveWorkspaceMemberError,
-  >,
-) -> Result<WorkspaceRc, WorkspaceDiscoverError> {
+  ) -> Result<Option<ConfigFolder>, ConfigReadError>,
+) -> Result<RawResolvedWorkspace, WorkspaceDiscoverError> {
   let mut final_members = BTreeMap::new();
   let root_config_file_directory_url = root_config_folder.folder_url();
   let resolve_member_url =
@@ -733,17 +775,131 @@ fn resolve_workspace_for_config_folder(
     }
   }
 
-  let workspace = new_rc(Workspace::new_with_members(
-    root_config_folder,
-    final_members,
-    maybe_vendor_dir,
-  ));
+  Ok(RawResolvedWorkspace {
+    root: root_config_folder,
+    members: final_members,
+    vendor_dir: maybe_vendor_dir,
+  })
+}
 
-  if let Some(cache) = opts.workspace_cache {
-    cache.set(workspace.root_dir_path(), workspace.clone());
+fn resolve_patch_config_folders(
+  root_config_folder: &ConfigFolder,
+  load_config_folder: impl Fn(
+    &Path,
+  ) -> Result<Option<ConfigFolder>, ConfigReadError>,
+) -> Result<BTreeMap<UrlRc, ConfigFolder>, WorkspaceDiscoverError> {
+  let Some(workspace_deno_json) = root_config_folder.deno_json() else {
+    return Ok(Default::default());
+  };
+  let Some(patch_members) = workspace_deno_json.to_patch_config()? else {
+    return Ok(Default::default());
+  };
+  let root_config_file_directory_url = root_config_folder.folder_url();
+  let resolve_patch_dir_url =
+    |raw_patch: &str| -> Result<Url, WorkspaceDiscoverError> {
+      let patch = ensure_trailing_slash(raw_patch);
+      let patch_dir_url =
+        root_config_file_directory_url.join(&patch).map_err(|err| {
+          WorkspaceDiscoverErrorKind::ResolvePatch {
+            base: root_config_file_directory_url.clone(),
+            patch: raw_patch.to_owned(),
+            source: err.into(),
+          }
+        })?;
+      Ok(patch_dir_url)
+    };
+  let mut final_config_folders = BTreeMap::new();
+  for raw_member in &patch_members {
+    let patch_dir_url = resolve_patch_dir_url(raw_member)?;
+    let patch_configs =
+      resolve_patch_member_config_folders(&patch_dir_url, &load_config_folder)
+        .map_err(|err| WorkspaceDiscoverErrorKind::ResolvePatch {
+          base: root_config_file_directory_url.clone(),
+          patch: raw_member.to_string(),
+          source: err,
+        })?;
+
+    for patch_config_url in patch_configs.keys() {
+      if *patch_config_url.as_ref() == root_config_file_directory_url {
+        return Err(WorkspaceDiscoverError(
+          WorkspaceDiscoverErrorKind::ResolvePatch {
+            base: root_config_file_directory_url.clone(),
+            patch: raw_member.to_string(),
+            source: ResolveWorkspacePatchError::WorkspaceMemberNotAllowed,
+          }
+          .into(),
+        ));
+      }
+    }
+
+    final_config_folders.extend(patch_configs);
   }
 
-  Ok(workspace)
+  Ok(final_config_folders)
+}
+
+fn resolve_patch_member_config_folders(
+  patch_dir_url: &Url,
+  load_config_folder: impl Fn(
+    &Path,
+  ) -> Result<Option<ConfigFolder>, ConfigReadError>,
+) -> Result<BTreeMap<UrlRc, ConfigFolder>, ResolveWorkspacePatchError> {
+  let patch_dir_path = patch_dir_url.to_file_path().unwrap();
+  let maybe_config_folder = load_config_folder(&patch_dir_path)?;
+  let Some(config_folder) = maybe_config_folder else {
+    return Err(ResolveWorkspacePatchError::NotFound {
+      dir_url: patch_dir_url.clone(),
+    });
+  };
+  if config_folder.has_workspace_members() {
+    let maybe_vendor_dir =
+      resolve_vendor_dir(config_folder.deno_json().map(|d| d.as_ref()), None);
+    let mut raw_workspace = resolve_workspace_for_config_folder(
+      config_folder,
+      maybe_vendor_dir,
+      &WorkspaceDiscoverOptions::default(),
+      &mut HashMap::new(),
+      &load_config_folder,
+    )
+    .map_err(|err| ResolveWorkspacePatchError::Workspace(Box::new(err)))?;
+    raw_workspace
+      .members
+      .insert(new_rc(raw_workspace.root.folder_url()), raw_workspace.root);
+    Ok(raw_workspace.members)
+  } else {
+    // attempt to find the root workspace directory
+    for ancestor in patch_dir_path.ancestors().skip(1) {
+      let Ok(Some(config_folder)) = load_config_folder(ancestor) else {
+        continue;
+      };
+      if config_folder.has_workspace_members() {
+        let maybe_vendor_dir = resolve_vendor_dir(
+          config_folder.deno_json().map(|d| d.as_ref()),
+          None,
+        );
+        let Ok(mut raw_workspace) = resolve_workspace_for_config_folder(
+          config_folder,
+          maybe_vendor_dir,
+          &WorkspaceDiscoverOptions::default(),
+          &mut HashMap::new(),
+          &load_config_folder,
+        ) else {
+          continue;
+        };
+        if raw_workspace.members.contains_key(patch_dir_url) {
+          raw_workspace.members.insert(
+            new_rc(raw_workspace.root.folder_url()),
+            raw_workspace.root,
+          );
+          return Ok(raw_workspace.members);
+        }
+      }
+    }
+    Ok(BTreeMap::from([(
+      new_rc(patch_dir_url.clone()),
+      config_folder,
+    )]))
+  }
 }
 
 fn resolve_vendor_dir(
