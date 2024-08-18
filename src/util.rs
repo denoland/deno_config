@@ -8,6 +8,13 @@ use url::Url;
 
 pub fn is_skippable_io_error(e: &std::io::Error) -> bool {
   use std::io::ErrorKind::*;
+
+  // skip over invalid filenames on windows
+  const ERROR_INVALID_NAME: i32 = 123;
+  if cfg!(windows) && e.raw_os_error() == Some(ERROR_INVALID_NAME) {
+    return true;
+  }
+
   match e.kind() {
     InvalidInput | PermissionDenied | NotFound => {
       // ok keep going
@@ -156,5 +163,12 @@ mod tests {
         specifier_to_file_path(&Url::parse(specifier).unwrap()).unwrap();
       assert_eq!(result, PathBuf::from(expected_path));
     }
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn is_skippable_io_error_win_invalid_filename() {
+    let error = std::io::Error::from_raw_os_error(123);
+    assert!(is_skippable_io_error(&error));
   }
 }
