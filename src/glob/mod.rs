@@ -477,10 +477,7 @@ pub enum PathOrPattern {
 
 impl PathOrPattern {
   pub fn new(path: &str) -> Result<Self, PathOrPatternParseError> {
-    if path.starts_with("http://")
-      || path.starts_with("https://")
-      || path.starts_with("file://")
-    {
+    if has_url_prefix(path) {
       let url = Url::parse(path).map_err(|err| UrlParseError {
         url: path.to_string(),
         source: err,
@@ -512,10 +509,7 @@ impl PathOrPattern {
       GlobPattern::from_relative(base, p)
         .map(PathOrPattern::Pattern)
         .map_err(|err| err.into())
-    } else if p.starts_with("http://")
-      || p.starts_with("https://")
-      || p.starts_with("file://")
-    {
+    } else if has_url_prefix(p) {
       PathOrPattern::new(p)
     } else if let Some(path) = p.strip_prefix('!') {
       Ok(PathOrPattern::NegatedPath(normalize_path(base.join(path))))
@@ -679,10 +673,15 @@ impl GlobPattern {
 }
 
 pub fn is_glob_pattern(path: &str) -> bool {
-  !path.starts_with("http://")
-    && !path.starts_with("https://")
-    && !path.starts_with("file://")
-    && has_glob_chars(path)
+  !has_url_prefix(path) && has_glob_chars(path)
+}
+
+fn has_url_prefix(pattern: &str) -> bool {
+  pattern.starts_with("http://")
+    || pattern.starts_with("https://")
+    || pattern.starts_with("file://")
+    || pattern.starts_with("npm:")
+    || pattern.starts_with("jsr:")
 }
 
 fn has_glob_chars(pattern: &str) -> bool {
@@ -1481,10 +1480,57 @@ mod test {
   }
 
   #[test]
+  fn new_ctor() {
+    let cwd = current_dir();
+    for scheme in &["http", "https"] {
+      let url = format!("{}://deno.land/x/test", scheme);
+      let pattern = PathOrPattern::new(&url).unwrap();
+      match pattern {
+        PathOrPattern::RemoteUrl(p) => {
+          assert_eq!(p.as_str(), url)
+        }
+        _ => unreachable!(),
+      }
+    }
+    for scheme in &["npm", "jsr"] {
+      let url = format!("{}:@denotest/basic", scheme);
+      let pattern = PathOrPattern::new(&url).unwrap();
+      match pattern {
+        PathOrPattern::RemoteUrl(p) => {
+          assert_eq!(p.as_str(), url)
+        }
+        _ => unreachable!(),
+      }
+    }
+    {
+      let file_specifier = Url::from_directory_path(&cwd).unwrap();
+      let pattern = PathOrPattern::new(file_specifier.as_str()).unwrap();
+      match pattern {
+        PathOrPattern::Path(p) => {
+          assert_eq!(p, cwd);
+        }
+        _ => {
+          unreachable!()
+        }
+      }
+    }
+  }
+
+  #[test]
   fn from_relative_specifier() {
     let cwd = current_dir();
     for scheme in &["http", "https"] {
       let url = format!("{}://deno.land/x/test", scheme);
+      let pattern = PathOrPattern::from_relative(&cwd, &url).unwrap();
+      match pattern {
+        PathOrPattern::RemoteUrl(p) => {
+          assert_eq!(p.as_str(), url)
+        }
+        _ => unreachable!(),
+      }
+    }
+    for scheme in &["npm", "jsr"] {
+      let url = format!("{}:@denotest/basic", scheme);
       let pattern = PathOrPattern::from_relative(&cwd, &url).unwrap();
       match pattern {
         PathOrPattern::RemoteUrl(p) => {
@@ -1542,6 +1588,18 @@ mod test {
         PathGlobMatch::MatchedNegated
       );
     }
+  }
+
+  #[test]
+  fn test_is_glob_pattern() {
+    assert!(!is_glob_pattern("npm:@scope/pkg@*"));
+    assert!(!is_glob_pattern("jsr:@scope/pkg@*"));
+    assert!(!is_glob_pattern("https://deno.land/x/?"));
+    assert!(!is_glob_pattern("http://deno.land/x/?"));
+    assert!(!is_glob_pattern("file:///deno.land/x/?"));
+    assert!(is_glob_pattern("**/*.ts"));
+    assert!(is_glob_pattern("test/?"));
+    assert!(!is_glob_pattern("test/test"));
   }
 
   fn current_dir() -> PathBuf {
