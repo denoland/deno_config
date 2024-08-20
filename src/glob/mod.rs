@@ -477,12 +477,7 @@ pub enum PathOrPattern {
 
 impl PathOrPattern {
   pub fn new(path: &str) -> Result<Self, PathOrPatternParseError> {
-    if path.starts_with("http://")
-      || path.starts_with("https://")
-      || path.starts_with("file://")
-      || path.starts_with("npm:")
-      || path.starts_with("jsr:")
-    {
+    if has_url_prefix(path) {
       let url = Url::parse(path).map_err(|err| UrlParseError {
         url: path.to_string(),
         source: err,
@@ -514,12 +509,7 @@ impl PathOrPattern {
       GlobPattern::from_relative(base, p)
         .map(PathOrPattern::Pattern)
         .map_err(|err| err.into())
-    } else if p.starts_with("http://")
-      || p.starts_with("https://")
-      || p.starts_with("file://")
-      || p.starts_with("npm:")
-      || p.starts_with("jsr:")
-    {
+    } else if has_url_prefix(p) {
       PathOrPattern::new(p)
     } else if let Some(path) = p.strip_prefix('!') {
       Ok(PathOrPattern::NegatedPath(normalize_path(base.join(path))))
@@ -683,12 +673,15 @@ impl GlobPattern {
 }
 
 pub fn is_glob_pattern(path: &str) -> bool {
-  !path.starts_with("http://")
-    && !path.starts_with("https://")
-    && !path.starts_with("file://")
-    && !path.starts_with("npm:")
-    && !path.starts_with("jsr:")
-    && has_glob_chars(path)
+  !has_url_prefix(path) && has_glob_chars(path)
+}
+
+fn has_url_prefix(pattern: &str) -> bool {
+  pattern.starts_with("http://")
+    || pattern.starts_with("https://")
+    || pattern.starts_with("file://")
+    || pattern.starts_with("npm:")
+    || pattern.starts_with("jsr:")
 }
 
 fn has_glob_chars(pattern: &str) -> bool {
