@@ -553,6 +553,24 @@ impl ConfigFileReadError {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeModulesMode {
+  LocalAuto,
+  LocalManual,
+  GlobalAuto,
+}
+
+impl NodeModulesMode {
+  pub fn parse(s: &str) -> Result<Self, AnyError> {
+    match s {
+      "local-auto" => Ok(Self::LocalAuto),
+      "local-manual" => Ok(Self::LocalManual),
+      "global-auto" => Ok(Self::GlobalAuto),
+      s => bail!("Unsupported 'nodeModules' value '{}'. Supported: 'local-auto', 'local-manual', 'global-auto'.", s), 
+    }
+  }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
@@ -568,6 +586,7 @@ pub struct ConfigFileJson {
   pub lock: Option<Value>,
   pub exclude: Option<Value>,
   pub node_modules_dir: Option<bool>,
+  pub node_modules: Option<String>,
   pub vendor: Option<bool>,
   pub license: Option<Value>,
   pub publish: Option<Value>,
@@ -1474,6 +1493,15 @@ impl ConfigFile {
         Ok(Some(path))
       }
     }
+  }
+
+  pub fn node_modules_mode(&self) -> Result<Option<NodeModulesMode>, AnyError> {
+    self
+      .json
+      .node_modules
+      .as_deref()
+      .map(NodeModulesMode::parse)
+      .transpose()
   }
 }
 
@@ -2965,6 +2993,23 @@ Caused by:
         resolved_path,
       );
       assert_eq!(lock_config.frozen(), frozen);
+    }
+  }
+
+  #[test]
+  fn node_modules_mode() {
+    let cases = [
+      ("local-auto", Ok(NodeModulesMode::LocalAuto)),
+      ("local-manual", Ok(NodeModulesMode::LocalManual)),
+      ("global-auto", Ok(NodeModulesMode::GlobalAuto)),
+      ("other", Err("Unsupported 'nodeModules' value 'other'. Supported: 'local-auto', 'local-manual', 'global-auto'.".into()))
+    ];
+
+    for (input, expected) in cases {
+      assert_eq!(
+        NodeModulesMode::parse(input).map_err(|e| e.to_string()),
+        expected
+      );
     }
   }
 }
