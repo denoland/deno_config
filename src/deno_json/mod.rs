@@ -553,7 +553,12 @@ impl ConfigFileReadError {
   }
 }
 
+#[derive(Debug, Error)]
+#[error("Unsupported 'nodeModules' value '{0}'. Supported: 'local-auto', 'local-manual', 'global-auto'.")]
+pub struct NodeModulesParseError(String);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum NodeModulesMode {
   LocalAuto,
   LocalManual,
@@ -561,12 +566,12 @@ pub enum NodeModulesMode {
 }
 
 impl NodeModulesMode {
-  pub fn parse(s: &str) -> Result<Self, AnyError> {
+  pub fn parse(s: &str) -> Result<Self, NodeModulesParseError> {
     match s {
       "local-auto" => Ok(Self::LocalAuto),
       "local-manual" => Ok(Self::LocalManual),
       "global-auto" => Ok(Self::GlobalAuto),
-      s => bail!("Unsupported 'nodeModules' value '{}'. Supported: 'local-auto', 'local-manual', 'global-auto'.", s), 
+      s => Err(NodeModulesParseError(s.into())),
     }
   }
 }
@@ -1493,15 +1498,6 @@ impl ConfigFile {
         Ok(Some(path))
       }
     }
-  }
-
-  pub fn node_modules_mode(&self) -> Result<Option<NodeModulesMode>, AnyError> {
-    self
-      .json
-      .node_modules
-      .as_deref()
-      .map(NodeModulesMode::parse)
-      .transpose()
   }
 }
 

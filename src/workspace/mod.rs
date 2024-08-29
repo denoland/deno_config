@@ -27,6 +27,7 @@ use indexmap::IndexMap;
 use thiserror::Error;
 use url::Url;
 
+use crate::deno_json;
 use crate::deno_json::get_ts_config_for_emit;
 use crate::deno_json::BenchConfig;
 use crate::deno_json::ConfigFile;
@@ -40,6 +41,7 @@ use crate::deno_json::JsxImportSourceConfig;
 use crate::deno_json::LintConfig;
 use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
+use crate::deno_json::NodeModulesMode;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 use crate::deno_json::Task;
@@ -131,6 +133,8 @@ pub enum WorkspaceDiagnosticKind {
   ImportMapReferencingImportMap,
   #[error("Patching npm packages ({package_json_url}) is not implemented.")]
   NpmPatchNotImplemented { package_json_url: Url },
+  #[error("\"nodeModulesDir\" field is deprecated in deno 2.0. Use `\"nodeModules\": \"{0}\"` instead")]
+  DeprecatedNodeModulesDirOption(&'static str),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -621,6 +625,12 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
         });
       }
+      if member_config.json.node_modules.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModules"),
+        });
+      }
       if member_config.json.patch.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
@@ -682,6 +692,14 @@ impl Workspace {
           config_url: config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::ImportMapReferencingImportMap,
         });
+      }
+      if let Some(enabled) = config.json.node_modules_dir {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
+            if enabled { "local-auto" } else { "global-auto" },
+          ),
+        })
       }
     }
 
@@ -1028,6 +1046,16 @@ impl Workspace {
     with_root: impl Fn(&'a ConfigFile) -> R,
   ) -> Option<R> {
     self.root_deno_json().map(|c| with_root(c))
+  }
+
+  pub fn node_modules_mode(
+    &self,
+  ) -> Result<Option<NodeModulesMode>, deno_json::NodeModulesParseError> {
+    self
+      .root_deno_json()
+      .and_then(|c| c.json.node_modules.as_deref())
+      .map(NodeModulesMode::parse)
+      .transpose()
   }
 }
 
@@ -3005,6 +3033,7 @@ mod test {
         "unstable": ["sloppy-imports"],
         "lock": true,
         "nodeModulesDir": true,
+        "nodeModules": "local-auto",
         "vendor": false,
       }),
     );
@@ -3020,6 +3049,11 @@ mod test {
       None
     );
     assert_eq!(workspace_dir.workspace.node_modules_dir(), Some(false));
+    assert!(workspace_dir
+      .workspace
+      .node_modules_mode()
+      .unwrap()
+      .is_none());
     assert_eq!(
       workspace_dir.workspace.resolve_lockfile_path().unwrap(),
       None
@@ -3032,12 +3066,24 @@ mod test {
       workspace_dir.workspace.diagnostics(),
       vec![
         WorkspaceDiagnostic {
+          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
+            "global-auto"
+          ),
+          config_url: Url::from_file_path(root_dir().join("deno.json"))
+            .unwrap(),
+        },
+        WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("lock"),
           config_url: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap(),
         },
         WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
+          config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap(),
+        },
+        WorkspaceDiagnostic {
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModules"),
           config_url: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap(),
         },
@@ -3050,7 +3096,14 @@ mod test {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("vendor"),
           config_url: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap(),
-        }
+        },
+        WorkspaceDiagnostic {
+          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
+            "local-auto"
+          ),
+          config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap(),
+        },
       ]
     );
   }
