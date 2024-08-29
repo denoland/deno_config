@@ -565,7 +565,20 @@ pub enum NodeModulesMode {
   GlobalAuto,
 }
 
+impl std::fmt::Display for NodeModulesMode {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.as_str())
+  }
+}
+
 impl NodeModulesMode {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      NodeModulesMode::LocalAuto => "local-auto",
+      NodeModulesMode::LocalManual => "local-manual",
+      NodeModulesMode::GlobalAuto => "global-auto",
+    }
+  }
   pub fn parse(s: &str) -> Result<Self, NodeModulesParseError> {
     match s {
       "local-auto" => Ok(Self::LocalAuto),
@@ -574,7 +587,7 @@ impl NodeModulesMode {
       s => Err(NodeModulesParseError(s.into())),
     }
   }
-  pub fn uses_node_modules_dir(&self) -> bool {
+  pub fn uses_node_modules_dir(self) -> bool {
     matches!(self, Self::LocalManual | Self::LocalAuto)
   }
 }
