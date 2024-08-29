@@ -574,6 +574,9 @@ impl NodeModulesMode {
       s => Err(NodeModulesParseError(s.into())),
     }
   }
+  pub fn uses_node_modules_dir(&self) -> bool {
+    matches!(self, Self::LocalManual | Self::LocalAuto)
+  }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
