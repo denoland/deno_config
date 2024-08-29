@@ -134,7 +134,7 @@ pub enum WorkspaceDiagnosticKind {
   #[error("Patching npm packages ({package_json_url}) is not implemented.")]
   NpmPatchNotImplemented { package_json_url: Url },
   #[error("\"nodeModulesDir\" field is deprecated in deno 2.0. Use `\"nodeModules\": \"{0}\"` instead")]
-  DeprecatedNodeModulesDirOption(&'static str),
+  DeprecatedNodeModulesDirOption(NodeModulesMode),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -698,11 +698,11 @@ impl Workspace {
           config_url: config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
             if config.json.unstable.iter().any(|v| v == "byonm") {
-              "local-manual"
+              NodeModulesMode::LocalManual
             } else if enabled {
-              "local-auto"
+              NodeModulesMode::LocalAuto
             } else {
-              "global-auto"
+              NodeModulesMode::GlobalAuto
             },
           ),
         })
@@ -3073,7 +3073,7 @@ mod test {
       vec![
         WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            "local-manual"
+            NodeModulesMode::LocalManual
           ),
           config_url: Url::from_file_path(root_dir().join("deno.json"))
             .unwrap(),
@@ -3105,7 +3105,7 @@ mod test {
         },
         WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            "local-auto"
+            NodeModulesMode::LocalAuto,
           ),
           config_url: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap(),
@@ -3116,9 +3116,11 @@ mod test {
 
   #[test]
   fn test_root_member_node_modules_dir_suggestions() {
-    fn suggest(s: &'static str) -> WorkspaceDiagnostic {
+    fn suggest(suggestion: NodeModulesMode) -> WorkspaceDiagnostic {
       WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(s),
+        kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
+          suggestion,
+        ),
         config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
       }
     }
@@ -3129,26 +3131,26 @@ mod test {
             "unstable": ["byonm"],
             "nodeModulesDir": true,
         }),
-        "local-manual",
+        NodeModulesMode::LocalManual,
       ),
       (
         json!({
             "unstable": ["byonm"],
             "nodeModulesDir": false,
         }),
-        "local-manual",
+        NodeModulesMode::LocalManual,
       ),
       (
         json!({
             "nodeModulesDir": true,
         }),
-        "local-auto",
+        NodeModulesMode::LocalAuto,
       ),
       (
         json!({
             "nodeModulesDir": false,
         }),
-        "global-auto",
+        NodeModulesMode::GlobalAuto,
       ),
     ];
 
