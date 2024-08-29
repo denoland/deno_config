@@ -553,6 +553,45 @@ impl ConfigFileReadError {
   }
 }
 
+#[derive(Debug, Error)]
+#[error("Unsupported 'nodeModules' value '{0}'. Supported: 'local-auto', 'local-manual', 'global-auto'.")]
+pub struct NodeModulesParseError(String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NodeModulesMode {
+  LocalAuto,
+  LocalManual,
+  GlobalAuto,
+}
+
+impl std::fmt::Display for NodeModulesMode {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.as_str())
+  }
+}
+
+impl NodeModulesMode {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      NodeModulesMode::LocalAuto => "local-auto",
+      NodeModulesMode::LocalManual => "local-manual",
+      NodeModulesMode::GlobalAuto => "global-auto",
+    }
+  }
+  pub fn parse(s: &str) -> Result<Self, NodeModulesParseError> {
+    match s {
+      "local-auto" => Ok(Self::LocalAuto),
+      "local-manual" => Ok(Self::LocalManual),
+      "global-auto" => Ok(Self::GlobalAuto),
+      s => Err(NodeModulesParseError(s.into())),
+    }
+  }
+  pub fn uses_node_modules_dir(self) -> bool {
+    matches!(self, Self::LocalManual | Self::LocalAuto)
+  }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
@@ -568,6 +607,7 @@ pub struct ConfigFileJson {
   pub lock: Option<Value>,
   pub exclude: Option<Value>,
   pub node_modules_dir: Option<bool>,
+  pub node_modules: Option<String>,
   pub vendor: Option<bool>,
   pub license: Option<Value>,
   pub publish: Option<Value>,
@@ -2965,6 +3005,23 @@ Caused by:
         resolved_path,
       );
       assert_eq!(lock_config.frozen(), frozen);
+    }
+  }
+
+  #[test]
+  fn node_modules_mode() {
+    let cases = [
+      ("local-auto", Ok(NodeModulesMode::LocalAuto)),
+      ("local-manual", Ok(NodeModulesMode::LocalManual)),
+      ("global-auto", Ok(NodeModulesMode::GlobalAuto)),
+      ("other", Err("Unsupported 'nodeModules' value 'other'. Supported: 'local-auto', 'local-manual', 'global-auto'.".into()))
+    ];
+
+    for (input, expected) in cases {
+      assert_eq!(
+        NodeModulesMode::parse(input).map_err(|e| e.to_string()),
+        expected
+      );
     }
   }
 }
