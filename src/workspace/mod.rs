@@ -697,7 +697,13 @@ impl Workspace {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            if enabled { "local-auto" } else { "global-auto" },
+            if config.json.unstable.iter().any(|v| v == "byonm") {
+              "local-manual"
+            } else if enabled {
+              "local-auto"
+            } else {
+              "global-auto"
+            },
           ),
         })
       }
@@ -3067,7 +3073,7 @@ mod test {
       vec![
         WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            "global-auto"
+            "local-manual"
           ),
           config_url: Url::from_file_path(root_dir().join("deno.json"))
             .unwrap(),
@@ -3106,6 +3112,53 @@ mod test {
         },
       ]
     );
+  }
+
+  #[test]
+  fn test_root_member_node_modules_dir_suggestions() {
+    fn suggest(s: &'static str) -> WorkspaceDiagnostic {
+      WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(s),
+        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }
+    }
+
+    let cases = [
+      (
+        json!({
+            "unstable": ["byonm"],
+            "nodeModulesDir": true,
+        }),
+        "local-manual",
+      ),
+      (
+        json!({
+            "unstable": ["byonm"],
+            "nodeModulesDir": false,
+        }),
+        "local-manual",
+      ),
+      (
+        json!({
+            "nodeModulesDir": true,
+        }),
+        "local-auto",
+      ),
+      (
+        json!({
+            "nodeModulesDir": false,
+        }),
+        "global-auto",
+      ),
+    ];
+
+    for (config, suggestion) in cases {
+      let workspace_dir = workspace_for_root_and_member(config, json!({}));
+      assert_eq!(
+        workspace_dir.workspace.diagnostics(),
+        vec![suggest(suggestion)]
+      );
+    }
   }
 
   #[test]
