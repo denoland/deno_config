@@ -133,7 +133,7 @@ pub enum WorkspaceDiagnosticKind {
   ImportMapReferencingImportMap,
   #[error("Patching npm packages ({package_json_url}) is not implemented.")]
   NpmPatchNotImplemented { package_json_url: Url },
-  #[error("\"nodeModulesDir\" field is deprecated in deno 2.0. Use `\"nodeModules\": \"{0}\"` instead")]
+  #[error("\"nodeModulesDir\" field is deprecated in Deno 2.0. Use `\"nodeModules\": \"{0}\"` instead")]
   DeprecatedNodeModulesDirOption(NodeModulesMode),
 }
 
