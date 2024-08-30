@@ -558,7 +558,7 @@ impl ConfigFileReadError {
 }
 
 #[derive(Debug, Error)]
-#[error("Unsupported 'nodeModulesDir' value.")]
+#[error("Unsupported \"nodeModulesDir\" value.")]
 pub struct NodeModulesDirParseError {
   #[source]
   pub source: serde_json::Error,
