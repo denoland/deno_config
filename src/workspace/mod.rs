@@ -691,22 +691,22 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::ImportMapReferencingImportMap,
         });
       }
-      if let Some(enabled) = &config.json.node_modules_dir {
-        if let serde_json::Value::Bool(value) = enabled {
-          diagnostics.push(WorkspaceDiagnostic {
-            config_url: config.specifier.clone(),
-            kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption {
-              previous: *value,
-              suggestion: if config.json.unstable.iter().any(|v| v == "byonm") {
-                NodeModulesDirMode::Manual
-              } else if *value {
-                NodeModulesDirMode::Auto
-              } else {
-                NodeModulesDirMode::None
-              },
+      if let Some(serde_json::Value::Bool(enabled)) =
+        &config.json.node_modules_dir
+      {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption {
+            previous: *enabled,
+            suggestion: if config.json.unstable.iter().any(|v| v == "byonm") {
+              NodeModulesDirMode::Manual
+            } else if *enabled {
+              NodeModulesDirMode::Auto
+            } else {
+              NodeModulesDirMode::None
             },
-          })
-        }
+          },
+        })
       }
     }
 
