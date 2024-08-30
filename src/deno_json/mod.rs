@@ -8,7 +8,11 @@ use indexmap::IndexMap;
 use jsonc_parser::common::Ranged;
 use jsonc_parser::CollectOptions;
 use jsonc_parser::ParseResult;
+use serde::de;
+use serde::de::Unexpected;
+use serde::de::Visitor;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 use serde_json::json;
@@ -554,39 +558,80 @@ impl ConfigFileReadError {
 }
 
 #[derive(Debug, Error)]
-#[error("Unsupported 'nodeModules' value '{0}'. Supported: 'auto', 'manual', 'global'.")]
-pub struct NodeModulesParseError(String);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum NodeModulesMode {
-  Auto,
-  Manual,
-  Global,
+#[error("Unsupported 'nodeModulesDir' value.")]
+pub struct NodeModulesDirParseError {
+  #[source]
+  pub source: serde_json::Error,
 }
 
-impl std::fmt::Display for NodeModulesMode {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NodeModulesDirMode {
+  Auto,
+  Manual,
+  None,
+}
+
+impl<'de> Deserialize<'de> for NodeModulesDirMode {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    struct NodeModulesDirModeVisitor;
+
+    impl<'de> Visitor<'de> for NodeModulesDirModeVisitor {
+      type Value = NodeModulesDirMode;
+
+      fn expecting(
+        &self,
+        formatter: &mut std::fmt::Formatter,
+      ) -> std::fmt::Result {
+        formatter.write_str(r#""auto", "manual", or "none""#)
+      }
+
+      fn visit_str<E>(self, value: &str) -> Result<NodeModulesDirMode, E>
+      where
+        E: de::Error,
+      {
+        match value {
+          "auto" => Ok(NodeModulesDirMode::Auto),
+          "manual" => Ok(NodeModulesDirMode::Manual),
+          "none" => Ok(NodeModulesDirMode::None),
+          _ => Err(de::Error::invalid_value(Unexpected::Str(value), &self)),
+        }
+      }
+
+      fn visit_bool<E>(self, value: bool) -> Result<NodeModulesDirMode, E>
+      where
+        E: de::Error,
+      {
+        if value {
+          Ok(NodeModulesDirMode::Auto)
+        } else {
+          Ok(NodeModulesDirMode::None)
+        }
+      }
+    }
+
+    deserializer.deserialize_any(NodeModulesDirModeVisitor)
+  }
+}
+
+impl std::fmt::Display for NodeModulesDirMode {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "{}", self.as_str())
   }
 }
 
-impl NodeModulesMode {
+impl NodeModulesDirMode {
   pub fn as_str(self) -> &'static str {
     match self {
-      NodeModulesMode::Auto => "auto",
-      NodeModulesMode::Manual => "manual",
-      NodeModulesMode::Global => "global",
+      NodeModulesDirMode::Auto => "auto",
+      NodeModulesDirMode::Manual => "manual",
+      NodeModulesDirMode::None => "none",
     }
   }
-  pub fn parse(s: &str) -> Result<Self, NodeModulesParseError> {
-    match s {
-      "auto" => Ok(Self::Auto),
-      "manual" => Ok(Self::Manual),
-      "global" => Ok(Self::Global),
-      s => Err(NodeModulesParseError(s.into())),
-    }
-  }
+
   pub fn uses_node_modules_dir(self) -> bool {
     matches!(self, Self::Manual | Self::Auto)
   }
@@ -606,8 +651,7 @@ pub struct ConfigFileJson {
   pub bench: Option<Value>,
   pub lock: Option<Value>,
   pub exclude: Option<Value>,
-  pub node_modules_dir: Option<bool>,
-  pub node_modules: Option<String>,
+  pub node_modules_dir: Option<Value>,
   pub vendor: Option<bool>,
   pub license: Option<Value>,
   pub publish: Option<Value>,
@@ -3009,17 +3053,19 @@ Caused by:
   }
 
   #[test]
-  fn node_modules_mode() {
+  fn node_modules_dir_mode() {
     let cases = [
-      ("auto", Ok(NodeModulesMode::Auto)),
-      ("manual", Ok(NodeModulesMode::Manual)),
-      ("global", Ok(NodeModulesMode::Global)),
-      ("other", Err("Unsupported 'nodeModules' value 'other'. Supported: 'auto', 'manual', 'global'.".into()))
+      (json!("auto"), Ok(NodeModulesDirMode::Auto)),
+      (json!("manual"), Ok(NodeModulesDirMode::Manual)),
+      (json!("none"), Ok(NodeModulesDirMode::None)),
+      (json!(true), Ok(NodeModulesDirMode::Auto)),
+      (json!(false), Ok(NodeModulesDirMode::None)),
+      (json!("other"), Err(r#"invalid value: string "other", expected "auto", "manual", or "none""#.into()))
     ];
 
     for (input, expected) in cases {
       assert_eq!(
-        NodeModulesMode::parse(input).map_err(|e| e.to_string()),
+        NodeModulesDirMode::deserialize(input).map_err(|e| e.to_string()),
         expected
       );
     }
