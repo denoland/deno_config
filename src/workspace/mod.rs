@@ -698,11 +698,11 @@ impl Workspace {
           config_url: config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
             if config.json.unstable.iter().any(|v| v == "byonm") {
-              NodeModulesMode::LocalManual
+              NodeModulesMode::Manual
             } else if enabled {
-              NodeModulesMode::LocalAuto
+              NodeModulesMode::Auto
             } else {
-              NodeModulesMode::GlobalAuto
+              NodeModulesMode::Global
             },
           ),
         })
@@ -3039,7 +3039,7 @@ mod test {
         "unstable": ["sloppy-imports"],
         "lock": true,
         "nodeModulesDir": true,
-        "nodeModules": "local-auto",
+        "nodeModules": "auto",
         "vendor": false,
       }),
     );
@@ -3073,7 +3073,7 @@ mod test {
       vec![
         WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            NodeModulesMode::LocalManual
+            NodeModulesMode::Manual
           ),
           config_url: Url::from_file_path(root_dir().join("deno.json"))
             .unwrap(),
@@ -3105,7 +3105,7 @@ mod test {
         },
         WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            NodeModulesMode::LocalAuto,
+            NodeModulesMode::Auto,
           ),
           config_url: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap(),
@@ -3131,26 +3131,26 @@ mod test {
             "unstable": ["byonm"],
             "nodeModulesDir": true,
         }),
-        NodeModulesMode::LocalManual,
+        NodeModulesMode::Manual,
       ),
       (
         json!({
             "unstable": ["byonm"],
             "nodeModulesDir": false,
         }),
-        NodeModulesMode::LocalManual,
+        NodeModulesMode::Manual,
       ),
       (
         json!({
             "nodeModulesDir": true,
         }),
-        NodeModulesMode::LocalAuto,
+        NodeModulesMode::Auto,
       ),
       (
         json!({
             "nodeModulesDir": false,
         }),
-        NodeModulesMode::GlobalAuto,
+        NodeModulesMode::Global,
       ),
     ];
 

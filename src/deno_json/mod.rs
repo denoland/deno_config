@@ -554,15 +554,15 @@ impl ConfigFileReadError {
 }
 
 #[derive(Debug, Error)]
-#[error("Unsupported 'nodeModules' value '{0}'. Supported: 'local-auto', 'local-manual', 'global-auto'.")]
+#[error("Unsupported 'nodeModules' value '{0}'. Supported: 'auto', 'manual', 'global'.")]
 pub struct NodeModulesParseError(String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NodeModulesMode {
-  LocalAuto,
-  LocalManual,
-  GlobalAuto,
+  Auto,
+  Manual,
+  Global,
 }
 
 impl std::fmt::Display for NodeModulesMode {
@@ -574,21 +574,21 @@ impl std::fmt::Display for NodeModulesMode {
 impl NodeModulesMode {
   pub fn as_str(self) -> &'static str {
     match self {
-      NodeModulesMode::LocalAuto => "local-auto",
-      NodeModulesMode::LocalManual => "local-manual",
-      NodeModulesMode::GlobalAuto => "global-auto",
+      NodeModulesMode::Auto => "auto",
+      NodeModulesMode::Manual => "manual",
+      NodeModulesMode::Global => "global",
     }
   }
   pub fn parse(s: &str) -> Result<Self, NodeModulesParseError> {
     match s {
-      "local-auto" => Ok(Self::LocalAuto),
-      "local-manual" => Ok(Self::LocalManual),
-      "global-auto" => Ok(Self::GlobalAuto),
+      "auto" => Ok(Self::Auto),
+      "manual" => Ok(Self::Manual),
+      "global" => Ok(Self::Global),
       s => Err(NodeModulesParseError(s.into())),
     }
   }
   pub fn uses_node_modules_dir(self) -> bool {
-    matches!(self, Self::LocalManual | Self::LocalAuto)
+    matches!(self, Self::Manual | Self::Auto)
   }
 }
 
@@ -3011,10 +3011,10 @@ Caused by:
   #[test]
   fn node_modules_mode() {
     let cases = [
-      ("local-auto", Ok(NodeModulesMode::LocalAuto)),
-      ("local-manual", Ok(NodeModulesMode::LocalManual)),
-      ("global-auto", Ok(NodeModulesMode::GlobalAuto)),
-      ("other", Err("Unsupported 'nodeModules' value 'other'. Supported: 'local-auto', 'local-manual', 'global-auto'.".into()))
+      ("auto", Ok(NodeModulesMode::Auto)),
+      ("manual", Ok(NodeModulesMode::Manual)),
+      ("global", Ok(NodeModulesMode::Global)),
+      ("other", Err("Unsupported 'nodeModules' value 'other'. Supported: 'auto', 'manual', 'global'.".into()))
     ];
 
     for (input, expected) in cases {
