@@ -41,7 +41,8 @@ use crate::deno_json::JsxImportSourceConfig;
 use crate::deno_json::LintConfig;
 use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
-use crate::deno_json::NodeModulesMode;
+use crate::deno_json::NodeModulesDirMode;
+use crate::deno_json::NodeModulesDirParseError;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 use crate::deno_json::Task;
@@ -133,8 +134,11 @@ pub enum WorkspaceDiagnosticKind {
   ImportMapReferencingImportMap,
   #[error("Patching npm packages ({package_json_url}) is not implemented.")]
   NpmPatchNotImplemented { package_json_url: Url },
-  #[error("\"nodeModulesDir\" field is deprecated in Deno 2.0. Use `\"nodeModules\": \"{0}\"` instead")]
-  DeprecatedNodeModulesDirOption(NodeModulesMode),
+  #[error("`\"nodeModulesDir\": {previous}` is deprecated in Deno 2.0. Use `\"nodeModulesDir\": \"{suggestion}\"` instead")]
+  DeprecatedNodeModulesDirOption {
+    previous: bool,
+    suggestion: NodeModulesDirMode,
+  },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -625,12 +629,6 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
         });
       }
-      if member_config.json.node_modules.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: member_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModules"),
-        });
-      }
       if member_config.json.patch.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
@@ -693,18 +691,21 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::ImportMapReferencingImportMap,
         });
       }
-      if let Some(enabled) = config.json.node_modules_dir {
+      if let Some(serde_json::Value::Bool(enabled)) =
+        &config.json.node_modules_dir
+      {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            if config.json.unstable.iter().any(|v| v == "byonm") {
-              NodeModulesMode::LocalManual
-            } else if enabled {
-              NodeModulesMode::LocalAuto
+          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption {
+            previous: *enabled,
+            suggestion: if config.json.unstable.iter().any(|v| v == "byonm") {
+              NodeModulesDirMode::Manual
+            } else if *enabled {
+              NodeModulesDirMode::Auto
             } else {
-              NodeModulesMode::GlobalAuto
+              NodeModulesDirMode::None
             },
-          ),
+          },
         })
       }
     }
@@ -751,12 +752,6 @@ impl Workspace {
     self
       .with_root_config_only(|root_config| root_config.get_check_js())
       .unwrap_or(false)
-  }
-
-  pub fn node_modules_dir(&self) -> Option<bool> {
-    self
-      .with_root_config_only(|root_config| root_config.json.node_modules_dir)
-      .unwrap_or(None)
   }
 
   pub fn vendor_dir_path(&self) -> Option<&PathBuf> {
@@ -1054,13 +1049,17 @@ impl Workspace {
     self.root_deno_json().map(|c| with_root(c))
   }
 
-  pub fn node_modules_mode(
+  pub fn node_modules_dir_mode(
     &self,
-  ) -> Result<Option<NodeModulesMode>, deno_json::NodeModulesParseError> {
+  ) -> Result<Option<NodeModulesDirMode>, deno_json::NodeModulesDirParseError>
+  {
     self
       .root_deno_json()
-      .and_then(|c| c.json.node_modules.as_deref())
-      .map(NodeModulesMode::parse)
+      .and_then(|c| c.json.node_modules_dir.as_ref())
+      .map(|v| {
+        serde_json::from_value::<NodeModulesDirMode>(v.clone())
+          .map_err(|err| NodeModulesDirParseError { source: err })
+      })
       .transpose()
   }
 }
@@ -3038,8 +3037,7 @@ mod test {
       json!({
         "unstable": ["sloppy-imports"],
         "lock": true,
-        "nodeModulesDir": true,
-        "nodeModules": "local-auto",
+        "nodeModulesDir": "auto",
         "vendor": false,
       }),
     );
@@ -3054,12 +3052,10 @@ mod test {
       workspace_dir.workspace.resolve_lockfile_path().unwrap(),
       None
     );
-    assert_eq!(workspace_dir.workspace.node_modules_dir(), Some(false));
-    assert!(workspace_dir
-      .workspace
-      .node_modules_mode()
-      .unwrap()
-      .is_none());
+    assert_eq!(
+      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      Some(NodeModulesDirMode::None)
+    );
     assert_eq!(
       workspace_dir.workspace.resolve_lockfile_path().unwrap(),
       None
@@ -3072,9 +3068,10 @@ mod test {
       workspace_dir.workspace.diagnostics(),
       vec![
         WorkspaceDiagnostic {
-          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            NodeModulesMode::LocalManual
-          ),
+          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption {
+            previous: false,
+            suggestion: NodeModulesDirMode::Manual,
+          },
           config_url: Url::from_file_path(root_dir().join("deno.json"))
             .unwrap(),
         },
@@ -3089,11 +3086,6 @@ mod test {
             .unwrap(),
         },
         WorkspaceDiagnostic {
-          kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModules"),
-          config_url: Url::from_file_path(root_dir().join("member/deno.json"))
-            .unwrap(),
-        },
-        WorkspaceDiagnostic {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("unstable"),
           config_url: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap(),
@@ -3103,24 +3095,21 @@ mod test {
           config_url: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap(),
         },
-        WorkspaceDiagnostic {
-          kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
-            NodeModulesMode::LocalAuto,
-          ),
-          config_url: Url::from_file_path(root_dir().join("member/deno.json"))
-            .unwrap(),
-        },
       ]
     );
   }
 
   #[test]
   fn test_root_member_node_modules_dir_suggestions() {
-    fn suggest(suggestion: NodeModulesMode) -> WorkspaceDiagnostic {
+    fn suggest(
+      previous: bool,
+      suggestion: NodeModulesDirMode,
+    ) -> WorkspaceDiagnostic {
       WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption(
+        kind: WorkspaceDiagnosticKind::DeprecatedNodeModulesDirOption {
+          previous,
           suggestion,
-        ),
+        },
         config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
       }
     }
@@ -3131,34 +3120,38 @@ mod test {
             "unstable": ["byonm"],
             "nodeModulesDir": true,
         }),
-        NodeModulesMode::LocalManual,
+        true,
+        NodeModulesDirMode::Manual,
       ),
       (
         json!({
             "unstable": ["byonm"],
             "nodeModulesDir": false,
         }),
-        NodeModulesMode::LocalManual,
+        false,
+        NodeModulesDirMode::Manual,
       ),
       (
         json!({
             "nodeModulesDir": true,
         }),
-        NodeModulesMode::LocalAuto,
+        true,
+        NodeModulesDirMode::Auto,
       ),
       (
         json!({
             "nodeModulesDir": false,
         }),
-        NodeModulesMode::GlobalAuto,
+        false,
+        NodeModulesDirMode::None,
       ),
     ];
 
-    for (config, suggestion) in cases {
+    for (config, previous, suggestion) in cases {
       let workspace_dir = workspace_for_root_and_member(config, json!({}));
       assert_eq!(
         workspace_dir.workspace.diagnostics(),
-        vec![suggest(suggestion)]
+        vec![suggest(previous, suggestion)]
       );
     }
   }
@@ -4908,7 +4901,10 @@ mod test {
     )
     .unwrap();
     assert_eq!(cache.0.borrow().len(), 1); // writes to the cache
-    assert_eq!(workspace_dir.workspace.node_modules_dir(), Some(true));
+    assert_eq!(
+      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      Some(NodeModulesDirMode::Auto)
+    );
     let new_config_file = ConfigFile::new(
       r#"{ "nodeModulesDir": false }"#,
       Url::from_file_path(root_dir().join("deno.json")).unwrap(),
@@ -4929,7 +4925,10 @@ mod test {
       },
     )
     .unwrap();
-    assert_eq!(workspace_dir.workspace.node_modules_dir(), Some(false)); // reads from the cache
+    assert_eq!(
+      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      Some(NodeModulesDirMode::None) // reads from the cache
+    );
   }
 
   #[test]
