@@ -1049,7 +1049,7 @@ impl Workspace {
     self.root_deno_json().map(|c| with_root(c))
   }
 
-  pub fn node_modules_dir_mode(
+  pub fn node_modules_dir(
     &self,
   ) -> Result<Option<NodeModulesDirMode>, deno_json::NodeModulesDirParseError>
   {
@@ -3053,7 +3053,7 @@ mod test {
       None
     );
     assert_eq!(
-      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      workspace_dir.workspace.node_modules_dir().unwrap(),
       Some(NodeModulesDirMode::None)
     );
     assert_eq!(
@@ -4902,7 +4902,7 @@ mod test {
     .unwrap();
     assert_eq!(cache.0.borrow().len(), 1); // writes to the cache
     assert_eq!(
-      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      workspace_dir.workspace.node_modules_dir().unwrap(),
       Some(NodeModulesDirMode::Auto)
     );
     let new_config_file = ConfigFile::new(
@@ -4926,7 +4926,7 @@ mod test {
     )
     .unwrap();
     assert_eq!(
-      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      workspace_dir.workspace.node_modules_dir().unwrap(),
       Some(NodeModulesDirMode::None) // reads from the cache
     );
   }
