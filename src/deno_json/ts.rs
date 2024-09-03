@@ -114,13 +114,13 @@ static ALLOWED_COMPILER_OPTIONS: phf::Set<&'static str> = phf::phf_set! {
   "strictFunctionTypes",
   "strictNullChecks",
   "strictPropertyInitialization",
-  "useUnknownInCatchVariables", // turn on by default
+  "useUnknownInCatchVariables",
   "types",
   "checkJs",
   "isolatedDeclarations",
-  "verbatimModuleSyntax",   // hook it up
-  "emitDecoratorMetadata",  // warn, unstable could be removed at any time
-  "experimentalDecorators", // warn, unstable could be removed at any time
+  "verbatimModuleSyntax",
+  "emitDecoratorMetadata",
+  "experimentalDecorators",
   "jsx",
   "jsxFactory",
   "jsxFragmentFactory",
