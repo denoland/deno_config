@@ -42,6 +42,7 @@ pub use ts::CompilerOptions;
 pub use ts::EmitConfigOptions;
 pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
+pub use ts::ParsedTsConfigOptions;
 pub use ts::TsConfig;
 
 #[derive(Clone, Debug, Default, Deserialize, Hash, PartialEq)]
@@ -956,16 +957,14 @@ impl ConfigFile {
 
   /// Parse `compilerOptions` and return a serde `Value`.
   /// The result also contains any options that were ignored.
-  pub fn to_compiler_options(
-    &self,
-  ) -> Result<(Value, Option<IgnoredCompilerOptions>), AnyError> {
+  pub fn to_compiler_options(&self) -> Result<ParsedTsConfigOptions, AnyError> {
     if let Some(compiler_options) = self.json.compiler_options.clone() {
-      let options: HashMap<String, Value> =
+      let options: serde_json::Map<String, Value> =
         serde_json::from_value(compiler_options)
           .context("compilerOptions should be an object")?;
-      parse_compiler_options(&options, Some(self.specifier.to_owned()))
+      parse_compiler_options(options, Some(&self.specifier))
     } else {
-      Ok((json!({}), None))
+      Ok(Default::default())
     }
   }
 
@@ -1780,13 +1779,14 @@ mod tests {
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let (options_value, ignored) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
-    let options = options_value.as_object().unwrap();
+    let ParsedTsConfigOptions {
+      options,
+      maybe_ignored,
+    } = config_file.to_compiler_options().unwrap();
     assert!(options.contains_key("strict"));
     assert_eq!(options.len(), 1);
     assert_eq!(
-      ignored,
+      maybe_ignored,
       Some(IgnoredCompilerOptions {
         items: vec!["build".to_string()],
         maybe_specifier: Some(config_specifier),
@@ -2102,8 +2102,7 @@ Caused by:
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
   }
 
   #[test]
@@ -2116,8 +2115,7 @@ Caused by:
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
   }
 
   #[test]
@@ -2137,8 +2135,7 @@ Caused by:
     )
     .unwrap();
 
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
 
     let test_config = config_file.to_test_config().unwrap();
     assert_eq!(test_config.files.include, None);
@@ -2175,8 +2172,7 @@ Caused by:
     )
     .unwrap();
 
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
 
     let publish_config = config_file.to_publish_config().unwrap();
     assert_eq!(publish_config.files.include, None);
@@ -2203,8 +2199,7 @@ Caused by:
     )
     .unwrap();
 
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
 
     let files_config = config_file.to_exclude_files_config().unwrap();
     assert_eq!(files_config.include, None);
