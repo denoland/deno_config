@@ -139,7 +139,8 @@ pub fn parse_compiler_options(
   compiler_options: serde_json::Map<String, Value>,
   maybe_specifier: Option<&Url>,
 ) -> Result<ParsedTsConfigOptions, AnyError> {
-  let mut allowed: serde_json::Map<String, Value> = serde_json::Map::with_capacity(compiler_options.len());
+  let mut allowed: serde_json::Map<String, Value> =
+    serde_json::Map::with_capacity(compiler_options.len());
   let mut ignored: Vec<String> = Vec::with_capacity(compiler_options.len());
 
   for (key, value) in compiler_options {
@@ -151,7 +152,7 @@ pub fn parse_compiler_options(
     // know about this option. It will still take this option into account
     // because the graph resolves the JSX import source to the types for TSC.
     if key != "types" && key != "jsxImportSourceTypes" {
-      if ALLOWED_COMPILER_OPTIONS.contains(&key.as_str()) {
+      if ALLOWED_COMPILER_OPTIONS.contains(key.as_str()) {
         allowed.insert(key, value.to_owned());
       } else {
         ignored.push(key);
@@ -167,7 +168,10 @@ pub fn parse_compiler_options(
     None
   };
 
-  Ok(ParsedTsConfigOptions { options: allowed, maybe_ignored })
+  Ok(ParsedTsConfigOptions {
+    options: allowed,
+    maybe_ignored,
+  })
 }
 
 /// A structure for managing the configuration of TypeScript
@@ -219,7 +223,10 @@ impl TsConfig {
     maybe_config_file: Option<&super::ConfigFile>,
   ) -> Result<Option<IgnoredCompilerOptions>, AnyError> {
     if let Some(config_file) = maybe_config_file {
-      let ParsedTsConfigOptions { options, maybe_ignored } = config_file.to_compiler_options()?;
+      let ParsedTsConfigOptions {
+        options,
+        maybe_ignored,
+      } = config_file.to_compiler_options()?;
       self.merge(serde_json::Value::Object(options));
       Ok(maybe_ignored)
     } else {

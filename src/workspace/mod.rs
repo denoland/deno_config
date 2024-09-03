@@ -42,8 +42,8 @@ use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
-use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::ParsedTsConfigOptions;
+use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 use crate::deno_json::Task;
 use crate::deno_json::TestConfig;
@@ -2259,7 +2259,9 @@ mod test {
         "checkJs": true,
         "jsx": "react-jsx",
         "jsxImportSource": "npm:react",
-      }).as_object().unwrap()
+      })
+      .as_object()
+      .unwrap()
     );
     assert_eq!(
       workspace_dir.workspace.to_compiler_option_types().unwrap(),

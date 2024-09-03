@@ -42,8 +42,8 @@ pub use ts::CompilerOptions;
 pub use ts::EmitConfigOptions;
 pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
-pub use ts::TsConfig;
 pub use ts::ParsedTsConfigOptions;
+pub use ts::TsConfig;
 
 #[derive(Clone, Debug, Default, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -957,9 +957,7 @@ impl ConfigFile {
 
   /// Parse `compilerOptions` and return a serde `Value`.
   /// The result also contains any options that were ignored.
-  pub fn to_compiler_options(
-    &self,
-  ) -> Result<ParsedTsConfigOptions, AnyError> {
+  pub fn to_compiler_options(&self) -> Result<ParsedTsConfigOptions, AnyError> {
     if let Some(compiler_options) = self.json.compiler_options.clone() {
       let options: serde_json::Map<String, Value> =
         serde_json::from_value(compiler_options)
@@ -1781,7 +1779,10 @@ mod tests {
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let ParsedTsConfigOptions { options, maybe_ignored } = config_file.to_compiler_options().unwrap();
+    let ParsedTsConfigOptions {
+      options,
+      maybe_ignored,
+    } = config_file.to_compiler_options().unwrap();
     assert!(options.contains_key("strict"));
     assert_eq!(options.len(), 1);
     assert_eq!(
