@@ -36,7 +36,6 @@ use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::ConfigParseOptions;
 use crate::deno_json::FmtConfig;
 use crate::deno_json::FmtOptionsConfig;
-use crate::deno_json::IgnoredCompilerOptions;
 use crate::deno_json::JsxImportSourceConfig;
 use crate::deno_json::LintConfig;
 use crate::deno_json::LintOptionsConfig;
@@ -44,6 +43,7 @@ use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
 use crate::deno_json::PatchConfigParseError;
+use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PublishConfig;
 use crate::deno_json::Task;
 use crate::deno_json::TestConfig;
@@ -760,10 +760,7 @@ impl Workspace {
 
   pub fn to_compiler_options(
     &self,
-  ) -> Result<
-    Option<(serde_json::Value, Option<IgnoredCompilerOptions>)>,
-    AnyError,
-  > {
+  ) -> Result<Option<ParsedTsConfigOptions>, AnyError> {
     self
       .with_root_config_only(|root_config| root_config.to_compiler_options())
       .map(|o| o.map(Some))
@@ -2256,13 +2253,13 @@ mod test {
         .to_compiler_options()
         .unwrap()
         .unwrap()
-        .0,
-      json!({
+        .options,
+      *json!({
         // ignores member config
         "checkJs": true,
         "jsx": "react-jsx",
         "jsxImportSource": "npm:react",
-      })
+      }).as_object().unwrap()
     );
     assert_eq!(
       workspace_dir.workspace.to_compiler_option_types().unwrap(),

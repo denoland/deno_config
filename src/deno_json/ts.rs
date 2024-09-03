@@ -7,7 +7,6 @@ use serde::Serializer;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::fmt;
 use url::Url;
 
@@ -96,86 +95,54 @@ impl Serialize for IgnoredCompilerOptions {
   }
 }
 
-/// A static slice of all the compiler options that should be ignored that
-/// either have no effect on the compilation or would cause the emit to not work
-/// in Deno.
-pub const IGNORED_COMPILER_OPTIONS: &[&str] = &[
-  "allowImportingTsExtensions",
-  "allowSyntheticDefaultImports",
-  "allowUmdGlobalAccess",
-  "assumeChangesOnlyAffectDirectDependencies",
-  "baseUrl",
-  "build",
-  "charset",
-  "composite",
-  "declaration",
-  "declarationMap",
-  "diagnostics",
-  "disableSizeLimit",
-  "downlevelIteration",
-  "emitBOM",
-  "emitDeclarationOnly",
-  "esModuleInterop",
-  "extendedDiagnostics",
-  "forceConsistentCasingInFileNames",
-  "generateCpuProfile",
-  "help",
-  "importHelpers",
-  "incremental",
-  "init",
-  "inlineSourceMap",
-  "inlineSources",
-  "isolatedModules",
-  "listEmittedFiles",
-  "listFiles",
-  "mapRoot",
-  "maxNodeModuleJsDepth",
-  "module",
-  "moduleDetection",
-  "moduleResolution",
-  "newLine",
-  "noEmit",
-  "noEmitHelpers",
-  "noEmitOnError",
-  "noLib",
-  "noResolve",
-  "out",
-  "outDir",
-  "outFile",
-  "paths",
-  "preserveConstEnums",
-  "preserveSymlinks",
-  "preserveWatchOutput",
-  "pretty",
-  "project",
-  "reactNamespace",
-  "resolveJsonModule",
-  "rootDir",
-  "rootDirs",
-  "showConfig",
-  "skipDefaultLibCheck",
-  "skipLibCheck",
-  "sourceMap",
-  "sourceRoot",
-  "stripInternal",
-  "target",
-  "traceResolution",
-  "tsBuildInfoFile",
-  "typeRoots",
-  "useDefineForClassFields",
-  "version",
-  "watch",
-];
+/// A set of all the compiler options that should be allowed;
+static ALLOWED_COMPILER_OPTIONS: phf::Set<&'static str> = phf::phf_set! {
+  "allowUnreachableCode",
+  "allowUnusedLabels",
+  "strict",
+  "exactOptionalPropertyTypes",
+  "noFallthroughCasesInSwitch",
+  "noImplicitAny",
+  "noImplicitOverride",
+  "noImplicitReturns",
+  "noImplicitThis",
+  "noPropertyAccessFromIndexSignature",
+  "noUncheckedIndexedAccess",
+  "noUnusedLocals",
+  "noUnusedParameters",
+  "strictBindCallApply",
+  "strictFunctionTypes",
+  "strictNullChecks",
+  "strictPropertyInitialization",
+  "useUnknownInCatchVariables", // turn on by default
+  "types",
+  "checkJs",
+  "isolatedDeclarations",
+  "verbatimModuleSyntax",   // hook it up
+  "emitDecoratorMetadata",  // warn, unstable could be removed at any time
+  "experimentalDecorators", // warn, unstable could be removed at any time
+  "jsx",
+  "jsxFactory",
+  "jsxFragmentFactory",
+  "jsxImportSource",
+  "lib",
+  "noErrorTruncation",
+};
+
+#[derive(Debug, Default, Clone)]
+pub struct ParsedTsConfigOptions {
+  pub options: serde_json::Map<String, serde_json::Value>,
+  pub maybe_ignored: Option<IgnoredCompilerOptions>,
+}
 
 pub fn parse_compiler_options(
-  compiler_options: &HashMap<String, Value>,
-  maybe_specifier: Option<Url>,
-) -> Result<(Value, Option<IgnoredCompilerOptions>), AnyError> {
-  let mut filtered: HashMap<String, Value> = HashMap::new();
-  let mut items: Vec<String> = Vec::new();
+  compiler_options: serde_json::Map<String, Value>,
+  maybe_specifier: Option<&Url>,
+) -> Result<ParsedTsConfigOptions, AnyError> {
+  let mut allowed: serde_json::Map<String, Value> = serde_json::Map::with_capacity(compiler_options.len());
+  let mut ignored: Vec<String> = Vec::with_capacity(compiler_options.len());
 
-  for (key, value) in compiler_options.iter() {
-    let key = key.as_str();
+  for (key, value) in compiler_options {
     // We don't pass "types" entries to typescript via the compiler
     // options and instead provide those to tsc as "roots". This is
     // because our "types" behavior is at odds with how TypeScript's
@@ -184,24 +151,23 @@ pub fn parse_compiler_options(
     // know about this option. It will still take this option into account
     // because the graph resolves the JSX import source to the types for TSC.
     if key != "types" && key != "jsxImportSourceTypes" {
-      if IGNORED_COMPILER_OPTIONS.contains(&key) {
-        items.push(key.to_string());
+      if ALLOWED_COMPILER_OPTIONS.contains(&key.as_str()) {
+        allowed.insert(key, value.to_owned());
       } else {
-        filtered.insert(key.to_string(), value.to_owned());
+        ignored.push(key);
       }
     }
   }
-  let value = serde_json::to_value(filtered)?;
-  let maybe_ignored_options = if !items.is_empty() {
+  let maybe_ignored = if !ignored.is_empty() {
     Some(IgnoredCompilerOptions {
-      items,
-      maybe_specifier,
+      items: ignored,
+      maybe_specifier: maybe_specifier.cloned(),
     })
   } else {
     None
   };
 
-  Ok((value, maybe_ignored_options))
+  Ok(ParsedTsConfigOptions { options: allowed, maybe_ignored })
 }
 
 /// A structure for managing the configuration of TypeScript
@@ -240,7 +206,7 @@ impl TsConfig {
   }
 
   /// Merge a serde_json value into the configuration.
-  pub fn merge(&mut self, value: &Value) {
+  pub fn merge(&mut self, value: serde_json::Value) {
     json_merge(&mut self.0, value);
   }
 
@@ -253,9 +219,9 @@ impl TsConfig {
     maybe_config_file: Option<&super::ConfigFile>,
   ) -> Result<Option<IgnoredCompilerOptions>, AnyError> {
     if let Some(config_file) = maybe_config_file {
-      let (value, maybe_ignored_options) = config_file.to_compiler_options()?;
-      self.merge(&value);
-      Ok(maybe_ignored_options)
+      let ParsedTsConfigOptions { options, maybe_ignored } = config_file.to_compiler_options()?;
+      self.merge(serde_json::Value::Object(options));
+      Ok(maybe_ignored)
     } else {
       Ok(None)
     }
@@ -273,15 +239,15 @@ impl Serialize for TsConfig {
 }
 
 /// A function that works like JavaScript's `Object.assign()`.
-fn json_merge(a: &mut Value, b: &Value) {
+fn json_merge(a: &mut Value, b: Value) {
   match (a, b) {
     (&mut Value::Object(ref mut a), Value::Object(b)) => {
       for (k, v) in b {
-        json_merge(a.entry(k.clone()).or_insert(Value::Null), v);
+        json_merge(a.entry(k).or_insert(Value::Null), v);
       }
     }
     (a, b) => {
-      *a = b.clone();
+      *a = b;
     }
   }
 }
@@ -296,7 +262,7 @@ mod tests {
       "strict": true,
       "target": "esnext",
     }));
-    tsconfig1.merge(&json!({
+    tsconfig1.merge(json!({
       "target": "es5",
       "module": "amd",
     }));
@@ -304,7 +270,7 @@ mod tests {
       "target": "esnext",
       "strict": true,
     }));
-    tsconfig2.merge(&json!({
+    tsconfig2.merge(json!({
       "module": "amd",
       "target": "es5",
     }));
@@ -321,7 +287,7 @@ mod tests {
       "b": "d",
       "e": false,
     });
-    json_merge(&mut value_a, &value_b);
+    json_merge(&mut value_a, value_b);
     assert_eq!(
       value_a,
       json!({
