@@ -1654,8 +1654,6 @@ pub fn get_ts_config_for_emit(
       "target": "esnext",
       "tsBuildInfoFile": "internal:///.tsbuildinfo",
       "useDefineForClassFields": true,
-      // TODO(@kitsonk) remove for Deno 2.0
-      "useUnknownInCatchVariables": false,
     })),
     TsConfigType::Emit => TsConfig::new(json!({
       "allowImportingTsExtensions": true,
