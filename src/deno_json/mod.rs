@@ -1654,7 +1654,6 @@ pub fn get_ts_config_for_emit(
       "target": "esnext",
       "tsBuildInfoFile": "internal:///.tsbuildinfo",
       "useDefineForClassFields": true,
-      "useUnknownInCatchVariables": true,
     })),
     TsConfigType::Emit => TsConfig::new(json!({
       "allowImportingTsExtensions": true,
