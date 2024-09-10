@@ -4,7 +4,9 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
+use std::rc::Rc;
 
+use anyhow::anyhow;
 use anyhow::Error as AnyError;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
@@ -392,6 +394,108 @@ impl WorkspaceResolver {
     }
   }
 
+  /// Prepare the workspace resolver for serialization
+  ///
+  /// The most significant preparation involves converting
+  /// absolute paths into relative (based on `root_dir_url`).
+  /// It also takes care of pre-serializing non-serde internal data.
+  pub fn to_serializable(
+    &self,
+    root_dir_url: BaseUrl,
+  ) -> SerializableWorkspaceResolver {
+    SerializableWorkspaceResolver {
+      import_map: self.maybe_import_map().map(|i| {
+        SerializedWorkspaceResolverImportMap {
+          // TODO: This differs from CLI. Confirm
+          specifier: root_dir_url.make_relative_if_descendant(i.base_url()),
+          json: Cow::Owned(i.to_json()),
+        }
+      }),
+      jsr_pkgs: self
+        .jsr_packages()
+        .map(|pkg| SerializedResolverWorkspaceJsrPackage {
+          relative_base: root_dir_url.make_relative_if_descendant(&pkg.base),
+          name: Cow::Borrowed(&pkg.name),
+          version: Cow::Borrowed(&pkg.version),
+          exports: Cow::Borrowed(&pkg.exports),
+        })
+        .collect(),
+      package_jsons: self
+        .pkg_jsons
+        .iter()
+        .map(|(specifier, pkg_json)| {
+          (
+            // TODO: This differs from CLI. Confirm
+            root_dir_url.make_relative_if_descendant(specifier),
+            serde_json::to_value(&pkg_json.pkg_json).unwrap(),
+          )
+        })
+        .collect(),
+      pkg_json_resolution: self.pkg_json_dep_resolution(),
+    }
+  }
+
+  /// Deserialize a `WorkspaceResolver`
+  ///
+  /// Deserialization of `WorkspaceResolver`s is made in two steps. First
+  /// the serialized data must be deserialized in to `SerializableWorkspaceResolver`
+  /// (usually with serde), and then this method converts it into a `WorkspaceResolver`.
+  ///
+  /// This second step involves mainly converting the relative paths within
+  /// `SerializableWorkspaceResolver` into absolute paths using `root_dir_url`.
+  pub fn try_from_serializable(
+    root_dir_url: BaseUrl,
+    serializable_workspace_resolver: SerializableWorkspaceResolver,
+  ) -> anyhow::Result<Self> {
+    let import_map = match serializable_workspace_resolver.import_map {
+      Some(import_map) => Some(
+        import_map::parse_from_json_with_options(
+          root_dir_url.0.join(&import_map.specifier).unwrap(),
+          &import_map.json,
+          import_map::ImportMapOptions {
+            address_hook: None,
+            expand_imports: true,
+          },
+        )?
+        .import_map,
+      ),
+      None => None,
+    };
+    let pkg_jsons = serializable_workspace_resolver
+      .package_jsons
+      .into_iter()
+      .map(|(relative_path, json)| {
+        let path = root_dir_url
+          .0
+          .join(&relative_path)
+          .unwrap()
+          .to_file_path()
+          .unwrap();
+        let pkg_json =
+          deno_package_json::PackageJson::load_from_value(path, json);
+        Rc::new(pkg_json)
+      })
+      .collect();
+    let jsr_packages = serializable_workspace_resolver
+      .jsr_pkgs
+      .into_iter()
+      .map(|pkg| ResolverWorkspaceJsrPackage {
+        is_patch: false, // only used for enhancing the diagnostics, which are discarded when serializing
+        base: root_dir_url.0.join(&pkg.relative_base).unwrap(),
+        name: pkg.name.into_owned(),
+        version: pkg.version.into_owned(),
+        exports: pkg.exports.into_owned(),
+      })
+      .collect();
+    Ok(Self::new_raw(
+      Rc::new(root_dir_url.0.into_owned()),
+      import_map,
+      jsr_packages,
+      pkg_jsons,
+      serializable_workspace_resolver.pkg_json_resolution,
+    ))
+  }
+
   pub fn maybe_import_map(&self) -> Option<&ImportMap> {
     self.maybe_import_map.as_ref().map(|c| &c.import_map)
   }
@@ -686,6 +790,67 @@ impl WorkspaceResolver {
 
   pub fn pkg_json_dep_resolution(&self) -> PackageJsonDepResolution {
     self.pkg_json_dep_resolution
+  }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct SerializedWorkspaceResolverImportMap<'a> {
+  #[serde(borrow)]
+  pub specifier: Cow<'a, str>,
+  #[serde(borrow)]
+  pub json: Cow<'a, str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerializedResolverWorkspaceJsrPackage<'a> {
+  #[serde(borrow)]
+  pub relative_base: Cow<'a, str>,
+  #[serde(borrow)]
+  pub name: Cow<'a, str>,
+  pub version: Cow<'a, Option<Version>>,
+  pub exports: Cow<'a, IndexMap<String, String>>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct SerializableWorkspaceResolver<'a> {
+  #[serde(borrow)]
+  pub import_map: Option<SerializedWorkspaceResolverImportMap<'a>>,
+  #[serde(borrow)]
+  pub jsr_pkgs: Vec<SerializedResolverWorkspaceJsrPackage<'a>>,
+  pub package_jsons: BTreeMap<Cow<'a, str>, serde_json::Value>,
+  pub pkg_json_resolution: PackageJsonDepResolution,
+}
+
+#[derive(Debug, Clone)]
+pub struct BaseUrl<'a>(Cow<'a, Url>);
+
+impl BaseUrl<'_> {
+  pub fn from_directory_path(
+    dir_path: impl AsRef<Path>,
+  ) -> anyhow::Result<Self> {
+    Ok(Self(Cow::Owned(
+      Url::from_directory_path(&dir_path).map_err(|()| {
+        let dir_path = dir_path.as_ref().to_string_lossy();
+        anyhow!(format!("'{dir_path}' is not a valid directory path"))
+      })?,
+    )))
+  }
+
+  fn make_relative_if_descendant<'a>(&self, target: &'a Url) -> Cow<'a, str> {
+    if target.scheme() != "file" {
+      return Cow::Borrowed(target.as_str());
+    }
+
+    match self.0.make_relative(target) {
+      Some(relative) => {
+        if relative.starts_with("../") {
+          Cow::Borrowed(target.as_str())
+        } else {
+          Cow::Owned(relative)
+        }
+      }
+      None => Cow::Borrowed(target.as_str()),
+    }
   }
 }
 
