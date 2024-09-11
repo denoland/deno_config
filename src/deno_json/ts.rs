@@ -122,6 +122,7 @@ static ALLOWED_COMPILER_OPTIONS: phf::Set<&'static str> = phf::phf_set! {
   "noUnusedParameters",
   "strict",
   "strictBindCallApply",
+  "strictBuiltinIteratorReturn",
   "strictFunctionTypes",
   "strictNullChecks",
   "strictPropertyInitialization",
