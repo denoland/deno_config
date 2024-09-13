@@ -1583,6 +1583,8 @@ pub fn get_ts_config_for_emit(
       "jsx": "react",
       "jsxFactory": "React.createElement",
       "jsxFragmentFactory": "React.Fragment",
+      "module": "NodeNext",
+      "moduleResolution": "NodeNext",
     })),
     TsConfigType::Check { lib } => TsConfig::new(json!({
       "allowJs": true,
@@ -1598,7 +1600,8 @@ pub fn get_ts_config_for_emit(
       "inlineSources": true,
       "isolatedModules": true,
       "lib": lib,
-      "module": "esnext",
+      "module": "NodeNext",
+      "moduleResolution": "NodeNext",
       "moduleDetection": "force",
       "noEmit": true,
       "resolveJsonModule": true,
@@ -1620,6 +1623,8 @@ pub fn get_ts_config_for_emit(
       "jsx": "react",
       "jsxFactory": "React.createElement",
       "jsxFragmentFactory": "React.Fragment",
+      "module": "NodeNext",
+      "moduleResolution": "NodeNext",
       "resolveJsonModule": true,
     })),
   };

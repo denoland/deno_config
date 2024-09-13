@@ -2302,6 +2302,8 @@ mod test {
           "jsx": "react-jsx",
           "jsxFactory": "React.createElement",
           "jsxFragmentFactory": "React.Fragment",
+          "module": "NodeNext",
+          "moduleResolution": "NodeNext",
           "resolveJsonModule": true,
           "jsxImportSource": "npm:react"
         })),
