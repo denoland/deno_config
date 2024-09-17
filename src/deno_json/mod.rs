@@ -1604,6 +1604,7 @@ pub fn get_ts_config_for_emit(
       "moduleResolution": "NodeNext",
       "moduleDetection": "force",
       "noEmit": true,
+      "noImplicitOverride": true,
       "resolveJsonModule": true,
       "sourceMap": false,
       "strict": true,
