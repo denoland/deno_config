@@ -473,7 +473,7 @@ impl WorkspaceResolver {
           .unwrap();
         let pkg_json =
           deno_package_json::PackageJson::load_from_value(path, json);
-        Rc::new(pkg_json)
+        PackageJsonRc::new(pkg_json)
       })
       .collect();
     let jsr_packages = serializable_workspace_resolver
@@ -488,7 +488,7 @@ impl WorkspaceResolver {
       })
       .collect();
     Ok(Self::new_raw(
-      Rc::new(root_dir_url.0.into_owned()),
+      UrlRc::new(root_dir_url.0.into_owned()),
       import_map,
       jsr_packages,
       pkg_jsons,
