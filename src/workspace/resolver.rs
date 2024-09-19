@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
-use std::rc::Rc;
 
 use anyhow::anyhow;
 use anyhow::Error as AnyError;
