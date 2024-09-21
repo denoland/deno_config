@@ -927,7 +927,11 @@ impl ConfigFile {
     // try to resolve as a url
     if let Ok(specifier) = Url::parse(value) {
       if specifier.scheme() != "file" {
-        bail!("Only file: specifiers are supported for security reasons in import maps stored in a deno.json");
+        bail!(concat!(
+          "Only file: specifiers are supported for security reasons in import maps ",
+          "stored in a deno.json. To use a remote import map, use the --import-map ",
+          "flag and \"deno.importMap\" in the language server config"
+        ));
       }
       return Ok(Some(specifier_to_file_path(&specifier)?));
     }
@@ -2643,7 +2647,15 @@ Caused by:
     let err = config_file
       .to_import_map(|_url| unreachable!())
       .unwrap_err();
-    assert_eq!(err.to_string(), "Only file: specifiers are supported for security reasons in import maps stored in a deno.json");
+    assert_eq!(
+      err.to_string(),
+      concat!(
+        "Only file: specifiers are supported for security reasons in ",
+        "import maps stored in a deno.json. To use a remote import map, ",
+        "use the --import-map flag and \"deno.importMap\" in the ",
+        "language server config"
+      )
+    );
   }
 
   fn root_url() -> Url {
