@@ -47,7 +47,9 @@ jobs:
       
       - name: Check builds Wasm
         if: contains(matrix.os, 'ubuntu')
-        run: cargo check --all-features --target wasm32-unknown-unknown
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check --all-features --target wasm32-unknown-unknown
 
       - name: Cargo test
         run: cargo test --locked --release --all-features --bins --tests --examples
