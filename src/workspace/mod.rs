@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -36,13 +35,13 @@ use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::ConfigParseOptions;
 use crate::deno_json::FmtConfig;
 use crate::deno_json::FmtOptionsConfig;
-use crate::deno_json::IgnoredCompilerOptions;
 use crate::deno_json::JsxImportSourceConfig;
 use crate::deno_json::LintConfig;
 use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
+use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 use crate::deno_json::Task;
@@ -520,14 +519,12 @@ impl Workspace {
       })
   }
 
-  pub async fn create_resolver<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
+  pub fn create_resolver(
     &self,
     options: CreateResolverOptions,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
+    read_text: impl FnOnce(&Path) -> Result<String, AnyError>,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(self, options, fetch_text).await
+    WorkspaceResolver::from_workspace(self, options, read_text)
   }
 
   /// Resolves a workspace directory, which can be used for deriving
@@ -763,10 +760,7 @@ impl Workspace {
 
   pub fn to_compiler_options(
     &self,
-  ) -> Result<
-    Option<(serde_json::Value, Option<IgnoredCompilerOptions>)>,
-    AnyError,
-  > {
+  ) -> Result<Option<ParsedTsConfigOptions>, AnyError> {
     self
       .with_root_config_only(|root_config| root_config.to_compiler_options())
       .map(|o| o.map(Some))
@@ -810,11 +804,9 @@ impl Workspace {
     )
   }
 
-  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
+  pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, AnyError> {
     self
-      .with_root_config_only(|root_config| {
-        root_config.to_import_map_specifier()
-      })
+      .with_root_config_only(|root_config| root_config.to_import_map_path())
       .unwrap_or(Ok(None))
   }
 
@@ -1052,7 +1044,7 @@ impl Workspace {
     self.root_deno_json().map(|c| with_root(c))
   }
 
-  pub fn node_modules_dir_mode(
+  pub fn node_modules_dir(
     &self,
   ) -> Result<Option<NodeModulesDirMode>, deno_json::NodeModulesDirParseError>
   {
@@ -2258,13 +2250,15 @@ mod test {
         .to_compiler_options()
         .unwrap()
         .unwrap()
-        .0,
-      json!({
+        .options,
+      *json!({
         // ignores member config
         "checkJs": true,
         "jsx": "react-jsx",
         "jsxImportSource": "npm:react",
       })
+      .as_object()
+      .unwrap()
     );
     assert_eq!(
       workspace_dir.workspace.to_compiler_option_types().unwrap(),
@@ -2305,6 +2299,8 @@ mod test {
           "jsx": "react-jsx",
           "jsxFactory": "React.createElement",
           "jsxFragmentFactory": "React.Fragment",
+          "module": "NodeNext",
+          "moduleResolution": "NodeNext",
           "resolveJsonModule": true,
           "jsxImportSource": "npm:react"
         })),
@@ -2338,10 +2334,10 @@ mod test {
     assert_eq!(
       workspace_dir
         .workspace
-        .to_import_map_specifier()
+        .to_import_map_path()
         .unwrap()
         .unwrap(),
-      Url::from_file_path(root_dir().join("other.json")).unwrap()
+      root_dir().join("other.json"),
     );
     assert_eq!(
       workspace_dir.workspace.diagnostics(),
@@ -2492,8 +2488,8 @@ mod test {
     );
   }
 
-  #[tokio::test]
-  async fn test_root_member_imports_and_scopes() {
+  #[test]
+  fn test_root_member_imports_and_scopes() {
     let workspace_dir = workspace_for_root_and_member(
       json!({
         "imports": {
@@ -2527,10 +2523,7 @@ mod test {
     );
     let resolver = workspace_dir
       .workspace
-      .create_resolver(Default::default(), |_| async move {
-        unreachable!();
-      })
-      .await
+      .create_resolver(Default::default(), |_| unreachable!())
       .unwrap();
     assert_eq!(
       serde_json::from_str::<serde_json::Value>(
@@ -2571,10 +2564,10 @@ mod test {
     assert_eq!(
       workspace_dir
         .workspace
-        .to_import_map_specifier()
+        .to_import_map_path()
         .unwrap()
         .unwrap(),
-      Url::from_file_path(root_dir().join("other.json")).unwrap()
+      root_dir().join("other.json")
     );
     assert_eq!(
       workspace_dir.workspace.diagnostics(),
@@ -3055,7 +3048,7 @@ mod test {
       None
     );
     assert_eq!(
-      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      workspace_dir.workspace.node_modules_dir().unwrap(),
       Some(NodeModulesDirMode::None)
     );
     assert_eq!(
@@ -4904,7 +4897,7 @@ mod test {
     .unwrap();
     assert_eq!(cache.0.borrow().len(), 1); // writes to the cache
     assert_eq!(
-      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      workspace_dir.workspace.node_modules_dir().unwrap(),
       Some(NodeModulesDirMode::Auto)
     );
     let new_config_file = ConfigFile::new(
@@ -4928,7 +4921,7 @@ mod test {
     )
     .unwrap();
     assert_eq!(
-      workspace_dir.workspace.node_modules_dir_mode().unwrap(),
+      workspace_dir.workspace.node_modules_dir().unwrap(),
       Some(NodeModulesDirMode::None) // reads from the cache
     );
   }

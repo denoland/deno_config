@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::path::Path;
 
 use anyhow::Error as AnyError;
@@ -235,19 +234,15 @@ pub struct WorkspaceResolver {
 }
 
 impl WorkspaceResolver {
-  pub(crate) async fn from_workspace<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
+  pub(crate) fn from_workspace(
     workspace: &Workspace,
     options: CreateResolverOptions,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
+    read_file: impl FnOnce(&Path) -> Result<String, AnyError>,
   ) -> Result<Self, WorkspaceResolverCreateError> {
-    async fn resolve_import_map<
-      TReturn: Future<Output = Result<String, AnyError>>,
-    >(
+    fn resolve_import_map(
       workspace: &Workspace,
       specified_import_map: Option<SpecifiedImportMap>,
-      fetch_text: impl FnOnce(&Url) -> TReturn,
+      read_file: impl FnOnce(&Path) -> Result<String, AnyError>,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
       let root_deno_json = workspace.root_deno_json();
@@ -272,8 +267,7 @@ impl WorkspaceResolver {
 
           let config_specified_import_map = match root_deno_json.as_ref() {
             Some(deno_json) => deno_json
-              .to_import_map_value(fetch_text)
-              .await
+              .to_import_map_value(read_file)
               .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
                 referrer: deno_json.specifier.clone(),
                 source,
@@ -331,8 +325,7 @@ impl WorkspaceResolver {
     }
 
     let maybe_import_map =
-      resolve_import_map(workspace, options.specified_import_map, fetch_text)
-        .await?;
+      resolve_import_map(workspace, options.specified_import_map, read_file)?;
     let jsr_pkgs = workspace.resolver_jsr_pkgs().collect::<Vec<_>>();
     let pkg_jsons = workspace
       .resolver_pkg_jsons()
@@ -715,8 +708,8 @@ mod test {
     }
   }
 
-  #[tokio::test]
-  async fn pkg_json_resolution() {
+  #[test]
+  fn pkg_json_resolution() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -752,7 +745,7 @@ mod test {
       }),
     );
     let workspace = workspace_at_start_dir(&fs, &root_dir());
-    let resolver = create_resolver(&workspace).await;
+    let resolver = create_resolver(&workspace);
     assert_eq!(resolver.diagnostics(), Vec::new());
     let resolve = |name: &str, referrer: &str| {
       resolver.resolve(
@@ -821,8 +814,8 @@ mod test {
     assert!(resolve("pkg", "../outside-workspace.js").is_err());
   }
 
-  #[tokio::test]
-  async fn single_pkg_no_import_map() {
+  #[test]
+  fn single_pkg_no_import_map() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -833,7 +826,7 @@ mod test {
       }),
     );
     let workspace = workspace_at_start_dir(&fs, &root_dir());
-    let resolver = create_resolver(&workspace).await;
+    let resolver = create_resolver(&workspace);
     assert_eq!(resolver.diagnostics(), Vec::new());
     let result = resolver
       .resolve(
@@ -852,8 +845,8 @@ mod test {
     }
   }
 
-  #[tokio::test]
-  async fn resolve_workspace_pkg_json_folder() {
+  #[test]
+  fn resolve_workspace_pkg_json_folder() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("package.json"),
@@ -886,7 +879,7 @@ mod test {
       }),
     );
     let workspace = workspace_at_start_dir(&fs, &root_dir());
-    let resolver = create_resolver(&workspace).await;
+    let resolver = create_resolver(&workspace);
     // resolve for pkg json dep
     {
       let resolve = |name: &str, req: &str| {
@@ -947,8 +940,8 @@ mod test {
     }
   }
 
-  #[tokio::test]
-  async fn resolve_workspace_pkg_json_workspace_deno_json_import_map() {
+  #[test]
+  fn resolve_workspace_pkg_json_workspace_deno_json_import_map() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("package.json"),
@@ -973,7 +966,7 @@ mod test {
     );
 
     let workspace = workspace_at_start_dir(&fs, &root_dir());
-    let resolver = create_resolver(&workspace).await;
+    let resolver = create_resolver(&workspace);
     {
       let resolution = resolver
         .resolve(
@@ -1015,8 +1008,8 @@ mod test {
     }
   }
 
-  #[tokio::test]
-  async fn specified_import_map() {
+  #[test]
+  fn specified_import_map() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(root_dir().join("deno.json"), json!({}));
     let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
@@ -1034,9 +1027,8 @@ mod test {
             }),
           }),
         },
-        |_| async move { unreachable!() },
+        |_| unreachable!(),
       )
-      .await
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
@@ -1050,8 +1042,8 @@ mod test {
     }
   }
 
-  #[tokio::test]
-  async fn workspace_specified_import_map() {
+  #[test]
+  fn workspace_specified_import_map() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -1075,14 +1067,13 @@ mod test {
             }),
           }),
         },
-        |_| async move { unreachable!() },
+        |_| unreachable!(),
       )
-      .await
       .unwrap();
   }
 
-  #[tokio::test]
-  async fn resolves_patch_member_with_version() {
+  #[test]
+  fn resolves_patch_member_with_version() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -1106,9 +1097,8 @@ mod test {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| async move { unreachable!() },
+        |_| unreachable!(),
       )
-      .await
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
@@ -1156,8 +1146,8 @@ mod test {
     }
   }
 
-  #[tokio::test]
-  async fn resolves_patch_member_no_version() {
+  #[test]
+  fn resolves_patch_member_no_version() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -1180,9 +1170,8 @@ mod test {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| async move { unreachable!() },
+        |_| unreachable!(),
       )
-      .await
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
@@ -1206,8 +1195,8 @@ mod test {
     }
   }
 
-  #[tokio::test]
-  async fn resolves_workspace_member() {
+  #[test]
+  fn resolves_workspace_member() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -1231,9 +1220,8 @@ mod test {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| async move { unreachable!() },
+        |_| unreachable!(),
       )
-      .await
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
@@ -1283,8 +1271,8 @@ mod test {
     }
   }
 
-  #[tokio::test]
-  async fn resolves_patch_workspace() {
+  #[test]
+  fn resolves_patch_workspace() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
       root_dir().join("deno.json"),
@@ -1320,9 +1308,8 @@ mod test {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| async move { unreachable!() },
+        |_| unreachable!(),
       )
-      .await
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
@@ -1356,9 +1343,7 @@ mod test {
     }
   }
 
-  async fn create_resolver(
-    workspace_dir: &WorkspaceDirectory,
-  ) -> WorkspaceResolver {
+  fn create_resolver(workspace_dir: &WorkspaceDirectory) -> WorkspaceResolver {
     workspace_dir
       .workspace
       .create_resolver(
@@ -1366,9 +1351,8 @@ mod test {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| async move { unreachable!() },
+        |_| unreachable!(),
       )
-      .await
       .unwrap()
   }
 

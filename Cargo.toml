@@ -1,7 +1,7 @@
 [package]
 name = "deno_config"
 description = "Config file implementation for the Deno CLI"
-version = "0.32.0"
+version = "0.35.0"
 edition = "2021"
 authors = ["the Deno authors"]
 license = "MIT"
@@ -9,7 +9,7 @@ repository = "https://github.com/denoland/deno_config"
 
 [features]
 default = ["workspace"]
-deno_json = ["jsonc-parser", "glob", "ignore", "import_map"]
+deno_json = ["jsonc-parser", "glob", "ignore", "import_map", "phf"]
 package_json = ["deno_package_json"]
 sync = ["deno_package_json/sync"]
 workspace = ["deno_json", "deno_semver", "package_json"]
@@ -22,6 +22,7 @@ log = "0.4.20"
 glob = { version = "0.3.1", optional = true }
 ignore = { version = "0.4", optional = true }
 percent-encoding = "2.3.0"
+phf = { version = "0.11", features = ["macros"], optional = true }
 serde = { version = "1.0.149", features = ["derive"] }
 serde_json = "1.0.85"
 url = { version = "2.3.1" }
@@ -33,4 +34,3 @@ deno_package_json = { version = "0.1.2", optional = true }
 [dev-dependencies]
 tempfile = "3.4.0"
 pretty_assertions = "1.4.0"
-tokio = { version = "1.10.1", features = ["macros", "rt-multi-thread"] }

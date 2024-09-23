@@ -20,7 +20,6 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -42,6 +41,7 @@ pub use ts::CompilerOptions;
 pub use ts::EmitConfigOptions;
 pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
+pub use ts::ParsedTsConfigOptions;
 pub use ts::TsConfig;
 
 #[derive(Clone, Debug, Default, Deserialize, Hash, PartialEq)]
@@ -85,57 +85,6 @@ impl SerializedFilesConfig {
       .context("Invalid exclude.")?,
     })
   }
-
-  pub fn is_empty(&self) -> bool {
-    self.include.is_none() && self.exclude.is_empty()
-  }
-}
-
-/// Choose between flat and nested files configuration.
-///
-/// `files` has precedence over `deprecated_files`.
-/// when `deprecated_files` is present, a warning is logged.
-///
-/// caveat: due to default values, it's not possible to distinguish between
-/// an empty configuration and a configuration with default values.
-/// `{ "files": {} }` is equivalent to `{ "files": { "include": [], "exclude": [] } }`
-/// and it wouldn't be able to emit warning for `{ "files": {}, "exclude": [] }`.
-///
-/// # Arguments
-///
-/// * `files` - Flat configuration.
-/// * `deprecated_files` - Nested configuration. ("Files")
-fn choose_files(
-  files: SerializedFilesConfig,
-  mut deprecated_files: SerializedFilesConfig,
-) -> SerializedFilesConfig {
-  const DEPRECATED_FILES: &str =
-    "Warning: \"files\" configuration is deprecated";
-  const FLAT_CONFIG: &str = "\"include\" and \"exclude\"";
-
-  // only consider files as empty if it's include is empty
-  // because this code might be merging a top level config
-  // "exclude" in.
-  let files_empty =
-    files.include.as_ref().map(|i| i.is_empty()).unwrap_or(true);
-  let (files_nonempty, deprecated_files_nonempty) =
-    (!files_empty, !deprecated_files.is_empty());
-
-  match (files_nonempty, deprecated_files_nonempty) {
-    (true, true) => {
-      log::warn!("{DEPRECATED_FILES} and ignored by {FLAT_CONFIG}.");
-      files
-    }
-    (false, true) => {
-      log::warn!("{DEPRECATED_FILES}. Please use {FLAT_CONFIG} instead.");
-      // combine the excludes
-      let mut exclude = files.exclude;
-      exclude.extend(std::mem::take(&mut deprecated_files.exclude));
-      deprecated_files.exclude = exclude;
-      deprecated_files
-    }
-    _ => files,
-  }
 }
 
 /// `lint` config representation for serde
@@ -149,7 +98,7 @@ struct SerializedLintConfig {
   pub exclude: Vec<String>,
 
   #[serde(rename = "files")]
-  pub deprecated_files: SerializedFilesConfig,
+  pub deprecated_files: serde_json::Value,
   pub report: Option<String>,
 }
 
@@ -160,11 +109,12 @@ impl SerializedLintConfig {
   ) -> Result<LintConfig, AnyError> {
     let (include, exclude) = (self.include, self.exclude);
     let files = SerializedFilesConfig { include, exclude };
-
+    if !self.deprecated_files.is_null() {
+      log::warn!( "Warning: \"files\" configuration in \"lint\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
+    }
     Ok(LintConfig {
       options: LintOptionsConfig { rules: self.rules },
-      files: choose_files(files, self.deprecated_files)
-        .into_resolved(config_file_specifier)?,
+      files: files.into_resolved(config_file_specifier)?,
     })
   }
 }
@@ -278,7 +228,7 @@ struct SerializedFmtConfig {
   pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
   #[serde(rename = "files")]
-  pub deprecated_files: SerializedFilesConfig,
+  pub deprecated_files: serde_json::Value,
 }
 
 impl SerializedFmtConfig {
@@ -296,11 +246,12 @@ impl SerializedFmtConfig {
       prose_wrap: self.prose_wrap,
       semi_colons: self.semi_colons,
     };
-
+    if !self.deprecated_files.is_null() {
+      log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
+    }
     Ok(FmtConfig {
       options: choose_fmt_options(options, self.deprecated_options),
-      files: choose_files(files, self.deprecated_files)
-        .into_resolved(config_file_specifier)?,
+      files: files.into_resolved(config_file_specifier)?,
     })
   }
 }
@@ -355,7 +306,7 @@ struct SerializedTestConfig {
   pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
   #[serde(rename = "files")]
-  pub deprecated_files: SerializedFilesConfig,
+  pub deprecated_files: serde_json::Value,
 }
 
 impl SerializedTestConfig {
@@ -365,10 +316,11 @@ impl SerializedTestConfig {
   ) -> Result<TestConfig, AnyError> {
     let (include, exclude) = (self.include, self.exclude);
     let files = SerializedFilesConfig { include, exclude };
-
+    if !self.deprecated_files.is_null() {
+      log::warn!( "Warning: \"files\" configuration in \"test\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
+    }
     Ok(TestConfig {
-      files: choose_files(files, self.deprecated_files)
-        .into_resolved(config_file_specifier)?,
+      files: files.into_resolved(config_file_specifier)?,
     })
   }
 }
@@ -432,7 +384,7 @@ struct SerializedBenchConfig {
   pub include: Option<Vec<String>>,
   pub exclude: Vec<String>,
   #[serde(rename = "files")]
-  pub deprecated_files: SerializedFilesConfig,
+  pub deprecated_files: serde_json::Value,
 }
 
 impl SerializedBenchConfig {
@@ -442,10 +394,11 @@ impl SerializedBenchConfig {
   ) -> Result<BenchConfig, AnyError> {
     let (include, exclude) = (self.include, self.exclude);
     let files = SerializedFilesConfig { include, exclude };
-
+    if !self.deprecated_files.is_null() {
+      log::warn!( "Warning: \"files\" configuration in \"bench\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
+    }
     Ok(BenchConfig {
-      files: choose_files(files, self.deprecated_files)
-        .into_resolved(config_file_specifier)?,
+      files: files.into_resolved(config_file_specifier)?,
     })
   }
 }
@@ -956,26 +909,31 @@ impl ConfigFile {
 
   /// Parse `compilerOptions` and return a serde `Value`.
   /// The result also contains any options that were ignored.
-  pub fn to_compiler_options(
-    &self,
-  ) -> Result<(Value, Option<IgnoredCompilerOptions>), AnyError> {
+  pub fn to_compiler_options(&self) -> Result<ParsedTsConfigOptions, AnyError> {
     if let Some(compiler_options) = self.json.compiler_options.clone() {
-      let options: HashMap<String, Value> =
+      let options: serde_json::Map<String, Value> =
         serde_json::from_value(compiler_options)
           .context("compilerOptions should be an object")?;
-      parse_compiler_options(&options, Some(self.specifier.to_owned()))
+      parse_compiler_options(options, Some(&self.specifier))
     } else {
-      Ok((json!({}), None))
+      Ok(Default::default())
     }
   }
 
-  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
+  pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, AnyError> {
     let Some(value) = self.json.import_map.as_ref() else {
       return Ok(None);
     };
     // try to resolve as a url
     if let Ok(specifier) = Url::parse(value) {
-      return Ok(Some(specifier));
+      if specifier.scheme() != "file" {
+        bail!(concat!(
+          "Only file: specifiers are supported for security reasons in import maps ",
+          "stored in a deno.json. To use a remote import map, use the --import-map ",
+          "flag and \"deno.importMap\" in the language server config"
+        ));
+      }
+      return Ok(Some(specifier_to_file_path(&specifier)?));
     }
     // now as a relative file path
     Ok(Some(specifier_parent(&self.specifier).join(value)?))
@@ -987,13 +945,11 @@ impl ConfigFile {
 
   /// Resolves the import map potentially resolving the file specified
   /// at the "importMap" entry.
-  pub async fn to_import_map<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
+  pub fn to_import_map(
     &self,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
+    fetch_text: impl FnOnce(&Path) -> Result<String, AnyError>,
   ) -> Result<Option<ImportMapWithDiagnostics>, AnyError> {
-    let maybe_result = self.to_import_map_value(fetch_text).await?;
+    let maybe_result = self.to_import_map_value(fetch_text)?;
     match maybe_result {
       Some((specifier, value)) => {
         let import_map =
@@ -1006,11 +962,9 @@ impl ConfigFile {
 
   /// Resolves the import map `serde_json::Value` potentially resolving the
   /// file specified at the "importMap" entry.
-  pub async fn to_import_map_value<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
+  pub fn to_import_map_value(
     &self,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
+    read_file: impl FnOnce(&Path) -> Result<String, AnyError>,
   ) -> Result<Option<(Cow<Url>, serde_json::Value)>, AnyError> {
     // has higher precedence over the path
     if self.json.imports.is_some() || self.json.scopes.is_some() {
@@ -1019,12 +973,15 @@ impl ConfigFile {
         self.to_import_map_value_from_imports(),
       )))
     } else {
-      match self.to_import_map_specifier()? {
-        Some(import_map_specifier) => {
-          let text = fetch_text(&import_map_specifier).await?;
+      match self.to_import_map_path()? {
+        Some(import_map_path) => {
+          let text = read_file(&import_map_path)?;
           let value = serde_json::from_str(&text)?;
           // does not expand the imports because this one will use the import map standard
-          Ok(Some((Cow::Owned(import_map_specifier), value)))
+          Ok(Some((
+            Cow::Owned(Url::from_file_path(import_map_path).unwrap()),
+            value,
+          )))
         }
         None => Ok(None),
       }
@@ -1620,6 +1577,8 @@ pub fn get_ts_config_for_emit(
       "jsx": "react",
       "jsxFactory": "React.createElement",
       "jsxFragmentFactory": "React.Fragment",
+      "module": "NodeNext",
+      "moduleResolution": "NodeNext",
     })),
     TsConfigType::Check { lib } => TsConfig::new(json!({
       "allowJs": true,
@@ -1635,17 +1594,17 @@ pub fn get_ts_config_for_emit(
       "inlineSources": true,
       "isolatedModules": true,
       "lib": lib,
-      "module": "esnext",
+      "module": "NodeNext",
+      "moduleResolution": "NodeNext",
       "moduleDetection": "force",
       "noEmit": true,
+      "noImplicitOverride": true,
       "resolveJsonModule": true,
       "sourceMap": false,
       "strict": true,
       "target": "esnext",
       "tsBuildInfoFile": "internal:///.tsbuildinfo",
       "useDefineForClassFields": true,
-      // TODO(@kitsonk) remove for Deno 2.0
-      "useUnknownInCatchVariables": false,
     })),
     TsConfigType::Emit => TsConfig::new(json!({
       "allowImportingTsExtensions": true,
@@ -1659,6 +1618,8 @@ pub fn get_ts_config_for_emit(
       "jsx": "react",
       "jsxFactory": "React.createElement",
       "jsxFragmentFactory": "React.Fragment",
+      "module": "NodeNext",
+      "moduleResolution": "NodeNext",
       "resolveJsonModule": true,
     })),
   };
@@ -1769,13 +1730,14 @@ mod tests {
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let (options_value, ignored) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
-    let options = options_value.as_object().unwrap();
+    let ParsedTsConfigOptions {
+      options,
+      maybe_ignored,
+    } = config_file.to_compiler_options().unwrap();
     assert!(options.contains_key("strict"));
     assert_eq!(options.len(), 1);
     assert_eq!(
-      ignored,
+      maybe_ignored,
       Some(IgnoredCompilerOptions {
         items: vec!["build".to_string()],
         maybe_specifier: Some(config_specifier),
@@ -1841,150 +1803,6 @@ mod tests {
       config_file.json.unstable,
       vec!["kv".to_string(), "ffi".to_string()],
     )
-  }
-
-  /// if either "include" or "exclude" is specified, "files" is ignored
-  #[test]
-  fn test_parse_config_with_deprecated_files_field() {
-    let config_text = r#"{
-      "lint": {
-        "files": { "include": ["foo/"], "exclude": ["bar/"] },
-        "include": ["src/"]
-      },
-      "fmt": {
-        "files": { "include": ["foo/"], "exclude": ["bar/"] },
-        "exclude": ["dist/"]
-      },
-      "bench": {
-        "files": { "include": ["foo/"] },
-        "include": ["src/"]
-      },
-      "test": {
-        "files": { "include": ["foo/"] },
-        "include": ["src/"]
-      }
-    }"#;
-    let config_dir = Url::parse("file:///deno/").unwrap();
-    let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-    let config_dir_path = url_to_file_path(&config_dir).unwrap();
-
-    let lint_files = unpack_object(config_file.to_lint_config(), "lint").files;
-    assert_eq!(
-      lint_files,
-      FilePatterns {
-        base: config_dir_path.clone(),
-        include: Some(
-          PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
-            .unwrap()
-        ),
-        exclude: Default::default(),
-      }
-    );
-
-    let fmt_files = unpack_object(config_file.to_fmt_config(), "fmt").files;
-    assert_eq!(
-      fmt_files,
-      FilePatterns {
-        base: config_dir_path.clone(),
-        // meh, this is fine that it combines them when there's only an exclude
-        include: Some(
-          PathOrPatternSet::from_absolute_paths(&["/deno/foo/".to_string(),])
-            .unwrap()
-        ),
-        exclude: PathOrPatternSet::from_absolute_paths(&[
-          "/deno/dist/".to_string(),
-          // meh, this is fine
-          "/deno/bar/".to_string(),
-        ])
-        .unwrap(),
-      }
-    );
-
-    let test_include = unpack_object(config_file.to_test_config(), "test")
-      .files
-      .include;
-    assert_eq!(
-      test_include,
-      Some(
-        PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
-          .unwrap()
-      )
-    );
-
-    let bench_include = unpack_object(config_file.to_bench_config(), "bench")
-      .files
-      .include;
-    assert_eq!(
-      bench_include,
-      Some(
-        PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
-          .unwrap()
-      )
-    );
-  }
-
-  #[test]
-  fn test_parse_config_with_deprecated_files_field_only() {
-    let config_text = r#"{
-      "lint": { "files": { "include": ["src/"] } },
-      "fmt": { "files": { "include": ["src/"] } },
-      "test": { "files": { "exclude": ["dist/"] } },
-      "bench": { "files": { "exclude": ["dist/"] } }
-    }"#;
-    let config_dir = Url::parse("file:///deno/").unwrap();
-    let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-
-    let lint_include = unpack_object(config_file.to_lint_config(), "lint")
-      .files
-      .include;
-    assert_eq!(
-      lint_include,
-      Some(
-        PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
-          .unwrap()
-      )
-    );
-
-    let fmt_include = unpack_object(config_file.to_fmt_config(), "fmt")
-      .files
-      .include;
-    assert_eq!(
-      fmt_include,
-      Some(
-        PathOrPatternSet::from_absolute_paths(&["/deno/src/".to_string()])
-          .unwrap()
-      )
-    );
-
-    let test_exclude = unpack_object(config_file.to_test_config(), "test")
-      .files
-      .exclude;
-    assert_eq!(
-      test_exclude,
-      PathOrPatternSet::from_absolute_paths(&["/deno/dist/".to_string()])
-        .unwrap()
-    );
-
-    let bench_exclude = unpack_object(config_file.to_bench_config(), "bench")
-      .files
-      .exclude;
-    assert_eq!(
-      bench_exclude,
-      PathOrPatternSet::from_absolute_paths(&["/deno/dist/".to_string()])
-        .unwrap()
-    );
   }
 
   #[test]
@@ -2091,8 +1909,7 @@ Caused by:
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
   }
 
   #[test]
@@ -2105,8 +1922,7 @@ Caused by:
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
   }
 
   #[test]
@@ -2126,8 +1942,7 @@ Caused by:
     )
     .unwrap();
 
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
 
     let test_config = config_file.to_test_config().unwrap();
     assert_eq!(test_config.files.include, None);
@@ -2164,8 +1979,7 @@ Caused by:
     )
     .unwrap();
 
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
 
     let publish_config = config_file.to_publish_config().unwrap();
     assert_eq!(publish_config.files.include, None);
@@ -2192,8 +2006,7 @@ Caused by:
     )
     .unwrap();
 
-    let (options_value, _) = config_file.to_compiler_options().unwrap();
-    assert!(options_value.is_object());
+    config_file.to_compiler_options().unwrap(); // no panic
 
     let files_config = config_file.to_exclude_files_config().unwrap();
     assert_eq!(files_config.include, None);
@@ -2708,8 +2521,8 @@ Caused by:
     );
   }
 
-  #[tokio::test]
-  async fn test_to_import_map_imports_entry() {
+  #[test]
+  fn test_to_import_map_imports_entry() {
     let config_text = r#"{
       "imports": { "@std/test": "jsr:@std/test@0.2.0" },
       // will be ignored because imports and scopes takes precedence
@@ -2723,8 +2536,7 @@ Caused by:
     )
     .unwrap();
     let result = config_file
-      .to_import_map(|_url| async { unreachable!() })
-      .await
+      .to_import_map(|_url| unreachable!())
       .unwrap()
       .unwrap();
 
@@ -2742,8 +2554,8 @@ Caused by:
     );
   }
 
-  #[tokio::test]
-  async fn test_to_import_map_scopes_entry() {
+  #[test]
+  fn test_to_import_map_scopes_entry() {
     let config_text = r#"{
       "scopes": { "https://deno.land/x/test/mod.ts": { "@std/test": "jsr:@std/test@0.2.0" } },
       // will be ignored because imports and scopes takes precedence
@@ -2757,8 +2569,7 @@ Caused by:
     )
     .unwrap();
     let result = config_file
-      .to_import_map(|_url| async { unreachable!() })
-      .await
+      .to_import_map(|_url| unreachable!())
       .unwrap()
       .unwrap();
 
@@ -2781,8 +2592,8 @@ Caused by:
     );
   }
 
-  #[tokio::test]
-  async fn test_to_import_map_import_map_entry() {
+  #[test]
+  fn test_to_import_map_import_map_entry() {
     let config_text = r#"{
       "importMap": "import_map.json",
     }"#;
@@ -2794,16 +2605,16 @@ Caused by:
     )
     .unwrap();
     let result = config_file
-      .to_import_map(|url| {
-        assert_eq!(url, &root_url().join("import_map.json").unwrap());
-        async {
-          Ok(
-            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
-              .to_string(),
-          )
-        }
+      .to_import_map(|path| {
+        assert_eq!(
+          path,
+          root_url().to_file_path().unwrap().join("import_map.json")
+        );
+        Ok(
+          r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
+            .to_string(),
+        )
       })
-      .await
       .unwrap()
       .unwrap();
 
@@ -2820,8 +2631,8 @@ Caused by:
     );
   }
 
-  #[tokio::test]
-  async fn test_to_import_map_import_map_remote() {
+  #[test]
+  fn test_to_import_map_import_map_remote() {
     let config_text = r#"{
       "importMap": "https://deno.land/import_map.json",
     }"#;
@@ -2832,70 +2643,17 @@ Caused by:
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let result = config_file
-      .to_import_map(|url| {
-        assert_eq!(url.as_str(), "https://deno.land/import_map.json");
-        async {
-          Ok(
-            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
-              .to_string(),
-          )
-        }
-      })
-      .await
-      .unwrap()
-      .unwrap();
-
+    let err = config_file
+      .to_import_map(|_url| unreachable!())
+      .unwrap_err();
     assert_eq!(
-      result.import_map.base_url().as_str(),
-      "https://deno.land/import_map.json"
-    );
-    assert_eq!(
-      json!(result.import_map.imports()),
-      // imports should NOT be expanded
-      json!({
-        "@std/test": "jsr:@std/test@0.2.0",
-      })
-    );
-  }
-
-  #[tokio::test]
-  async fn test_to_import_map_import_map_remote_relative() {
-    let config_text = r#"{
-      "importMap": "./import_map.json",
-    }"#;
-    let config_specifier =
-      Url::parse("https://deno.land/import_map.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-    let result = config_file
-      .to_import_map(|url| {
-        assert_eq!(url.as_str(), "https://deno.land/import_map.json");
-        async {
-          Ok(
-            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
-              .to_string(),
-          )
-        }
-      })
-      .await
-      .unwrap()
-      .unwrap();
-
-    assert_eq!(
-      result.import_map.base_url().as_str(),
-      "https://deno.land/import_map.json"
-    );
-    assert_eq!(
-      json!(result.import_map.imports()),
-      // imports should NOT be expanded
-      json!({
-        "@std/test": "jsr:@std/test@0.2.0",
-      })
+      err.to_string(),
+      concat!(
+        "Only file: specifiers are supported for security reasons in ",
+        "import maps stored in a deno.json. To use a remote import map, ",
+        "use the --import-map flag and \"deno.importMap\" in the ",
+        "language server config"
+      )
     );
   }
 
@@ -2988,7 +2746,12 @@ Caused by:
   #[test]
   fn resolve_import_map_specifier_parent() {
     let config_text = r#"{ "importMap": "../import_map.json" }"#;
-    let config_specifier = Url::parse("file:///deno/sub/deno.json").unwrap();
+    let file_path = root_url()
+      .join("sub/deno.json")
+      .unwrap()
+      .to_file_path()
+      .unwrap();
+    let config_specifier = Url::from_file_path(&file_path).unwrap();
     let config_file = ConfigFile::new(
       config_text,
       config_specifier,
@@ -2996,12 +2759,13 @@ Caused by:
     )
     .unwrap();
     assert_eq!(
-      config_file
-        .to_import_map_specifier()
+      config_file.to_import_map_path().unwrap().unwrap(),
+      file_path
+        .parent()
         .unwrap()
+        .parent()
         .unwrap()
-        .as_str(),
-      "file:///deno/import_map.json"
+        .join("import_map.json"),
     );
   }
 
