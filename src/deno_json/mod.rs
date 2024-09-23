@@ -981,7 +981,7 @@ impl ConfigFile {
           let value = serde_json::from_str(&text)?;
           // does not expand the imports because this one will use the import map standard
           Ok(Some((
-            Cow::Owned(Url::from_file_path(import_map_path).unwrap()),
+            Cow::Owned(url_from_file_path(&import_map_path).unwrap()),
             value,
           )))
         }
