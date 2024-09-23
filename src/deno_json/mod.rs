@@ -933,10 +933,12 @@ impl ConfigFile {
           "flag and \"deno.importMap\" in the language server config"
         ));
       }
-      return Ok(Some(specifier_to_file_path(&specifier)?));
+      return Ok(Some(url_to_file_path(&specifier)?));
     }
     // now as a relative file path
-    Ok(Some(specifier_parent(&self.specifier).join(value)?))
+    Ok(Some(url_to_file_path(
+      &specifier_parent(&self.specifier).join(value)?,
+    )?))
   }
 
   pub fn vendor(&self) -> Option<bool> {
