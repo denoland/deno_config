@@ -20,7 +20,6 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -921,27 +920,24 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
+  pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, AnyError> {
     let Some(value) = self.json.import_map.as_ref() else {
       return Ok(None);
     };
     // try to resolve as a url
     if let Ok(specifier) = Url::parse(value) {
-      return Ok(Some(specifier));
+      if specifier.scheme() != "file" {
+        bail!(concat!(
+          "Only file: specifiers are supported for security reasons in import maps ",
+          "stored in a deno.json. To use a remote import map, use the --import-map ",
+          "flag and \"deno.importMap\" in the language server config"
+        ));
+      }
+      return Ok(Some(specifier_to_file_path(&specifier)?));
     }
     // now as a relative file path
-    if let Ok(config_file_path) = self.specifier.to_file_path() {
-      // people may specify a file path without a leading `./` so
-      // this handles that
-      let path = config_file_path.parent().unwrap().join(value);
-      Url::from_file_path(normalize_path(&path))
-        .map_err(|()| {
-          anyhow::anyhow!("Failed converting {} to url.", path.display())
-        })
-        .map(Some)
-    } else {
-      Ok(Some(self.specifier.join(value)?))
-    }
+    let config_dir_path = self.dir_path();
+    Ok(Some(normalize_path(config_dir_path.join(value))))
   }
 
   pub fn vendor(&self) -> Option<bool> {
@@ -950,13 +946,11 @@ impl ConfigFile {
 
   /// Resolves the import map potentially resolving the file specified
   /// at the "importMap" entry.
-  pub async fn to_import_map<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
+  pub fn to_import_map(
     &self,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
+    fetch_text: impl FnOnce(&Path) -> Result<String, AnyError>,
   ) -> Result<Option<ImportMapWithDiagnostics>, AnyError> {
-    let maybe_result = self.to_import_map_value(fetch_text).await?;
+    let maybe_result = self.to_import_map_value(fetch_text)?;
     match maybe_result {
       Some((specifier, value)) => {
         let import_map =
@@ -969,11 +963,9 @@ impl ConfigFile {
 
   /// Resolves the import map `serde_json::Value` potentially resolving the
   /// file specified at the "importMap" entry.
-  pub async fn to_import_map_value<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
+  pub fn to_import_map_value(
     &self,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
+    read_file: impl FnOnce(&Path) -> Result<String, AnyError>,
   ) -> Result<Option<(Cow<Url>, serde_json::Value)>, AnyError> {
     // has higher precedence over the path
     if self.json.imports.is_some() || self.json.scopes.is_some() {
@@ -982,12 +974,15 @@ impl ConfigFile {
         self.to_import_map_value_from_imports(),
       )))
     } else {
-      match self.to_import_map_specifier()? {
-        Some(import_map_specifier) => {
-          let text = fetch_text(&import_map_specifier).await?;
+      match self.to_import_map_path()? {
+        Some(import_map_path) => {
+          let text = read_file(&import_map_path)?;
           let value = serde_json::from_str(&text)?;
           // does not expand the imports because this one will use the import map standard
-          Ok(Some((Cow::Owned(import_map_specifier), value)))
+          Ok(Some((
+            Cow::Owned(Url::from_file_path(import_map_path).unwrap()),
+            value,
+          )))
         }
         None => Ok(None),
       }
@@ -2527,8 +2522,8 @@ Caused by:
     );
   }
 
-  #[tokio::test]
-  async fn test_to_import_map_imports_entry() {
+  #[test]
+  fn test_to_import_map_imports_entry() {
     let config_text = r#"{
       "imports": { "@std/test": "jsr:@std/test@0.2.0" },
       // will be ignored because imports and scopes takes precedence
@@ -2542,8 +2537,7 @@ Caused by:
     )
     .unwrap();
     let result = config_file
-      .to_import_map(|_url| async { unreachable!() })
-      .await
+      .to_import_map(|_url| unreachable!())
       .unwrap()
       .unwrap();
 
@@ -2561,8 +2555,8 @@ Caused by:
     );
   }
 
-  #[tokio::test]
-  async fn test_to_import_map_scopes_entry() {
+  #[test]
+  fn test_to_import_map_scopes_entry() {
     let config_text = r#"{
       "scopes": { "https://deno.land/x/test/mod.ts": { "@std/test": "jsr:@std/test@0.2.0" } },
       // will be ignored because imports and scopes takes precedence
@@ -2576,8 +2570,7 @@ Caused by:
     )
     .unwrap();
     let result = config_file
-      .to_import_map(|_url| async { unreachable!() })
-      .await
+      .to_import_map(|_url| unreachable!())
       .unwrap()
       .unwrap();
 
@@ -2600,8 +2593,8 @@ Caused by:
     );
   }
 
-  #[tokio::test]
-  async fn test_to_import_map_import_map_entry() {
+  #[test]
+  fn test_to_import_map_import_map_entry() {
     let config_text = r#"{
       "importMap": "import_map.json",
     }"#;
@@ -2613,16 +2606,16 @@ Caused by:
     )
     .unwrap();
     let result = config_file
-      .to_import_map(|url| {
-        assert_eq!(url, &root_url().join("import_map.json").unwrap());
-        async {
-          Ok(
-            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
-              .to_string(),
-          )
-        }
+      .to_import_map(|path| {
+        assert_eq!(
+          path,
+          root_url().to_file_path().unwrap().join("import_map.json")
+        );
+        Ok(
+          r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
+            .to_string(),
+        )
       })
-      .await
       .unwrap()
       .unwrap();
 
@@ -2639,8 +2632,8 @@ Caused by:
     );
   }
 
-  #[tokio::test]
-  async fn test_to_import_map_import_map_remote() {
+  #[test]
+  fn test_to_import_map_import_map_remote() {
     let config_text = r#"{
       "importMap": "https://deno.land/import_map.json",
     }"#;
@@ -2651,70 +2644,17 @@ Caused by:
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let result = config_file
-      .to_import_map(|url| {
-        assert_eq!(url.as_str(), "https://deno.land/import_map.json");
-        async {
-          Ok(
-            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
-              .to_string(),
-          )
-        }
-      })
-      .await
-      .unwrap()
-      .unwrap();
-
+    let err = config_file
+      .to_import_map(|_url| unreachable!())
+      .unwrap_err();
     assert_eq!(
-      result.import_map.base_url().as_str(),
-      "https://deno.land/import_map.json"
-    );
-    assert_eq!(
-      json!(result.import_map.imports()),
-      // imports should NOT be expanded
-      json!({
-        "@std/test": "jsr:@std/test@0.2.0",
-      })
-    );
-  }
-
-  #[tokio::test]
-  async fn test_to_import_map_import_map_remote_relative() {
-    let config_text = r#"{
-      "importMap": "./import_map.json",
-    }"#;
-    let config_specifier =
-      Url::parse("https://deno.land/import_map.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-    let result = config_file
-      .to_import_map(|url| {
-        assert_eq!(url.as_str(), "https://deno.land/import_map.json");
-        async {
-          Ok(
-            r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
-              .to_string(),
-          )
-        }
-      })
-      .await
-      .unwrap()
-      .unwrap();
-
-    assert_eq!(
-      result.import_map.base_url().as_str(),
-      "https://deno.land/import_map.json"
-    );
-    assert_eq!(
-      json!(result.import_map.imports()),
-      // imports should NOT be expanded
-      json!({
-        "@std/test": "jsr:@std/test@0.2.0",
-      })
+      err.to_string(),
+      concat!(
+        "Only file: specifiers are supported for security reasons in ",
+        "import maps stored in a deno.json. To use a remote import map, ",
+        "use the --import-map flag and \"deno.importMap\" in the ",
+        "language server config"
+      )
     );
   }
 
@@ -2807,7 +2747,12 @@ Caused by:
   #[test]
   fn resolve_import_map_specifier_parent() {
     let config_text = r#"{ "importMap": "../import_map.json" }"#;
-    let config_specifier = Url::parse("file:///deno/sub/deno.json").unwrap();
+    let file_path = root_url()
+      .join("sub/deno.json")
+      .unwrap()
+      .to_file_path()
+      .unwrap();
+    let config_specifier = Url::from_file_path(&file_path).unwrap();
     let config_file = ConfigFile::new(
       config_text,
       config_specifier,
@@ -2815,12 +2760,13 @@ Caused by:
     )
     .unwrap();
     assert_eq!(
-      config_file
-        .to_import_map_specifier()
+      config_file.to_import_map_path().unwrap().unwrap(),
+      file_path
+        .parent()
         .unwrap()
+        .parent()
         .unwrap()
-        .as_str(),
-      "file:///deno/import_map.json"
+        .join("import_map.json"),
     );
   }
 

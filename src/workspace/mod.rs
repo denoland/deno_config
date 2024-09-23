@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -517,14 +516,12 @@ impl Workspace {
       })
   }
 
-  pub async fn create_resolver<
-    TReturn: Future<Output = Result<String, AnyError>>,
-  >(
+  pub fn create_resolver(
     &self,
     options: CreateResolverOptions,
-    fetch_text: impl FnOnce(&Url) -> TReturn,
+    read_text: impl FnOnce(&Path) -> Result<String, AnyError>,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(self, options, fetch_text).await
+    WorkspaceResolver::from_workspace(self, options, read_text)
   }
 
   /// Resolves a workspace directory, which can be used for deriving
@@ -804,11 +801,9 @@ impl Workspace {
     )
   }
 
-  pub fn to_import_map_specifier(&self) -> Result<Option<Url>, AnyError> {
+  pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, AnyError> {
     self
-      .with_root_config_only(|root_config| {
-        root_config.to_import_map_specifier()
-      })
+      .with_root_config_only(|root_config| root_config.to_import_map_path())
       .unwrap_or(Ok(None))
   }
 
@@ -2337,10 +2332,10 @@ mod test {
     assert_eq!(
       workspace_dir
         .workspace
-        .to_import_map_specifier()
+        .to_import_map_path()
         .unwrap()
         .unwrap(),
-      Url::from_file_path(root_dir().join("other.json")).unwrap()
+      root_dir().join("other.json"),
     );
     assert_eq!(
       workspace_dir.workspace.diagnostics(),
@@ -2491,8 +2486,8 @@ mod test {
     );
   }
 
-  #[tokio::test]
-  async fn test_root_member_imports_and_scopes() {
+  #[test]
+  fn test_root_member_imports_and_scopes() {
     let workspace_dir = workspace_for_root_and_member(
       json!({
         "imports": {
@@ -2526,10 +2521,7 @@ mod test {
     );
     let resolver = workspace_dir
       .workspace
-      .create_resolver(Default::default(), |_| async move {
-        unreachable!();
-      })
-      .await
+      .create_resolver(Default::default(), |_| unreachable!())
       .unwrap();
     assert_eq!(
       serde_json::from_str::<serde_json::Value>(
@@ -2570,10 +2562,10 @@ mod test {
     assert_eq!(
       workspace_dir
         .workspace
-        .to_import_map_specifier()
+        .to_import_map_path()
         .unwrap()
         .unwrap(),
-      Url::from_file_path(root_dir().join("other.json")).unwrap()
+      root_dir().join("other.json")
     );
     assert_eq!(
       workspace_dir.workspace.diagnostics(),
