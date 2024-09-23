@@ -44,6 +44,12 @@ jobs:
           cargo check --no-default-features --features workspace
           cargo check --no-default-features --features package_json
           cargo check --no-default-features --features workspace --features sync
+      
+      - name: Check builds Wasm
+        if: contains(matrix.os, 'ubuntu')
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check --all-features --target wasm32-unknown-unknown
 
       - name: Cargo test
         run: cargo test --locked --release --all-features --bins --tests --examples

@@ -10,7 +10,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::util::normalize_path;
-use crate::util::specifier_to_file_path;
+use crate::util::url_to_file_path;
 use crate::SpecifierToFilePathError;
 
 mod collector;
@@ -71,7 +71,7 @@ impl FilePatterns {
       // can't do .gitignore on a non-file specifier
       return FilePatternsMatch::PassedOptedOutExclude;
     }
-    let path = match specifier_to_file_path(specifier) {
+    let path = match url_to_file_path(specifier) {
       Ok(path) => path,
       Err(_) => return FilePatternsMatch::PassedOptedOutExclude,
     };
@@ -483,8 +483,7 @@ impl PathOrPattern {
         source: err,
       })?;
       if url.scheme() == "file" {
-        let path = url
-          .to_file_path()
+        let path = url_to_file_path(&url)
           .map_err(|_| SpecifierToFilePathError(url.clone()))?;
         return Ok(Self::Path(path));
       } else {
@@ -714,6 +713,8 @@ mod test {
 
   use pretty_assertions::assert_eq;
   use tempfile::TempDir;
+
+  use crate::util::url_from_directory_path;
 
   use super::*;
 
@@ -1448,11 +1449,6 @@ mod test {
         "invalid domain character"
       );
     }
-    // error for invalid file url
-    if cfg!(windows) {
-      let err = PathOrPattern::from_relative(&cwd, "file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts").unwrap_err();
-      assert_eq!(format!("{:#}", err), "Could not convert specifier to file path.\n  Specifier: file:///raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts");
-    }
     // sibling dir
     {
       let pattern = PathOrPattern::from_relative(&cwd, "../sibling").unwrap();
@@ -1503,7 +1499,7 @@ mod test {
       }
     }
     {
-      let file_specifier = Url::from_directory_path(&cwd).unwrap();
+      let file_specifier = url_from_directory_path(&cwd).unwrap();
       let pattern = PathOrPattern::new(file_specifier.as_str()).unwrap();
       match pattern {
         PathOrPattern::Path(p) => {
@@ -1540,7 +1536,7 @@ mod test {
       }
     }
     {
-      let file_specifier = Url::from_directory_path(&cwd).unwrap();
+      let file_specifier = url_from_directory_path(&cwd).unwrap();
       let pattern =
         PathOrPattern::from_relative(&cwd, file_specifier.as_str()).unwrap();
       match pattern {

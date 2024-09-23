@@ -23,6 +23,9 @@ use crate::glob::PathOrPatternSet;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_parent;
+use crate::util::url_from_directory_path;
+use crate::util::url_from_file_path;
+use crate::util::url_to_file_path;
 use crate::workspace::ConfigReadError;
 use crate::workspace::Workspace;
 
@@ -67,7 +70,7 @@ impl ConfigFolder {
         specifier_parent(&config.specifier)
       }
       Self::Single(DenoOrPkgJson::PkgJson(pkg_json)) => {
-        Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap()
+        url_from_directory_path(pkg_json.path.parent().unwrap()).unwrap()
       }
       Self::Both { deno_json, .. } => specifier_parent(&deno_json.specifier),
     }
@@ -296,7 +299,7 @@ fn discover_workspace_config_files_for_single_dir(
       start_dir = Some(dir);
     }
     DirOrConfigFile::ConfigFile(file) => {
-      let specifier = Url::from_file_path(file).unwrap();
+      let specifier = url_from_file_path(file).unwrap();
       let config_file = new_rc(
         ConfigFile::from_specifier(
           opts.fs,
@@ -643,7 +646,7 @@ fn resolve_workspace_for_config_folder(
       }
 
       let maybe_config_folder =
-        load_config_folder(&member_dir_url.to_file_path().unwrap())?;
+        load_config_folder(&url_to_file_path(member_dir_url).unwrap())?;
       maybe_config_folder.ok_or_else(|| {
         // it's fine this doesn't use all the possible config file names
         // as this is only used to enhance the error message
@@ -739,7 +742,7 @@ fn resolve_workspace_for_config_folder(
       }
       for pkg_json_path in pkg_json_paths {
         let member_dir_url =
-          Url::from_directory_path(pkg_json_path.parent().unwrap()).unwrap();
+          url_from_directory_path(pkg_json_path.parent().unwrap()).unwrap();
         member_dir_urls.insert(member_dir_url);
       }
 
@@ -844,7 +847,7 @@ fn resolve_patch_member_config_folders(
     &Path,
   ) -> Result<Option<ConfigFolder>, ConfigReadError>,
 ) -> Result<BTreeMap<UrlRc, ConfigFolder>, ResolveWorkspacePatchError> {
-  let patch_dir_path = patch_dir_url.to_file_path().unwrap();
+  let patch_dir_path = url_to_file_path(patch_dir_url).unwrap();
   let maybe_config_folder = load_config_folder(&patch_dir_path)?;
   let Some(config_folder) = maybe_config_folder else {
     return Err(ResolveWorkspacePatchError::NotFound {
