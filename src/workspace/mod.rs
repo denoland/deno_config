@@ -55,8 +55,8 @@ use crate::glob::PathOrPatternParseError;
 use crate::glob::PathOrPatternSet;
 use crate::sync::new_rc;
 use crate::util::specifier_parent;
-use crate::util::url_to_file_path;
 use crate::util::url_from_directory_path;
+use crate::util::url_to_file_path;
 use crate::SpecifierToFilePathError;
 
 mod discovery;

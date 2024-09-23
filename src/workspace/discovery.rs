@@ -23,9 +23,9 @@ use crate::glob::PathOrPatternSet;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
 use crate::util::specifier_parent;
-use crate::util::url_to_file_path;
 use crate::util::url_from_directory_path;
 use crate::util::url_from_file_path;
+use crate::util::url_to_file_path;
 use crate::workspace::ConfigReadError;
 use crate::workspace::Workspace;
 
