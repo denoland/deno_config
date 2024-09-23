@@ -27,6 +27,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::sync::new_rc;
+use crate::util::url_from_directory_path;
 use crate::workspace::Workspace;
 
 use super::UrlRc;
@@ -377,7 +378,7 @@ impl WorkspaceResolver {
         let deps = pkg_json.resolve_local_package_json_deps();
         (
           new_rc(
-            Url::from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
+            url_from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
           ),
           PkgJsonResolverFolderConfig { deps, pkg_json },
         )
@@ -700,6 +701,8 @@ mod test {
 
   use super::*;
   use crate::fs::TestFileSystem;
+  use crate::util::url_from_directory_path;
+  use crate::util::url_from_file_path;
   use crate::workspace::WorkspaceDirectory;
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
@@ -754,7 +757,7 @@ mod test {
     let resolve = |name: &str, referrer: &str| {
       resolver.resolve(
         name,
-        &Url::from_file_path(crate::util::normalize_path(
+        &url_from_file_path(&crate::util::normalize_path(
           root_dir().join(referrer),
         ))
         .unwrap(),
@@ -835,14 +838,14 @@ mod test {
     let result = resolver
       .resolve(
         "@scope/pkg",
-        &Url::from_file_path(root_dir().join("file.ts")).unwrap(),
+        &url_from_file_path(&root_dir().join("file.ts")).unwrap(),
       )
       .unwrap();
     match result {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
         assert_eq!(
           specifier,
-          Url::from_file_path(root_dir().join("mod.ts")).unwrap()
+          url_from_file_path(&root_dir().join("mod.ts")).unwrap()
         );
       }
       _ => unreachable!(),
@@ -975,14 +978,14 @@ mod test {
       let resolution = resolver
         .resolve(
           "@scope/jsr-pkg",
-          &Url::from_file_path(root_dir().join("b.ts")).unwrap(),
+          &url_from_file_path(&root_dir().join("b.ts")).unwrap(),
         )
         .unwrap();
       match resolution {
         MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
           assert_eq!(
             specifier,
-            Url::from_file_path(root_dir().join("a/mod.ts")).unwrap()
+            url_from_file_path(&root_dir().join("a/mod.ts")).unwrap()
           );
         }
         _ => unreachable!(),
@@ -992,7 +995,7 @@ mod test {
       let resolution_err = resolver
         .resolve(
           "@scope/jsr-pkg/not-found-export",
-          &Url::from_file_path(root_dir().join("b.ts")).unwrap(),
+          &url_from_file_path(&root_dir().join("b.ts")).unwrap(),
         )
         .unwrap_err();
       match resolution_err {
@@ -1023,7 +1026,7 @@ mod test {
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: Some(SpecifiedImportMap {
-            base_url: Url::from_directory_path(root_dir()).unwrap(),
+            base_url: url_from_directory_path(&root_dir()).unwrap(),
             value: json!({
               "imports": {
                 "b": "./b/mod.ts",
@@ -1035,7 +1038,7 @@ mod test {
       )
       .await
       .unwrap();
-    let root = Url::from_directory_path(root_dir()).unwrap();
+    let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
       .resolve("b", &root.join("main.ts").unwrap())
       .unwrap()
@@ -1064,7 +1067,7 @@ mod test {
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: Some(SpecifiedImportMap {
-            base_url: Url::from_directory_path(root_dir()).unwrap(),
+            base_url: url_from_directory_path(&root_dir()).unwrap(),
             value: json!({
               "imports": {
                 "b": "./b/mod.ts",
@@ -1107,7 +1110,7 @@ mod test {
       )
       .await
       .unwrap();
-    let root = Url::from_directory_path(root_dir()).unwrap();
+    let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
       .resolve("@scope/patch", &root.join("main.ts").unwrap())
       .unwrap()
@@ -1181,7 +1184,7 @@ mod test {
       )
       .await
       .unwrap();
-    let root = Url::from_directory_path(root_dir()).unwrap();
+    let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
       .resolve("@scope/patch", &root.join("main.ts").unwrap())
       .unwrap()
@@ -1232,7 +1235,7 @@ mod test {
       )
       .await
       .unwrap();
-    let root = Url::from_directory_path(root_dir()).unwrap();
+    let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
       .resolve("@scope/member", &root.join("main.ts").unwrap())
       .unwrap()
@@ -1321,7 +1324,7 @@ mod test {
       )
       .await
       .unwrap();
-    let root = Url::from_directory_path(root_dir()).unwrap();
+    let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
       .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
       .unwrap()

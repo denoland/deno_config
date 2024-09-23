@@ -31,9 +31,9 @@ use crate::fs::DenoConfigFs;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPatternSet;
 use crate::util::is_skippable_io_error;
-use crate::util::normalize_path;
 use crate::util::specifier_parent;
-use crate::util::specifier_to_file_path;
+use crate::util::url_from_file_path;
+use crate::util::url_to_file_path;
 use crate::SpecifierToFilePathError;
 
 mod ts;
@@ -65,7 +65,7 @@ impl SerializedFilesConfig {
     config_file_specifier: &Url,
   ) -> Result<FilePatterns, AnyError> {
     let config_dir =
-      specifier_to_file_path(&specifier_parent(config_file_specifier))?;
+      url_to_file_path(&specifier_parent(config_file_specifier))?;
     Ok(FilePatterns {
       base: config_dir.clone(),
       include: match self.include {
@@ -847,7 +847,7 @@ impl ConfigFile {
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
     debug_assert!(config_path.is_absolute());
-    let specifier = Url::from_file_path(config_path)
+    let specifier = url_from_file_path(config_path)
       .map_err(|_| ConfigFileReadError::PathToUrl(config_path.to_path_buf()))?;
     Self::from_specifier_and_path(fs, specifier, config_path, parse_options)
   }
@@ -857,7 +857,7 @@ impl ConfigFile {
     specifier: Url,
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
-    let config_path = specifier_to_file_path(&specifier)?;
+    let config_path = url_to_file_path(&specifier)?;
     Self::from_specifier_and_path(fs, specifier, &config_path, parse_options)
   }
 
@@ -936,7 +936,7 @@ impl ConfigFile {
   }
 
   pub fn dir_path(&self) -> PathBuf {
-    specifier_to_file_path(&self.specifier)
+    url_to_file_path(&self.specifier)
       .unwrap()
       .parent()
       .unwrap()
@@ -978,18 +978,7 @@ impl ConfigFile {
       return Ok(Some(specifier));
     }
     // now as a relative file path
-    if let Ok(config_file_path) = self.specifier.to_file_path() {
-      // people may specify a file path without a leading `./` so
-      // this handles that
-      let path = config_file_path.parent().unwrap().join(value);
-      Url::from_file_path(normalize_path(&path))
-        .map_err(|()| {
-          anyhow::anyhow!("Failed converting {} to url.", path.display())
-        })
-        .map(Some)
-    } else {
-      Ok(Some(self.specifier.join(value)?))
-    }
+    Ok(Some(specifier_parent(&self.specifier).join(value)?))
   }
 
   pub fn vendor(&self) -> Option<bool> {
@@ -1536,7 +1525,7 @@ impl ConfigFile {
         path: Some(path), ..
       } = &mut lock_config
       {
-        *path = specifier_to_file_path(&self.specifier)?
+        *path = url_to_file_path(&self.specifier)?
           .parent()
           .unwrap()
           .join(&path);
@@ -1553,7 +1542,7 @@ impl ConfigFile {
       Some(LockConfig::PathBuf(lock)) => Ok(Some(lock)),
       Some(LockConfig::Object { path, .. }) if path.is_some() => Ok(path),
       _ => {
-        let mut path = specifier_to_file_path(&self.specifier)?;
+        let mut path = url_to_file_path(&self.specifier)?;
         path.set_file_name("deno.lock");
         Ok(Some(path))
       }
@@ -1685,7 +1674,7 @@ pub fn get_ts_config_for_emit(
 mod tests {
   use crate::fs::RealDenoConfigFs;
   use crate::glob::PathOrPattern;
-  use crate::util::specifier_to_file_path;
+  use crate::util::url_to_file_path;
 
   use super::*;
   use pretty_assertions::assert_eq;
@@ -1793,7 +1782,7 @@ mod tests {
       }),
     );
 
-    let config_dir_path = specifier_to_file_path(&config_dir).unwrap();
+    let config_dir_path = url_to_file_path(&config_dir).unwrap();
     assert_eq!(
       unpack_object(config_file.to_lint_config(), "lint"),
       LintConfig {
@@ -1883,7 +1872,7 @@ mod tests {
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let config_dir_path = specifier_to_file_path(&config_dir).unwrap();
+    let config_dir_path = url_to_file_path(&config_dir).unwrap();
 
     let lint_files = unpack_object(config_file.to_lint_config(), "lint").files;
     assert_eq!(

@@ -55,6 +55,9 @@ use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternParseError;
 use crate::glob::PathOrPatternSet;
 use crate::sync::new_rc;
+use crate::util::specifier_parent;
+use crate::util::url_to_file_path;
+use crate::util::url_from_directory_path;
 use crate::SpecifierToFilePathError;
 
 mod discovery;
@@ -393,7 +396,7 @@ impl Workspace {
   }
 
   pub fn root_dir_path(&self) -> PathBuf {
-    self.root_dir.to_file_path().unwrap()
+    url_to_file_path(&self.root_dir).unwrap()
   }
 
   pub fn root_folder_configs(&self) -> &FolderConfigs {
@@ -917,7 +920,7 @@ impl Workspace {
       .iter()
       .filter(|(_, folder)| folder.deno_json.is_some())
       .map(|(url, folder)| {
-        let dir_path = url.to_file_path().unwrap();
+        let dir_path = url_to_file_path(url).unwrap();
         (dir_path, (url, folder))
       })
       .collect::<Vec<_>>();
@@ -963,7 +966,7 @@ impl Workspace {
       }
       for folder_url in matched_folder_urls {
         let entry = results.entry((*folder_url).clone());
-        let folder_path = folder_url.to_file_path().unwrap();
+        let folder_path = url_to_file_path(folder_url).unwrap();
         match entry {
           indexmap::map::Entry::Occupied(entry) => {
             let entry = entry.into_mut();
@@ -1127,7 +1130,7 @@ impl WorkspaceDirectory {
             match fs.stat_sync(path) {
               Ok(info) => {
                 return Ok(
-                  Url::from_directory_path(if info.is_directory {
+                  url_from_directory_path(if info.is_directory {
                     path
                   } else {
                     path.parent().unwrap()
@@ -1138,7 +1141,7 @@ impl WorkspaceDirectory {
               Err(_err) => {
                 // assume the parent is a directory
                 match path.parent() {
-                  Some(parent) => Ok(Url::from_directory_path(parent).unwrap()),
+                  Some(parent) => Ok(url_from_directory_path(parent).unwrap()),
                   None => Err(
                     WorkspaceDiscoverErrorKind::FailedResolvingStartDirectory(
                       anyhow::anyhow!(
@@ -1162,7 +1165,7 @@ impl WorkspaceDirectory {
               ),
             )
           })?;
-          Ok(Url::from_directory_path(parent).unwrap())
+          Ok(url_from_directory_path(parent).unwrap())
         }
       }
     }
@@ -1301,7 +1304,7 @@ impl WorkspaceDirectory {
       return vec![package_config];
     }
     if let Some(pkg_json) = &self.pkg_json {
-      let dir_path = self.dir_url.to_file_path().unwrap();
+      let dir_path = url_to_file_path(&self.dir_url).unwrap();
       // don't publish anything if in a package.json only directory within
       // a workspace
       if pkg_json.member.dir_path().starts_with(&dir_path)
@@ -1323,7 +1326,7 @@ impl WorkspaceDirectory {
   }
 
   pub fn dir_path(&self) -> PathBuf {
-    self.dir_url.to_file_path().unwrap()
+    url_to_file_path(&self.dir_url).unwrap()
   }
 
   pub fn has_deno_or_pkg_json(&self) -> bool {
@@ -1376,7 +1379,7 @@ impl WorkspaceDirectory {
       return Ok(LintConfig {
         options: Default::default(),
         files: FilePatterns::new_with_base(
-          self.dir_url.to_file_path().unwrap(),
+          url_to_file_path(&self.dir_url).unwrap(),
         ),
       });
     };
@@ -1432,7 +1435,7 @@ impl WorkspaceDirectory {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(FmtConfig {
         files: FilePatterns::new_with_base(
-          self.dir_url.to_file_path().unwrap(),
+          url_to_file_path(&self.dir_url).unwrap(),
         ),
         options: Default::default(),
       });
@@ -1489,7 +1492,7 @@ impl WorkspaceDirectory {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(BenchConfig {
         files: FilePatterns::new_with_base(
-          self.dir_url.to_file_path().unwrap(),
+          url_to_file_path(&self.dir_url).unwrap(),
         ),
       });
     };
@@ -1514,8 +1517,7 @@ impl WorkspaceDirectory {
             .to_tasks_config()
             .map(|tasks| {
               tasks.map(|tasks| WorkspaceMemberTasksConfigFile {
-                folder_url: Url::from_directory_path(deno_json.dir_path())
-                  .unwrap(),
+                folder_url: specifier_parent(&deno_json.specifier),
                 tasks,
               })
             })
@@ -1527,8 +1529,7 @@ impl WorkspaceDirectory {
         package_json: match maybe_pkg_json {
           Some(pkg_json) => pkg_json.scripts.clone().map(|scripts| {
             WorkspaceMemberTasksConfigFile {
-              folder_url: Url::from_directory_path(pkg_json.dir_path())
-                .unwrap(),
+              folder_url: specifier_parent(&pkg_json.specifier()),
               tasks: scripts,
             }
           }),
@@ -1564,7 +1565,7 @@ impl WorkspaceDirectory {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(PublishConfig {
         files: FilePatterns::new_with_base(
-          self.dir_url.to_file_path().unwrap(),
+          url_to_file_path(&self.dir_url).unwrap(),
         ),
       });
     };
@@ -1593,7 +1594,7 @@ impl WorkspaceDirectory {
     let Some(deno_json) = self.deno_json.as_ref() else {
       return Ok(TestConfig {
         files: FilePatterns::new_with_base(
-          self.dir_url.to_file_path().unwrap(),
+          url_to_file_path(&self.dir_url).unwrap(),
         ),
       });
     };
@@ -1951,6 +1952,7 @@ mod test {
   use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
   use crate::util::normalize_path;
+  use crate::util::url_from_directory_path;
 
   use super::*;
 
@@ -2153,7 +2155,7 @@ mod test {
     .unwrap();
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
     let root_deno_json = Some(WorkspaceMemberTasksConfigFile {
-      folder_url: Url::from_directory_path(root_dir()).unwrap(),
+      folder_url: url_from_directory_path(&root_dir()).unwrap(),
       tasks: IndexMap::from([
         ("hi".to_string(), Task::Definition("echo hi".to_string())),
         (
@@ -2181,7 +2183,7 @@ mod test {
     // member
     {
       let member_dir = workspace_dir.workspace.resolve_member_dir(
-        &Url::from_directory_path(root_dir().join("member/deno.json")).unwrap(),
+        &url_from_directory_path(&root_dir().join("member/deno.json")).unwrap(),
       );
       let tasks_config = member_dir.to_tasks_config().unwrap();
       assert_eq!(
@@ -2190,7 +2192,7 @@ mod test {
           root: root.clone(),
           member: Some(WorkspaceMemberTasksConfig {
             deno_json: Some(WorkspaceMemberTasksConfigFile {
-              folder_url: Url::from_directory_path(root_dir().join("member"))
+              folder_url: url_from_directory_path(&root_dir().join("member"))
                 .unwrap(),
               tasks: IndexMap::from([
                 (
@@ -2208,7 +2210,7 @@ mod test {
     // pkg json
     {
       let member_dir = workspace_dir.workspace.resolve_member_dir(
-        &Url::from_directory_path(root_dir().join("pkg_json/package.json"))
+        &url_from_directory_path(&root_dir().join("pkg_json/package.json"))
           .unwrap(),
       );
       let tasks_config = member_dir.to_tasks_config().unwrap();
@@ -2219,7 +2221,7 @@ mod test {
           member: Some(WorkspaceMemberTasksConfig {
             deno_json: root_deno_json.clone(),
             package_json: Some(WorkspaceMemberTasksConfigFile {
-              folder_url: Url::from_directory_path(root_dir().join("pkg_json"))
+              folder_url: url_from_directory_path(&root_dir().join("pkg_json"))
                 .unwrap(),
               tasks: IndexMap::from([(
                 "script".to_string(),
@@ -2396,7 +2398,7 @@ mod test {
       workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
-        config_url: Url::from_directory_path(root_dir())
+        config_url: url_from_directory_path(&root_dir())
           .unwrap()
           .join("../dir/deno.json")
           .unwrap(),
@@ -2421,12 +2423,12 @@ mod test {
         source,
       } => {
         assert_eq!(patch, "./member");
-        assert_eq!(base, Url::from_directory_path(root_dir()).unwrap());
+        assert_eq!(base, url_from_directory_path(&root_dir()).unwrap());
         match source {
           ResolveWorkspacePatchError::NotFound { dir_url } => {
             assert_eq!(
               dir_url,
-              Url::from_directory_path(root_dir().join("member")).unwrap()
+              url_from_directory_path(&root_dir().join("member")).unwrap()
             );
           }
           _ => unreachable!(),
@@ -2455,7 +2457,7 @@ mod test {
         source,
       } => {
         assert_eq!(patch, "./member");
-        assert_eq!(base, Url::from_directory_path(root_dir()).unwrap());
+        assert_eq!(base, url_from_directory_path(&root_dir()).unwrap());
         assert!(matches!(
           source,
           ResolveWorkspacePatchError::WorkspaceMemberNotAllowed
@@ -2691,7 +2693,7 @@ mod test {
     // check the root context
     let root_ctx = workspace_dir
       .workspace
-      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&url_from_directory_path(&root_dir()).unwrap());
     let root_lint_config = root_ctx
       .to_lint_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
@@ -2771,7 +2773,7 @@ mod test {
     // check the root context
     let root_ctx = workspace_dir
       .workspace
-      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&url_from_directory_path(&root_dir()).unwrap());
     let root_fmt_config = root_ctx
       .to_fmt_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
@@ -2829,7 +2831,7 @@ mod test {
     // check the root context
     let root_ctx = workspace_dir
       .workspace
-      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&url_from_directory_path(&root_dir()).unwrap());
     let root_bench_config = root_ctx
       .to_bench_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
@@ -2879,7 +2881,7 @@ mod test {
     // check the root context
     let root_ctx = workspace_dir
       .workspace
-      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&url_from_directory_path(&root_dir()).unwrap());
     let root_test_config = root_ctx
       .to_test_config(FilePatterns::new_with_base(root_ctx.dir_path()))
       .unwrap();
@@ -2936,7 +2938,7 @@ mod test {
     // check the root context
     let root_publish_config = workspace_dir
       .workspace
-      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap())
+      .resolve_member_dir(&url_from_directory_path(&root_dir()).unwrap())
       .to_publish_config()
       .unwrap();
     assert_eq!(
@@ -2971,7 +2973,7 @@ mod test {
     };
     let root_ctx = workspace_dir
       .workspace
-      .resolve_member_dir(&Url::from_directory_path(root_dir()).unwrap());
+      .resolve_member_dir(&url_from_directory_path(&root_dir()).unwrap());
     let expected_member_files = FilePatterns {
       base: root_dir().join("member"),
       include: None,
@@ -3617,7 +3619,7 @@ mod test {
         } => {
           assert_eq!(
             workspace_url.as_ref(),
-            &Url::from_directory_path(root_dir()).unwrap()
+            &url_from_directory_path(&root_dir()).unwrap()
           );
           assert_eq!(
             config_url,
@@ -4267,7 +4269,7 @@ mod test {
         split,
         IndexMap::from([(
           new_rc(
-            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            url_from_directory_path(&root_dir().join("member-a")).unwrap()
           ),
           FilePatterns {
             base: root_dir().join("member-a"),
@@ -4296,7 +4298,7 @@ mod test {
         IndexMap::from([
           (
             new_rc(
-              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+              url_from_directory_path(&root_dir().join("member-a")).unwrap()
             ),
             FilePatterns {
               base: root_dir().join("member-a/sub"),
@@ -4307,7 +4309,7 @@ mod test {
             }
           ),
           (
-            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            new_rc(url_from_directory_path(&root_dir()).unwrap()),
             FilePatterns {
               base: root_dir().join("file"),
               include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
@@ -4339,7 +4341,7 @@ mod test {
         split,
         IndexMap::from([
           (
-            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            new_rc(url_from_directory_path(&root_dir()).unwrap()),
             FilePatterns {
               base: root_dir().join("other_dir"),
               include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
@@ -4350,7 +4352,7 @@ mod test {
           ),
           (
             new_rc(
-              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+              url_from_directory_path(&root_dir().join("member-a")).unwrap()
             ),
             FilePatterns {
               base: root_dir().join("member-a"),
@@ -4362,7 +4364,7 @@ mod test {
           ),
           (
             new_rc(
-              Url::from_directory_path(root_dir().join("member-b")).unwrap()
+              url_from_directory_path(&root_dir().join("member-b")).unwrap()
             ),
             FilePatterns {
               base: root_dir().join("member-b"),
@@ -4397,7 +4399,7 @@ mod test {
         split,
         IndexMap::from([
           (
-            new_rc(Url::from_directory_path(root_dir()).unwrap()),
+            new_rc(url_from_directory_path(&root_dir()).unwrap()),
             FilePatterns {
               base: root_dir(),
               include: Some(PathOrPatternSet::new(vec![root_glob.clone()])),
@@ -4406,7 +4408,7 @@ mod test {
           ),
           (
             new_rc(
-              Url::from_directory_path(root_dir().join("member-a")).unwrap()
+              url_from_directory_path(&root_dir().join("member-a")).unwrap()
             ),
             FilePatterns {
               base: root_dir().join("member-a"),
@@ -4416,7 +4418,7 @@ mod test {
           ),
           (
             new_rc(
-              Url::from_directory_path(root_dir().join("member-b")).unwrap()
+              url_from_directory_path(&root_dir().join("member-b")).unwrap()
             ),
             FilePatterns {
               base: root_dir().join("member-b"),
@@ -4442,7 +4444,7 @@ mod test {
         split,
         IndexMap::from([(
           new_rc(
-            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            url_from_directory_path(&root_dir().join("member-a")).unwrap()
           ),
           FilePatterns {
             base: root_dir().join("member-a/sub-dir/descendant/further"),
@@ -4472,7 +4474,7 @@ mod test {
         split,
         IndexMap::from([(
           new_rc(
-            Url::from_directory_path(root_dir().join("member-a")).unwrap()
+            url_from_directory_path(&root_dir().join("member-a")).unwrap()
           ),
           FilePatterns {
             // should use common base here
@@ -4503,7 +4505,7 @@ mod test {
       assert_eq!(
         split,
         IndexMap::from([(
-          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          new_rc(url_from_directory_path(&root_dir()).unwrap()),
           FilePatterns {
             base: root_dir(),
             include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
@@ -4531,7 +4533,7 @@ mod test {
       assert_eq!(
         split,
         IndexMap::from([(
-          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          new_rc(url_from_directory_path(&root_dir()).unwrap()),
           FilePatterns {
             base: root_dir(),
             include: Some(PathOrPatternSet::new(vec![
@@ -4568,7 +4570,7 @@ mod test {
       assert_eq!(
         split,
         IndexMap::from([(
-          new_rc(Url::from_directory_path(root_dir()).unwrap()),
+          new_rc(url_from_directory_path(&root_dir()).unwrap()),
           FilePatterns {
             base: root_dir(),
             include: Some(PathOrPatternSet::new(vec![
@@ -5177,7 +5179,7 @@ mod test {
   fn normalize_err_text(text: &str) -> String {
     text.replace(
       "[ROOT_DIR_URL]",
-      Url::from_directory_path(root_dir())
+      url_from_directory_path(&root_dir())
         .unwrap()
         .to_string()
         .trim_end_matches('/'),
