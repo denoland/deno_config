@@ -60,7 +60,6 @@ use crate::SpecifierToFilePathError;
 mod discovery;
 mod resolver;
 
-pub use resolver::BaseUrl;
 pub use resolver::CreateResolverOptions;
 pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionDiagnostic;
