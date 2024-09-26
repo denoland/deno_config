@@ -3623,70 +3623,68 @@ mod test {
       }
     }
 
-    for file_name in ["deno.json"] {
-      let config_file_path = root_dir().join("member-b").join(file_name);
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
-        root_dir().join("deno.json"),
-        json!({
-          "workspace": ["./member-a"],
-        }),
-      );
-      fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
-      fs.insert_json(config_file_path.clone(), json!({}));
-      let err = workspace_at_start_dir_err(&fs, &root_dir().join("member-b"));
-      assert_err(&err, &config_file_path);
+    let file_name = "deno.json";
+    let config_file_path = root_dir().join("member-b").join(file_name);
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member-a"],
+      }),
+    );
+    fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
+    fs.insert_json(config_file_path.clone(), json!({}));
+    let err = workspace_at_start_dir_err(&fs, &root_dir().join("member-b"));
+    assert_err(&err, &config_file_path);
 
-      // try for when the config file is specified as well
-      let err = WorkspaceDirectory::discover(
-        WorkspaceDiscoverStart::ConfigFile(&config_file_path),
-        &WorkspaceDiscoverOptions {
-          fs: &fs,
-          discover_pkg_json: true,
-          ..Default::default()
-        },
-      )
-      .unwrap_err();
-      assert_err(&err, &config_file_path);
-    }
+    // try for when the config file is specified as well
+    let err = WorkspaceDirectory::discover(
+      WorkspaceDiscoverStart::ConfigFile(&config_file_path),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        ..Default::default()
+      },
+    )
+    .unwrap_err();
+    assert_err(&err, &config_file_path);
   }
 
   #[test]
   fn test_config_not_deno_workspace_member_non_natural_config_file_name() {
-    for file_name in ["other-name.json"] {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
-        root_dir().join("deno.json"),
-        json!({
-          "workspace": ["./member-a", "./member-b"],
-        }),
-      );
-      fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
-      // this is the "natural" config file that would be discovered by
-      // workspace discovery and since the file name specified does not
-      // match it, the workspace is not discovered and an error does not
-      // occur
-      fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
-      let config_file_path = root_dir().join("member-b").join(file_name);
-      fs.insert_json(config_file_path.clone(), json!({}));
-      let workspace_dir = WorkspaceDirectory::discover(
-        WorkspaceDiscoverStart::ConfigFile(&config_file_path),
-        &WorkspaceDiscoverOptions {
-          fs: &fs,
-          discover_pkg_json: true,
-          ..Default::default()
-        },
-      )
-      .unwrap();
-      assert_eq!(
-        workspace_dir
-          .workspace
-          .deno_jsons()
-          .map(|c| c.specifier.to_file_path().unwrap())
-          .collect::<Vec<_>>(),
-        vec![config_file_path]
-      );
-    }
+    let file_name = "other-name.json";
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member-a", "./member-b"],
+      }),
+    );
+    fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
+    // this is the "natural" config file that would be discovered by
+    // workspace discovery and since the file name specified does not
+    // match it, the workspace is not discovered and an error does not
+    // occur
+    fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    let config_file_path = root_dir().join("member-b").join(file_name);
+    fs.insert_json(config_file_path.clone(), json!({}));
+    let workspace_dir = WorkspaceDirectory::discover(
+      WorkspaceDiscoverStart::ConfigFile(&config_file_path),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(
+      workspace_dir
+        .workspace
+        .deno_jsons()
+        .map(|c| c.specifier.to_file_path().unwrap())
+        .collect::<Vec<_>>(),
+      vec![config_file_path]
+    );
   }
 
   #[test]
