@@ -741,7 +741,7 @@ impl ConfigFile {
   pub(crate) fn resolve_config_file_names<'a>(
     additional_config_file_names: &[&'a str],
   ) -> Cow<'a, [&'a str]> {
-    const CONFIG_FILE_NAMES: [&str; 2] = ["deno.json", "deno.jsonc"];
+    const CONFIG_FILE_NAMES: [&str; 1] = ["deno.json"];
     if additional_config_file_names.is_empty() {
       Cow::Borrowed(&CONFIG_FILE_NAMES)
     } else {
@@ -2749,7 +2749,7 @@ Caused by:
 
     let config = ConfigFile::new(
       config_text,
-      root_url().join("deno.jsonc").unwrap(),
+      root_url().join("deno.json").unwrap(),
       &ConfigParseOptions {
         include_task_comments: true,
       },

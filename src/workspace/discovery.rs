@@ -648,7 +648,6 @@ fn resolve_workspace_for_config_folder(
         // it's fine this doesn't use all the possible config file names
         // as this is only used to enhance the error message
         if member_dir_url.as_str().ends_with("/deno.json/")
-          || member_dir_url.as_str().ends_with("/deno.jsonc/")
           || member_dir_url.as_str().ends_with("/package.json/")
         {
           ResolveWorkspaceMemberError::NotFoundMaybeSpecifiedFile {

@@ -2081,21 +2081,15 @@ mod test {
     let config_text = json!({
       "workspace": [
         "./a",
-        "./b",
       ],
     });
     let config_text_a = json!({
       "name": "a",
       "version": "0.1.0"
     });
-    let config_text_b = json!({
-      "name": "b",
-      "version": "0.2.0"
-    });
 
     fs.insert_json(root_dir().join("deno.json"), config_text);
     fs.insert_json(root_dir().join("a/deno.json"), config_text_a);
-    fs.insert_json(root_dir().join("b/deno.jsonc"), config_text_b);
 
     let workspace_dir = WorkspaceDirectory::discover(
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
@@ -2105,7 +2099,7 @@ mod test {
       },
     )
     .unwrap();
-    assert_eq!(workspace_dir.workspace.config_folders.len(), 3);
+    assert_eq!(workspace_dir.workspace.config_folders.len(), 2);
   }
 
   #[test]
@@ -3629,7 +3623,7 @@ mod test {
       }
     }
 
-    for file_name in ["deno.json", "deno.jsonc"] {
+    for file_name in ["deno.json"] {
       let config_file_path = root_dir().join("member-b").join(file_name);
       let mut fs = TestFileSystem::default();
       fs.insert_json(
@@ -3659,7 +3653,7 @@ mod test {
 
   #[test]
   fn test_config_not_deno_workspace_member_non_natural_config_file_name() {
-    for file_name in ["other-name.json", "deno.jsonc"] {
+    for file_name in ["other-name.json"] {
       let mut fs = TestFileSystem::default();
       fs.insert_json(
         root_dir().join("deno.json"),
