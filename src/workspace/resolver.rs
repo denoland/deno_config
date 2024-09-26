@@ -27,6 +27,7 @@ use url::Url;
 
 use crate::sync::new_rc;
 use crate::util::url_from_directory_path;
+use crate::util::url_to_file_path;
 use crate::workspace::Workspace;
 
 use super::UrlRc;
@@ -456,11 +457,9 @@ impl WorkspaceResolver {
       .package_jsons
       .into_iter()
       .map(|(relative_path, json)| {
-        let path = root_dir_url
-          .join(&relative_path)
-          .unwrap()
-          .to_file_path()
-          .unwrap();
+        let path =
+          url_to_file_path(&root_dir_url.join(&relative_path).unwrap())
+            .unwrap();
         let pkg_json =
           deno_package_json::PackageJson::load_from_value(path, json);
         PackageJsonRc::new(pkg_json)
