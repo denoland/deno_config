@@ -169,7 +169,7 @@ impl TestFileSystem {
   }
 
   fn get_dir_mut(&mut self, path: &Path) -> &mut Dir {
-    let path = crate::util::normalize_path(path);
+    let path = deno_path_util::normalize_path(path);
     if !self.directories.contains_key(&path) {
       if let Some(parent) = path.parent() {
         let parent_dir = self.get_dir_mut(parent);
@@ -193,7 +193,7 @@ impl DenoConfigFs for TestFileSystem {
     &self,
     path: &Path,
   ) -> Result<String, std::io::Error> {
-    let path = crate::util::normalize_path(path);
+    let path = deno_path_util::normalize_path(path);
     path
       .parent()
       .and_then(|parent| {

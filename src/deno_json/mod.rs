@@ -3,6 +3,9 @@
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Error as AnyError;
+use deno_path_util::specifier_parent;
+use deno_path_util::url_from_file_path;
+use deno_path_util::url_to_file_path;
 use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
 use jsonc_parser::common::Ranged;
@@ -30,9 +33,6 @@ use crate::fs::DenoConfigFs;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPatternSet;
 use crate::util::is_skippable_io_error;
-use crate::util::specifier_parent;
-use crate::util::url_from_file_path;
-use crate::util::url_to_file_path;
 use crate::SpecifierToFilePathError;
 
 mod ts;
@@ -1635,13 +1635,13 @@ pub fn get_ts_config_for_emit(
 
 #[cfg(test)]
 mod tests {
-  use crate::fs::RealDenoConfigFs;
-  use crate::glob::PathOrPattern;
-  use crate::util::url_to_file_path;
-
-  use super::*;
+  use deno_path_util::url_to_file_path;
   use pretty_assertions::assert_eq;
   use std::path::PathBuf;
+
+  use super::*;
+  use crate::fs::RealDenoConfigFs;
+  use crate::glob::PathOrPattern;
 
   impl Task {
     fn new(s: impl AsRef<str>) -> Self {

@@ -5,13 +5,15 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 
+use deno_path_util::normalize_path;
+
+
 use crate::fs::FsMetadata;
 use crate::glob::gitignore::DirGitIgnores;
 use crate::glob::gitignore::GitIgnoreTree;
 use crate::glob::FilePatternsMatch;
 use crate::glob::PathKind;
 use crate::glob::PathOrPattern;
-use crate::util::normalize_path;
 
 use super::FilePatterns;
 

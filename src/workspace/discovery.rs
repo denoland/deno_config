@@ -10,6 +10,10 @@ use std::path::PathBuf;
 use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
+use deno_path_util::specifier_parent;
+use deno_path_util::url_from_directory_path;
+use deno_path_util::url_from_file_path;
+use deno_path_util::url_to_file_path;
 use indexmap::IndexSet;
 use url::Url;
 
@@ -22,10 +26,6 @@ use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternSet;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
-use crate::util::specifier_parent;
-use crate::util::url_from_directory_path;
-use crate::util::url_from_file_path;
-use crate::util::url_to_file_path;
 use crate::workspace::ConfigReadError;
 use crate::workspace::Workspace;
 

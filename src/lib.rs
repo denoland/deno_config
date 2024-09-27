@@ -17,4 +17,4 @@ mod util;
 pub mod workspace;
 
 #[cfg(feature = "deno_json")]
-pub use util::SpecifierToFilePathError;
+pub use deno_path_util::SpecifierToFilePathError;

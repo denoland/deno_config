@@ -5,12 +5,12 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::bail;
+use deno_path_util::normalize_path;
+use deno_path_util::url_to_file_path;
 use indexmap::IndexMap;
 use thiserror::Error;
 use url::Url;
 
-use crate::util::normalize_path;
-use crate::util::url_to_file_path;
 use crate::SpecifierToFilePathError;
 
 mod collector;
@@ -711,10 +711,9 @@ fn match_options() -> glob::MatchOptions {
 mod test {
   use std::error::Error;
 
+  use deno_path_util::url_from_directory_path;
   use pretty_assertions::assert_eq;
   use tempfile::TempDir;
-
-  use crate::util::url_from_directory_path;
 
   use super::*;
 

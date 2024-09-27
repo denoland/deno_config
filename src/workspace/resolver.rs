@@ -9,6 +9,8 @@ use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDeps;
 use deno_package_json::PackageJsonRc;
+use deno_path_util::url_from_directory_path;
+use deno_path_util::url_to_file_path;
 use deno_semver::jsr::JsrPackageReqReference;
 use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
@@ -26,8 +28,6 @@ use thiserror::Error;
 use url::Url;
 
 use crate::sync::new_rc;
-use crate::util::url_from_directory_path;
-use crate::util::url_to_file_path;
 use crate::workspace::Workspace;
 
 use super::UrlRc;
@@ -837,14 +837,14 @@ mod test {
   use std::path::Path;
   use std::path::PathBuf;
 
+  use deno_path_util::url_from_directory_path;
+  use deno_path_util::url_from_file_path;
   use deno_semver::VersionReq;
   use serde_json::json;
   use url::Url;
 
   use super::*;
   use crate::fs::TestFileSystem;
-  use crate::util::url_from_directory_path;
-  use crate::util::url_from_file_path;
   use crate::workspace::WorkspaceDirectory;
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
@@ -899,7 +899,7 @@ mod test {
     let resolve = |name: &str, referrer: &str| {
       resolver.resolve(
         name,
-        &url_from_file_path(&crate::util::normalize_path(
+        &url_from_file_path(&deno_path_util::normalize_path(
           root_dir().join(referrer),
         ))
         .unwrap(),
