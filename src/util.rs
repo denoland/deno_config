@@ -23,12 +23,10 @@ pub fn is_skippable_io_error(e: &std::io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-
   #[cfg(windows)]
   #[test]
   fn is_skippable_io_error_win_invalid_filename() {
     let error = std::io::Error::from_raw_os_error(123);
-    assert!(is_skippable_io_error(&error));
+    assert!(super::is_skippable_io_error(&error));
   }
 }
