@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use deno_path_util::normalize_path;
 
-
 use crate::fs::FsMetadata;
 use crate::glob::gitignore::DirGitIgnores;
 use crate::glob::gitignore::GitIgnoreTree;
