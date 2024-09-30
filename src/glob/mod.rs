@@ -11,7 +11,7 @@ use indexmap::IndexMap;
 use thiserror::Error;
 use url::Url;
 
-use crate::SpecifierToFilePathError;
+use crate::UrlToFilePathError;
 
 mod collector;
 mod gitignore;
@@ -462,7 +462,7 @@ pub enum PathOrPatternParseError {
   #[error(transparent)]
   UrlParse(#[from] UrlParseError),
   #[error(transparent)]
-  SpecifierToFilePath(#[from] SpecifierToFilePathError),
+  UrlToFilePathError(#[from] UrlToFilePathError),
   #[error(transparent)]
   GlobParse(#[from] GlobPatternParseError),
 }
@@ -483,8 +483,7 @@ impl PathOrPattern {
         source: err,
       })?;
       if url.scheme() == "file" {
-        let path = url_to_file_path(&url)
-          .map_err(|_| SpecifierToFilePathError(url.clone()))?;
+        let path = url_to_file_path(&url)?;
         return Ok(Self::Path(path));
       } else {
         return Ok(Self::RemoteUrl(url));
