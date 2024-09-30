@@ -13,6 +13,9 @@ use anyhow::Error as AnyError;
 use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
+use deno_path_util::url_from_directory_path;
+use deno_path_util::url_parent;
+use deno_path_util::url_to_file_path;
 use deno_semver::package::PackageNv;
 use deno_semver::package::PackageReq;
 use deno_semver::RangeSetOrTag;
@@ -54,10 +57,7 @@ use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternParseError;
 use crate::glob::PathOrPatternSet;
 use crate::sync::new_rc;
-use crate::util::specifier_parent;
-use crate::util::url_from_directory_path;
-use crate::util::url_to_file_path;
-use crate::SpecifierToFilePathError;
+use crate::UrlToFilePathError;
 
 mod discovery;
 mod resolver;
@@ -265,7 +265,7 @@ pub enum WorkspaceDiscoverErrorKind {
     other_workspace_url: Url,
   },
   #[error(transparent)]
-  SpecifierToFilePath(#[from] SpecifierToFilePathError),
+  UrlToFilePathError(#[from] UrlToFilePathError),
   #[error("Config file must be a member of the workspace.\n  Config: {config_url}\n  Workspace: {workspace_url}")]
   ConfigNotWorkspaceMember {
     workspace_url: UrlRc,
@@ -1509,7 +1509,7 @@ impl WorkspaceDirectory {
             .to_tasks_config()
             .map(|tasks| {
               tasks.map(|tasks| WorkspaceMemberTasksConfigFile {
-                folder_url: specifier_parent(&deno_json.specifier),
+                folder_url: url_parent(&deno_json.specifier),
                 tasks,
               })
             })
@@ -1521,7 +1521,7 @@ impl WorkspaceDirectory {
         package_json: match maybe_pkg_json {
           Some(pkg_json) => pkg_json.scripts.clone().map(|scripts| {
             WorkspaceMemberTasksConfigFile {
-              folder_url: specifier_parent(&pkg_json.specifier()),
+              folder_url: url_parent(&pkg_json.specifier()),
               tasks: scripts,
             }
           }),
@@ -1931,6 +1931,8 @@ mod test {
   use std::cell::RefCell;
   use std::collections::HashMap;
 
+  use deno_path_util::normalize_path;
+  use deno_path_util::url_from_directory_path;
   use pretty_assertions::assert_eq;
   use serde_json::json;
 
@@ -1943,8 +1945,6 @@ mod test {
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
-  use crate::util::normalize_path;
-  use crate::util::url_from_directory_path;
 
   use super::*;
 

@@ -10,6 +10,10 @@ use std::path::PathBuf;
 use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
+use deno_path_util::url_from_directory_path;
+use deno_path_util::url_from_file_path;
+use deno_path_util::url_parent;
+use deno_path_util::url_to_file_path;
 use indexmap::IndexSet;
 use url::Url;
 
@@ -22,10 +26,6 @@ use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternSet;
 use crate::sync::new_rc;
 use crate::util::is_skippable_io_error;
-use crate::util::specifier_parent;
-use crate::util::url_from_directory_path;
-use crate::util::url_from_file_path;
-use crate::util::url_to_file_path;
 use crate::workspace::ConfigReadError;
 use crate::workspace::Workspace;
 
@@ -67,12 +67,12 @@ impl ConfigFolder {
   pub fn folder_url(&self) -> Url {
     match self {
       Self::Single(DenoOrPkgJson::Deno(config)) => {
-        specifier_parent(&config.specifier)
+        url_parent(&config.specifier)
       }
       Self::Single(DenoOrPkgJson::PkgJson(pkg_json)) => {
         url_from_directory_path(pkg_json.path.parent().unwrap()).unwrap()
       }
-      Self::Both { deno_json, .. } => specifier_parent(&deno_json.specifier),
+      Self::Both { deno_json, .. } => url_parent(&deno_json.specifier),
     }
   }
 
@@ -369,7 +369,7 @@ fn discover_workspace_config_files_for_single_dir(
         }
       }
 
-      let parent_dir_url = specifier_parent(&config_file.specifier);
+      let parent_dir_url = url_parent(&config_file.specifier);
       found_config_folders.insert(parent_dir_url.clone(), config_folder);
       first_config_folder_url = Some(parent_dir_url);
       // start searching for a workspace in the parent directory
