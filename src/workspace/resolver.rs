@@ -417,7 +417,9 @@ impl WorkspaceResolver {
         .package_jsons()
         .map(|pkg_json| {
           (
-            root_dir_url.make_relative_if_descendant(&pkg_json.specifier()).into_owned(),
+            root_dir_url
+              .make_relative_if_descendant(&pkg_json.specifier())
+              .into_owned(),
             serde_json::to_value(pkg_json).unwrap(),
           )
         })
