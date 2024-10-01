@@ -414,12 +414,13 @@ impl WorkspaceResolver {
         })
         .collect(),
       package_jsons: self
-        .pkg_jsons
-        .iter()
-        .map(|(specifier, pkg_json)| {
+        .package_jsons()
+        .map(|pkg_json| {
           (
-            root_dir_url.make_relative_if_descendant(specifier),
-            serde_json::to_value(&pkg_json.pkg_json).unwrap(),
+            root_dir_url
+              .make_relative_if_descendant(&pkg_json.specifier())
+              .into_owned(),
+            serde_json::to_value(pkg_json).unwrap(),
           )
         })
         .collect(),
@@ -806,7 +807,7 @@ pub struct SerializableWorkspaceResolver<'a> {
   pub import_map: Option<SerializedWorkspaceResolverImportMap<'a>>,
   #[serde(borrow)]
   pub jsr_pkgs: Vec<SerializedResolverWorkspaceJsrPackage<'a>>,
-  pub package_jsons: BTreeMap<Cow<'a, str>, serde_json::Value>,
+  pub package_jsons: Vec<(String, serde_json::Value)>,
   pub pkg_json_resolution: PackageJsonDepResolution,
 }
 
