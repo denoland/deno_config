@@ -326,6 +326,7 @@ fn discover_workspace_config_files_for_single_dir(
         Ok(None) | Err(_) => None,
       };
 
+      let parent_dir_url = url_parent(&config_file.specifier);
       let config_folder = match matching_config_folder {
         Some(config_folder) => config_folder,
         None => {
@@ -334,6 +335,17 @@ fn discover_workspace_config_files_for_single_dir(
           // the workspace cache
           let config_folder =
             ConfigFolder::Single(DenoOrPkgJson::Deno(config_file));
+
+          if config_folder.has_workspace_members() {
+            return handle_workspace_folder_with_members(
+              config_folder,
+              Some(&parent_dir_url),
+              opts,
+              found_config_folders,
+              &load_config_folder,
+            );
+          }
+
           let maybe_vendor_dir = resolve_vendor_dir(
             config_folder.deno_json().map(|d| d.as_ref()),
             opts.maybe_vendor_override.as_ref(),
@@ -369,7 +381,16 @@ fn discover_workspace_config_files_for_single_dir(
         }
       }
 
-      let parent_dir_url = url_parent(&config_file.specifier);
+      if config_folder.has_workspace_members() {
+        return handle_workspace_folder_with_members(
+          config_folder,
+          Some(&parent_dir_url),
+          opts,
+          found_config_folders,
+          &load_config_folder,
+        );
+      }
+
       found_config_folders.insert(parent_dir_url.clone(), config_folder);
       first_config_folder_url = Some(parent_dir_url);
       // start searching for a workspace in the parent directory
@@ -422,36 +443,12 @@ fn discover_workspace_config_files_for_single_dir(
       continue;
     };
     if root_config_folder.has_workspace_members() {
-      let maybe_vendor_dir = resolve_vendor_dir(
-        root_config_folder.deno_json().map(|d| d.as_ref()),
-        opts.maybe_vendor_override.as_ref(),
-      );
-      let raw_root_workspace = resolve_workspace_for_config_folder(
+      return handle_workspace_folder_with_members(
         root_config_folder,
-        maybe_vendor_dir,
-        opts,
-        &mut found_config_folders,
-        load_config_folder,
-      )?;
-      let patches = resolve_patch_config_folders(
-        &raw_root_workspace.root,
-        load_config_folder,
-      )?;
-      let root_workspace = new_rc(Workspace::new(
-        raw_root_workspace.root,
-        raw_root_workspace.members,
-        patches,
-        raw_root_workspace.vendor_dir,
-      ));
-      if let Some(cache) = opts.workspace_cache {
-        cache.set(root_workspace.root_dir_path(), root_workspace.clone());
-      }
-      return handle_workspace_with_members(
-        root_workspace,
         first_config_folder_url.as_ref(),
-        found_config_folders,
         opts,
-        load_config_folder,
+        found_config_folders,
+        &load_config_folder,
       );
     }
 
@@ -508,6 +505,46 @@ fn discover_workspace_config_files_for_single_dir(
       ),
     })
   }
+}
+
+fn handle_workspace_folder_with_members(
+  root_config_folder: ConfigFolder,
+  first_config_folder_url: Option<&Url>,
+  opts: &WorkspaceDiscoverOptions<'_>,
+  mut found_config_folders: HashMap<Url, ConfigFolder>,
+  load_config_folder: &impl Fn(
+    &Path,
+  ) -> Result<Option<ConfigFolder>, ConfigReadError>,
+) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
+  let maybe_vendor_dir = resolve_vendor_dir(
+    root_config_folder.deno_json().map(|d| d.as_ref()),
+    opts.maybe_vendor_override.as_ref(),
+  );
+  let raw_root_workspace = resolve_workspace_for_config_folder(
+    root_config_folder,
+    maybe_vendor_dir,
+    opts,
+    &mut found_config_folders,
+    load_config_folder,
+  )?;
+  let patches =
+    resolve_patch_config_folders(&raw_root_workspace.root, load_config_folder)?;
+  let root_workspace = new_rc(Workspace::new(
+    raw_root_workspace.root,
+    raw_root_workspace.members,
+    patches,
+    raw_root_workspace.vendor_dir,
+  ));
+  if let Some(cache) = opts.workspace_cache {
+    cache.set(root_workspace.root_dir_path(), root_workspace.clone());
+  }
+  handle_workspace_with_members(
+    root_workspace,
+    first_config_folder_url,
+    found_config_folders,
+    opts,
+    load_config_folder,
+  )
 }
 
 fn handle_workspace_with_members(
