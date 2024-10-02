@@ -3690,6 +3690,37 @@ mod test {
   }
 
   #[test]
+  fn test_config_workspace_non_natural_config_file_name() {
+    let mut fs = TestFileSystem::default();
+    let root_config_path = root_dir().join("deno-other.json");
+    fs.insert_json(
+      root_config_path.clone(),
+      json!({
+        "workspace": ["./member-a"],
+      }),
+    );
+    let member_a_config = root_dir().join("member-a/deno.json");
+    fs.insert_json(member_a_config.clone(), json!({}));
+    let workspace_dir = WorkspaceDirectory::discover(
+      WorkspaceDiscoverStart::ConfigFile(&root_config_path),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(
+      workspace_dir
+        .workspace
+        .deno_jsons()
+        .map(|c| c.specifier.to_file_path().unwrap())
+        .collect::<Vec<_>>(),
+      vec![root_config_path, member_a_config]
+    );
+  }
+
+  #[test]
   fn test_npm_package_not_referenced_in_deno_workspace() {
     let mut fs = TestFileSystem::default();
     fs.insert_json(
@@ -4232,6 +4263,37 @@ mod test {
         .map(|d| d.specifier.clone())
         .collect::<Vec<_>>(),
       vec![Url::from_file_path(&other_deno_json).unwrap()]
+    );
+  }
+
+  #[test]
+  fn test_config_workspace() {
+    let mut fs = TestFileSystem::default();
+    let root_config_path = root_dir().join("deno.json");
+    fs.insert_json(
+      root_config_path.clone(),
+      json!({
+        "workspace": ["./member-a"],
+      }),
+    );
+    let member_a_config = root_dir().join("member-a/deno.json");
+    fs.insert_json(member_a_config.clone(), json!({}));
+    let workspace_dir = WorkspaceDirectory::discover(
+      WorkspaceDiscoverStart::ConfigFile(&root_config_path),
+      &WorkspaceDiscoverOptions {
+        fs: &fs,
+        discover_pkg_json: true,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(
+      workspace_dir
+        .workspace
+        .deno_jsons()
+        .map(|c| c.specifier.to_file_path().unwrap())
+        .collect::<Vec<_>>(),
+      vec![root_config_path, member_a_config]
     );
   }
 
