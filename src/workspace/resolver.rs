@@ -8,6 +8,7 @@ use anyhow::Error as AnyError;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDeps;
+use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
 use deno_path_util::url_from_directory_path;
 use deno_path_util::url_to_file_path;
@@ -462,10 +463,10 @@ impl WorkspaceResolver {
           url_to_file_path(&root_dir_url.join(&relative_path).unwrap())
             .unwrap();
         let pkg_json =
-          deno_package_json::PackageJson::load_from_value(path, json);
-        PackageJsonRc::new(pkg_json)
+          deno_package_json::PackageJson::load_from_value(path, json)?;
+        Ok::<_, PackageJsonLoadError>(PackageJsonRc::new(pkg_json))
       })
-      .collect();
+      .collect::<Result<_, _>>()?;
     let jsr_packages = serializable_workspace_resolver
       .jsr_pkgs
       .into_iter()
