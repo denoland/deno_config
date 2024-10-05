@@ -35,3 +35,6 @@ deno_path_util = "0.2.0"
 [dev-dependencies]
 tempfile = "3.4.0"
 pretty_assertions = "1.4.0"
+
+[patch.crates-io]
+deno_package_json = { git = "https://github.com/littledivy/deno_package_json", branch = "exports_main_error" }
