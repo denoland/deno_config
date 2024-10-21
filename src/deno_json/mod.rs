@@ -10,6 +10,7 @@ use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
 use jsonc_parser::common::Ranged;
 use jsonc_parser::CollectOptions;
+use jsonc_parser::CommentCollectionStrategy;
 use jsonc_parser::ParseResult;
 use serde::de;
 use serde::de::Unexpected;
@@ -837,7 +838,11 @@ impl ConfigFile {
     let jsonc = match jsonc_parser::parse_to_ast(
       text,
       &CollectOptions {
-        comments: need_comments_tokens,
+        comments: if need_comments_tokens {
+          CommentCollectionStrategy::Separate
+        } else {
+          CommentCollectionStrategy::Off
+        },
         tokens: need_comments_tokens,
       },
       &Default::default(),
