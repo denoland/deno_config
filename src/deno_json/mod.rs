@@ -454,17 +454,24 @@ pub struct WorkspaceConfig {
 pub struct PatchConfigParseError(#[source] serde_json::Error);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskDefinition {
+  pub command: String,
+  #[serde(default)]
+  pub dependencies: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Task {
-  Definition(String),
+  Definition(TaskDefinition),
   Commented {
-    definition: String,
+    definition: TaskDefinition,
     comments: Vec<String>,
   },
 }
 
 impl Task {
-  pub fn definition(&self) -> &str {
+  pub fn definition(&self) -> &TaskDefinition {
     match self {
       Task::Definition(d) => d,
       Task::Commented { definition, .. } => definition,
