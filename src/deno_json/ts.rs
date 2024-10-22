@@ -152,13 +152,16 @@ pub fn parse_compiler_options(
       if let Value::Array(ref v) = value {
         let mut runtime_set = HashSet::new();
         for val in v {
-            if let Value::String(ref s) = val {
-                runtime_set.insert(s.as_str());
-            }
+          if let Value::String(ref s) = val {
+              runtime_set.insert(s.as_str());
+          }
         }
 
         if runtime_set.contains("browser") && runtime_set.contains("deno") {
-          allowed.insert(String::from("lib"), json!(["deno.ns", "esnext", "dom", "dom.iterable"]));
+          allowed.insert(
+            String::from("lib"),
+            json!(["deno.ns", "esnext", "dom", "dom.iterable"])
+          );
         } else if runtime_set.contains("deno") {
           allowed.insert(String::from("lib"), json!(["deno.ns"]));
         } else if runtime_set.contains("browser") {
