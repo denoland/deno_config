@@ -48,6 +48,7 @@ use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 use crate::deno_json::Task;
+use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
 use crate::deno_json::TsConfigForEmit;
 use crate::deno_json::TsConfigType;
@@ -1656,7 +1657,7 @@ impl WorkspaceDirectory {
 
 pub enum TaskOrScript<'a> {
   /// A task from a deno.json.
-  Task(&'a IndexMap<String, Task>, &'a str),
+  Task(&'a IndexMap<String, Task>, &'a TaskDefinition),
   /// A script from a package.json.
   Script(&'a IndexMap<String, String>, &'a str),
 }
