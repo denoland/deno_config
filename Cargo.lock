@@ -97,9 +97,9 @@ dependencies = [
 [[package]]
 name = "deno_package_json"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cbc4c4d3eb0960b58e8f43f9fc2d3f620fcac9a03cd85203e08db5b04e83c1f"
+source = "git+https://github.com/littledivy/deno_package_json?branch=exports_main_error#304c1246792acd7e269b92924a03b0a1315d9e04"
 dependencies = [
+ "deno_path_util",
  "deno_semver",
  "indexmap",
  "serde",
