@@ -919,12 +919,13 @@ impl ConfigFile {
     let runtime_exists = !self.json.runtime.is_empty();
 
     if compiler_options_exists || runtime_exists {
-      let mut options: serde_json::Map<String, Value> = if let Some(compiler_options) = self.json.compiler_options.clone() {
-        serde_json::from_value(compiler_options)
-              .context("compilerOptions should be an object")?
-      } else {
-        serde_json::Map::new()
-      };
+      let mut options: serde_json::Map<String, Value> =
+        if let Some(compiler_options) = self.json.compiler_options.clone() {
+          serde_json::from_value(compiler_options)
+            .context("compilerOptions should be an object")?
+        } else {
+          serde_json::Map::new()
+        };
 
       if runtime_exists {
         self.resolve_runtime_libs(&mut options);
@@ -943,30 +944,40 @@ impl ConfigFile {
     let contains_browser = runtime.contains(&"browser".to_string());
 
     if contains_deno && contains_browser {
-      self.insert_libs(options, vec![
-        "deno.ns".to_string(),
-        "esnext".to_string(),
-        "dom".to_string(),
-        "dom.iterable".to_string(),
-      ]);
+      self.insert_libs(
+        options,
+        vec![
+          "deno.ns".to_string(),
+          "esnext".to_string(),
+          "dom".to_string(),
+          "dom.iterable".to_string(),
+        ],
+      );
     } else if contains_deno {
       self.insert_libs(options, vec!["deno.ns".to_string()]);
     } else if contains_browser {
-      self.insert_libs(options, vec![
-        "esnext".to_string(),
-        "dom".to_string(),
-        "dom.iterable".to_string(),
-      ]);
+      self.insert_libs(
+        options,
+        vec![
+          "esnext".to_string(),
+          "dom".to_string(),
+          "dom.iterable".to_string(),
+        ],
+      );
     }
   }
 
   /// Inserts the values into the `lib` field of `compilerOptions`.
-  fn insert_libs(&self, options: &mut serde_json::Map<String, Value>, libs: Vec<String>) {
+  fn insert_libs(
+    &self,
+    options: &mut serde_json::Map<String, Value>,
+    libs: Vec<String>,
+  ) {
     let lib_array = options
-        .entry("lib".to_string())
-        .or_insert(Value::Array(Vec::new())) // Ensure "lib" key exists as an array
-        .as_array_mut()
-        .unwrap();
+      .entry("lib".to_string())
+      .or_insert(Value::Array(Vec::new())) // Ensure "lib" key exists as an array
+      .as_array_mut()
+      .unwrap();
 
     for lib in libs {
       lib_array.push(Value::String(lib));
