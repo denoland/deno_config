@@ -594,7 +594,7 @@ impl NodeModulesDirMode {
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
   pub compiler_options: Option<Value>,
-  pub runtime: Vec<String>,
+  pub runtime: Option<Vec<String>>,
   pub import_map: Option<String>,
   pub imports: Option<Value>,
   pub scopes: Option<Value>,
@@ -916,7 +916,7 @@ impl ConfigFile {
   /// The result also contains any options that were ignored.
   pub fn to_compiler_options(&self) -> Result<ParsedTsConfigOptions, AnyError> {
     let compiler_options_exists = self.json.compiler_options.is_some();
-    let runtime_exists = !self.json.runtime.is_empty();
+    let runtime_exists = self.json.runtime.is_some();
 
     if compiler_options_exists || runtime_exists {
       let mut options: serde_json::Map<String, Value> =
@@ -939,31 +939,32 @@ impl ConfigFile {
 
   /// Resolves and updates the `lib` field in `compilerOptions` based on the `runtime` configuration.
   fn resolve_runtime_libs(&self, options: &mut serde_json::Map<String, Value>) {
-    let runtime = &self.json.runtime;
-    let contains_deno = runtime.contains(&"deno".to_string());
-    let contains_browser = runtime.contains(&"browser".to_string());
+    if let Some(runtime) = self.json.runtime.clone() {
+      let contains_deno = runtime.contains(&"deno".to_string());
+      let contains_browser = runtime.contains(&"browser".to_string());
 
-    if contains_deno && contains_browser {
-      self.insert_libs(
-        options,
-        vec![
-          "deno.ns".to_string(),
-          "esnext".to_string(),
-          "dom".to_string(),
-          "dom.iterable".to_string(),
-        ],
-      );
-    } else if contains_deno {
-      self.insert_libs(options, vec!["deno.ns".to_string()]);
-    } else if contains_browser {
-      self.insert_libs(
-        options,
-        vec![
-          "esnext".to_string(),
-          "dom".to_string(),
-          "dom.iterable".to_string(),
-        ],
-      );
+      if contains_deno && contains_browser {
+        self.insert_libs(
+          options,
+          vec![
+            "deno.ns".to_string(),
+            "esnext".to_string(),
+            "dom".to_string(),
+            "dom.iterable".to_string(),
+          ],
+        );
+      } else if contains_deno {
+        self.insert_libs(options, vec!["deno.ns".to_string()]);
+      } else if contains_browser {
+        self.insert_libs(
+          options,
+          vec![
+            "esnext".to_string(),
+            "dom".to_string(),
+            "dom.iterable".to_string(),
+          ],
+        );
+      }
     }
   }
 
