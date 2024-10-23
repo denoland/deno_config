@@ -594,6 +594,7 @@ impl NodeModulesDirMode {
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFileJson {
   pub compiler_options: Option<Value>,
+  pub runtime: Vec<String>,
   pub import_map: Option<String>,
   pub imports: Option<Value>,
   pub scopes: Option<Value>,
@@ -914,13 +915,61 @@ impl ConfigFile {
   /// Parse `compilerOptions` and return a serde `Value`.
   /// The result also contains any options that were ignored.
   pub fn to_compiler_options(&self) -> Result<ParsedTsConfigOptions, AnyError> {
-    if let Some(compiler_options) = self.json.compiler_options.clone() {
-      let options: serde_json::Map<String, Value> =
+    let compiler_options_exists = self.json.compiler_options.is_some();
+    let runtime_exists = !self.json.runtime.is_empty();
+
+    if compiler_options_exists || runtime_exists {
+      let mut options: serde_json::Map<String, Value> = if let Some(compiler_options) = self.json.compiler_options.clone() {
         serde_json::from_value(compiler_options)
-          .context("compilerOptions should be an object")?;
+              .context("compilerOptions should be an object")?
+      } else {
+        serde_json::Map::new()
+      };
+
+      if runtime_exists {
+        self.resolve_runtime_libs(&mut options);
+      }
+
       parse_compiler_options(options, Some(&self.specifier))
     } else {
       Ok(Default::default())
+    }
+  }
+
+  /// Resolves and updates the `lib` field in `compilerOptions` based on the `runtime` configuration.
+  fn resolve_runtime_libs(&self, options: &mut serde_json::Map<String, Value>) {
+    let runtime = &self.json.runtime;
+    let contains_deno = runtime.contains(&"deno".to_string());
+    let contains_browser = runtime.contains(&"browser".to_string());
+
+    if contains_deno && contains_browser {
+      self.insert_libs(options, vec![
+        "deno.ns".to_string(),
+        "esnext".to_string(),
+        "dom".to_string(),
+        "dom.iterable".to_string(),
+      ]);
+    } else if contains_deno {
+      self.insert_libs(options, vec!["deno.ns".to_string()]);
+    } else if contains_browser {
+      self.insert_libs(options, vec![
+        "esnext".to_string(),
+        "dom".to_string(),
+        "dom.iterable".to_string(),
+      ]);
+    }
+  }
+
+  /// Inserts the values into the `lib` field of `compilerOptions`.
+  fn insert_libs(&self, options: &mut serde_json::Map<String, Value>, libs: Vec<String>) {
+    let lib_array = options
+        .entry("lib".to_string())
+        .or_insert(Value::Array(Vec::new())) // Ensure "lib" key exists as an array
+        .as_array_mut()
+        .unwrap();
+
+    for lib in libs {
+      lib_array.push(Value::String(lib));
     }
   }
 
@@ -1705,6 +1754,7 @@ mod tests {
         // comments are allowed
         "strict": true
       },
+      "runtime": ["deno", "browser"],
       "lint": {
         "include": ["src/"],
         "exclude": ["src/testdata/"],
@@ -1741,7 +1791,8 @@ mod tests {
       maybe_ignored,
     } = config_file.to_compiler_options().unwrap();
     assert!(options.contains_key("strict"));
-    assert_eq!(options.len(), 1);
+    assert!(options.contains_key("lib"));
+    assert_eq!(options.len(), 2);
     assert_eq!(
       maybe_ignored,
       Some(IgnoredCompilerOptions {

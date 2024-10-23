@@ -7,7 +7,6 @@ use serde::Serializer;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::fmt;
 use url::Url;
 
@@ -121,7 +120,6 @@ static ALLOWED_COMPILER_OPTIONS: phf::Set<&'static str> = phf::phf_set! {
   "noUncheckedIndexedAccess",
   "noUnusedLocals",
   "noUnusedParameters",
-  "runtime",
   "strict",
   "strictBindCallApply",
   "strictBuiltinIteratorReturn",
@@ -148,30 +146,6 @@ pub fn parse_compiler_options(
   let mut ignored: Vec<String> = Vec::with_capacity(compiler_options.len());
 
   for (key, value) in compiler_options {
-    if key == "runtime" {
-      if let Value::Array(ref v) = value {
-        let mut runtime_set = HashSet::new();
-        for val in v {
-          if let Value::String(ref s) = val {
-            runtime_set.insert(s.as_str());
-          }
-        }
-
-        if runtime_set.contains("browser") && runtime_set.contains("deno") {
-          allowed.insert(
-            String::from("lib"),
-            json!(["deno.ns", "esnext", "dom", "dom.iterable"]),
-          );
-        } else if runtime_set.contains("deno") {
-          allowed.insert(String::from("lib"), json!(["deno.ns"]));
-        } else if runtime_set.contains("browser") {
-          allowed.insert(
-            String::from("lib"),
-            json!(["esnext", "dom", "dom.iterable"]),
-          );
-        }
-      }
-    }
     // We don't pass "types" entries to typescript via the compiler
     // options and instead provide those to tsc as "roots". This is
     // because our "types" behavior is at odds with how TypeScript's
