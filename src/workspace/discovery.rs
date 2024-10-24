@@ -706,7 +706,7 @@ fn resolve_workspace_for_config_folder(
       let (pattern_members, path_members): (Vec<_>, Vec<_>) = workspace_config
         .members
         .iter()
-        .partition(|member| is_glob_pattern(member));
+        .partition(|member| is_glob_pattern(member) || member.starts_with("!"));
 
       let patterns = pattern_members
         .iter()
@@ -752,19 +752,26 @@ fn resolve_workspace_for_config_folder(
         IndexSet::with_capacity(path_members.len() + deno_json_paths.len());
       for path_member in path_members {
         let member_dir_url = resolve_member_url(path_member)?;
-        member_dir_urls.insert(member_dir_url);
+        member_dir_urls.insert((path_member.clone(), member_dir_url));
       }
       for deno_json_path in deno_json_paths {
         let member_dir_url =
           url_from_directory_path(deno_json_path.parent().unwrap()).unwrap();
-        member_dir_urls.insert(member_dir_url);
+        member_dir_urls.insert((
+          deno_json_path
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string(),
+          member_dir_url,
+        ));
       }
 
-      for member_dir_url in member_dir_urls {
+      for (raw_member, member_dir_url) in member_dir_urls {
         if member_dir_url == root_config_file_directory_url {
           return Err(
             ResolveWorkspaceMemberError::InvalidSelfReference {
-              member: member_dir_url.to_string(),
+              member: raw_member.to_string(),
             }
             .into(),
           );
@@ -776,7 +783,7 @@ fn resolve_workspace_for_config_folder(
         if previous_member.is_some() {
           return Err(
             ResolveWorkspaceMemberError::Duplicate {
-              member: member_dir_url.to_string(),
+              member: raw_member.to_string(),
             }
             .into(),
           );
