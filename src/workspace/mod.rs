@@ -3598,7 +3598,7 @@ mod test {
       fs.insert_json(
         root_dir().join("deno.json"),
         json!({
-          "workspaces": [
+          "workspace": [
             "**/*",
             negation,
           ]
