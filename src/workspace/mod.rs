@@ -213,6 +213,18 @@ pub enum ResolveWorkspaceMemberError {
     #[source]
     source: PathOrPatternParseError,
   },
+  #[error(
+    "Failed converting Deno workspace member '{}' to pattern for config '{}'.",
+    member,
+    base
+  )]
+  DenoMemberToPattern {
+    base: Url,
+    member: String,
+    // this error has the text that failed
+    #[source]
+    source: PathOrPatternParseError,
+  },
 }
 
 #[derive(Error, Debug)]
@@ -276,6 +288,14 @@ pub enum WorkspaceDiscoverErrorKind {
   )]
   FailedCollectingNpmMembers {
     package_json_url: Url,
+    #[source]
+    source: AnyError,
+  },
+  #[error(
+    "Failed collecting Deno workspace members.\n  Config: {deno_json_url}"
+  )]
+  FailedCollectingDenoMembers {
+    deno_json_url: Url,
     #[source]
     source: AnyError,
   },
@@ -3569,6 +3589,23 @@ mod test {
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 0);
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
+  }
+
+  #[test]
+  fn test_deno_workspace_globs() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./packages/*"]
+      }),
+    );
+    fs.insert_json(root_dir().join("packages/package-a/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("packages/package-b/deno.json"), json!({}));
+    let workspace_dir =
+      workspace_at_start_dir(&fs, &root_dir().join("packages"));
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 3);
   }
 
   #[test]

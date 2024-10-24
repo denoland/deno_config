@@ -703,24 +703,80 @@ fn resolve_workspace_for_config_folder(
     };
   if let Some(deno_json) = root_config_folder.deno_json() {
     if let Some(workspace_config) = deno_json.to_workspace_config()? {
-      for raw_member in &workspace_config.members {
-        let member_dir_url = resolve_member_url(raw_member)?;
+      let (pattern_members, path_members): (Vec<_>, Vec<_>) = workspace_config
+        .members
+        .iter()
+        .partition(|member| is_glob_pattern(member));
+
+      let patterns = pattern_members
+        .iter()
+        .map(|raw_member| {
+          PathOrPattern::from_relative(
+            &deno_json.dir_path(),
+            &format!("{}deno.json", ensure_trailing_slash(raw_member)),
+          )
+          .map_err(|err| {
+            ResolveWorkspaceMemberError::DenoMemberToPattern {
+              base: root_config_file_directory_url.clone(),
+              member: raw_member.to_string(),
+              source: err,
+            }
+          })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+      let deno_json_paths = if patterns.is_empty() {
+        Vec::new()
+      } else {
+        FileCollector::new(|_| true)
+          .ignore_git_folder()
+          .ignore_node_modules()
+          .set_vendor_folder(maybe_vendor_dir.clone())
+          .collect_file_patterns(
+            opts.fs,
+            FilePatterns {
+              base: deno_json.dir_path().to_path_buf(),
+              include: Some(PathOrPatternSet::new(patterns)),
+              exclude: PathOrPatternSet::new(Vec::new()),
+            },
+          )
+          .map_err(|err| {
+            WorkspaceDiscoverErrorKind::FailedCollectingDenoMembers {
+              deno_json_url: deno_json.specifier.clone(),
+              source: err,
+            }
+          })?
+      };
+
+      let mut member_dir_urls =
+        IndexSet::with_capacity(path_members.len() + deno_json_paths.len());
+      for path_member in path_members {
+        let member_dir_url = resolve_member_url(path_member)?;
+        member_dir_urls.insert(member_dir_url);
+      }
+      for deno_json_path in deno_json_paths {
+        let member_dir_url =
+          url_from_directory_path(deno_json_path.parent().unwrap()).unwrap();
+        member_dir_urls.insert(member_dir_url);
+      }
+
+      for member_dir_url in member_dir_urls {
         if member_dir_url == root_config_file_directory_url {
           return Err(
             ResolveWorkspaceMemberError::InvalidSelfReference {
-              member: raw_member.to_string(),
+              member: member_dir_url.to_string(),
             }
             .into(),
           );
         }
         validate_member_url_is_descendant(&member_dir_url)?;
         let member_config_folder = find_member_config_folder(&member_dir_url)?;
-        let previous_member =
-          final_members.insert(new_rc(member_dir_url), member_config_folder);
+        let previous_member = final_members
+          .insert(new_rc(member_dir_url.clone()), member_config_folder);
         if previous_member.is_some() {
           return Err(
             ResolveWorkspaceMemberError::Duplicate {
-              member: raw_member.to_string(),
+              member: member_dir_url.to_string(),
             }
             .into(),
           );
