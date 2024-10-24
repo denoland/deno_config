@@ -702,88 +702,77 @@ fn resolve_workspace_for_config_folder(
       })
     };
 
-  enum ConfigFileName {
-    Single(&'static str),
-    Multiple(&'static [&'static str]),
-  }
-
-  let collect_member_config_folders = |kind: &'static str,
-                                       pattern_members: Vec<&String>,
-                                       file_specifier: &Url,
-                                       dir_path: &Path,
-                                       config_file_name: ConfigFileName|
-   -> Result<
-    Vec<PathBuf>,
-    WorkspaceDiscoverErrorKind,
-  > {
-    let patterns = pattern_members
-      .iter()
-      .map(|raw_member| {
-        let names = match config_file_name {
-          ConfigFileName::Single(name) => vec![name],
-          ConfigFileName::Multiple(names) => names.to_vec(),
-        };
-
-        names.into_iter().map(|config_file_name| {
-          PathOrPattern::from_relative(
-            dir_path,
-            &format!(
-              "{}{}",
-              ensure_trailing_slash(raw_member),
-              config_file_name
-            ),
-          )
-          .map_err(|err| {
-            ResolveWorkspaceMemberError::MemberToPattern {
-              kind,
-              base: root_config_file_directory_url.clone(),
-              member: raw_member.to_string(),
-              source: err,
-            }
+  let collect_member_config_folders =
+    |kind: &'static str,
+     pattern_members: Vec<&String>,
+     file_specifier: &Url,
+     dir_path: &Path,
+     config_file_names: &'static [&'static str]|
+     -> Result<Vec<PathBuf>, WorkspaceDiscoverErrorKind> {
+      let patterns = pattern_members
+        .iter()
+        .flat_map(|raw_member| {
+          config_file_names.iter().map(|config_file_name| {
+            PathOrPattern::from_relative(
+              dir_path,
+              &format!(
+                "{}{}",
+                ensure_trailing_slash(raw_member),
+                config_file_name
+              ),
+            )
+            .map_err(|err| {
+              ResolveWorkspaceMemberError::MemberToPattern {
+                kind,
+                base: root_config_file_directory_url.clone(),
+                member: raw_member.to_string(),
+                source: err,
+              }
+            })
           })
         })
-      })
-      .flatten()
-      .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
 
-    let paths = if patterns.is_empty() {
-      Vec::new()
-    } else {
-      FileCollector::new(|_| true)
-        .ignore_git_folder()
-        .ignore_node_modules()
-        .set_vendor_folder(maybe_vendor_dir.clone())
-        .collect_file_patterns(
-          opts.fs,
-          FilePatterns {
-            base: dir_path.to_path_buf(),
-            include: Some(PathOrPatternSet::new(patterns)),
-            exclude: PathOrPatternSet::new(Vec::new()),
-          },
-        )
-        .map_err(|err| WorkspaceDiscoverErrorKind::FailedCollectingMembers {
-          kind,
-          config_url: file_specifier.clone(),
-          source: err,
-        })?
+      let paths = if patterns.is_empty() {
+        Vec::new()
+      } else {
+        FileCollector::new(|_| true)
+          .ignore_git_folder()
+          .ignore_node_modules()
+          .set_vendor_folder(maybe_vendor_dir.clone())
+          .collect_file_patterns(
+            opts.fs,
+            FilePatterns {
+              base: dir_path.to_path_buf(),
+              include: Some(PathOrPatternSet::new(patterns)),
+              exclude: PathOrPatternSet::new(Vec::new()),
+            },
+          )
+          .map_err(|err| {
+            WorkspaceDiscoverErrorKind::FailedCollectingMembers {
+              kind,
+              config_url: file_specifier.clone(),
+              source: err,
+            }
+          })?
+      };
+
+      Ok(paths)
     };
-
-    Ok(paths)
-  };
 
   if let Some(deno_json) = root_config_folder.deno_json() {
     if let Some(workspace_config) = deno_json.to_workspace_config()? {
       let (pattern_members, path_members): (Vec<_>, Vec<_>) = workspace_config
         .members
         .iter()
-        .partition(|member| is_glob_pattern(member) || member.starts_with("!"));
+        .partition(|member| is_glob_pattern(member) || member.starts_with('!'));
 
       let deno_json_paths = collect_member_config_folders(
         "Deno",
         pattern_members,
         &deno_json.specifier,
         &deno_json.dir_path(),
-        ConfigFileName::Multiple(&["deno.json", "deno.jsonc"]),
+        &["deno.json", "deno.jsonc"],
       )?;
 
       let mut member_dir_urls =
@@ -839,8 +828,8 @@ fn resolve_workspace_for_config_folder(
         "npm",
         pattern_members,
         &pkg_json.specifier(),
-        &pkg_json.dir_path(),
-        ConfigFileName::Single("package.json"),
+        pkg_json.dir_path(),
+        &["package.json"],
       )?;
 
       let mut member_dir_urls =
