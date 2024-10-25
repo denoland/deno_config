@@ -202,11 +202,12 @@ pub enum ResolveWorkspaceMemberError {
     source: url::ParseError,
   },
   #[error(
-    "Failed converting npm workspace member '{}' to pattern for config '{}'.",
+    "Failed converting {kind} workspace member '{}' to pattern for config '{}'.",
     member,
     base
   )]
-  NpmMemberToPattern {
+  MemberToPattern {
+    kind: &'static str,
     base: Url,
     member: String,
     // this error has the text that failed
@@ -272,10 +273,11 @@ pub enum WorkspaceDiscoverErrorKind {
     config_url: Url,
   },
   #[error(
-    "Failed collecting npm workspace members.\n  Config: {package_json_url}"
+    "Failed collecting {kind} workspace members.\n  Config: {config_url}"
   )]
-  FailedCollectingNpmMembers {
-    package_json_url: Url,
+  FailedCollectingMembers {
+    kind: &'static str,
+    config_url: Url,
     #[source]
     source: AnyError,
   },
@@ -3569,6 +3571,55 @@ mod test {
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 0);
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
+  }
+
+  #[test]
+  fn test_deno_workspace_globs() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./packages/*"]
+      }),
+    );
+    fs.insert_json(root_dir().join("packages/package-a/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("packages/package-b/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("packages/package-c/deno.jsonc"), json!({}));
+    let workspace_dir =
+      workspace_at_start_dir(&fs, &root_dir().join("packages"));
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 4);
+  }
+
+  #[test]
+  fn test_deno_workspace_negations() {
+    for negation in ["!ignored/package-c", "!ignored/**"] {
+      let mut fs = TestFileSystem::default();
+      fs.insert_json(
+        root_dir().join("deno.json"),
+        json!({
+          "workspace": [
+            "**/*",
+            negation,
+          ]
+        }),
+      );
+      fs.insert_json(
+        root_dir().join("packages/package-a/deno.json"),
+        json!({}),
+      );
+      fs.insert_json(
+        root_dir().join("packages/package-b/deno.jsonc"),
+        json!({}),
+      );
+      fs.insert_json(
+        root_dir().join("ignored/package-c/deno.jsonc"),
+        json!({}),
+      );
+      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+      assert_eq!(workspace_dir.workspace.deno_jsons().count(), 3);
+    }
   }
 
   #[test]
