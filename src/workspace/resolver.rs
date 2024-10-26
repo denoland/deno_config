@@ -544,30 +544,6 @@ impl WorkspaceResolver {
     };
 
     // 2. Try to resolve the bare specifier to a workspace member
-    if resolve_error.is_unmapped_bare_specifier() {
-      for member in &self.jsr_pkgs {
-        if let Some(path) = specifier.strip_prefix(&member.name) {
-          if path.is_empty() || path.starts_with('/') {
-            let path = path.strip_prefix('/').unwrap_or(path);
-            return self.resolve_workspace_jsr_pkg(
-              member,
-              JsrPackageReqReference::from_str(&format!(
-                "jsr:{}{}/{}",
-                member.name,
-                member
-                  .version
-                  .as_ref()
-                  .map(|v| format!("@^{}", v))
-                  .unwrap_or_else(String::new),
-                path
-              ))
-              .unwrap(),
-            );
-          }
-        }
-      }
-    }
-
     if self.pkg_json_dep_resolution == PackageJsonDepResolution::Enabled {
       // 2. Attempt to resolve from the package.json dependencies.
       let mut previously_found_dir = false;
