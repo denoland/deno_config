@@ -3592,6 +3592,27 @@ mod test {
   }
 
   #[test]
+  fn test_deno_workspace_globs_with_package_json() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./packages/*", "./examples/*"]
+      }),
+    );
+    fs.insert_json(root_dir().join("packages/package-a/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("packages/package-b/deno.json"), json!({}));
+    fs.insert_json(root_dir().join("packages/package-c/deno.jsonc"), json!({}));
+    fs.insert_json(root_dir().join("examples/examples1/package.json"), json!({}));
+    fs.insert_json(root_dir().join("examples/examples2/package.json"), json!({}));
+    let workspace_dir =
+      workspace_at_start_dir(&fs, &root_dir().join("packages"));
+    assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
+    assert_eq!(workspace_dir.workspace.deno_jsons().count(), 4);
+    assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
+  }
+  
+  #[test]
   fn test_deno_workspace_negations() {
     for negation in ["!ignored/package-c", "!ignored/**"] {
       let mut fs = TestFileSystem::default();
