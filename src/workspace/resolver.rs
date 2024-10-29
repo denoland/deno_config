@@ -172,6 +172,8 @@ pub enum MappedResolutionError {
   ImportMap(#[from] ImportMapError),
   #[error(transparent)]
   Workspace(#[from] WorkspaceResolveError),
+  #[error("{0}")]
+  Other(String),
 }
 
 impl MappedResolutionError {
@@ -186,6 +188,7 @@ impl MappedResolutionError {
         ImportMapError::Other(_) => false,
       },
       MappedResolutionError::Workspace(_) => false,
+      Self::Other(_) => false,
     }
   }
 }
@@ -549,20 +552,18 @@ impl WorkspaceResolver {
         if let Some(path) = specifier.strip_prefix(&member.name) {
           if path.is_empty() || path.starts_with('/') {
             let path = path.strip_prefix('/').unwrap_or(path);
-            return self.resolve_workspace_jsr_pkg(
-              member,
-              JsrPackageReqReference::from_str(&format!(
-                "jsr:{}{}/{}",
-                member.name,
-                member
-                  .version
-                  .as_ref()
-                  .map(|v| format!("@^{}", v))
-                  .unwrap_or_else(String::new),
-                path
-              ))
-              .unwrap(),
-            );
+            let pkg_req_ref = JsrPackageReqReference::from_str(&format!(
+              "jsr:{}{}/{}",
+              member.name,
+              member
+                .version
+                .as_ref()
+                .map(|v| format!("@^{}", v))
+                .unwrap_or_else(String::new),
+              path
+            ))
+            .map_err(|e| MappedResolutionError::Other(e.to_string()))?;
+            return self.resolve_workspace_jsr_pkg(member, pkg_req_ref);
           }
         }
       }
@@ -1491,6 +1492,33 @@ mod test {
       }
       _ => unreachable!(),
     }
+  }
+
+  #[test]
+  fn invalid_package_name_with_slashes() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./libs/math"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("libs/math/deno.json"),
+      json!({
+        "name": "@deno-test/libs/math", // Invalid package name containing slashes
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = create_resolver(&workspace);
+    let result = resolver.resolve(
+      "@deno-test/libs/math",
+      &url_from_file_path(&root_dir().join("main.ts")).unwrap(),
+    );
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().to_string(), "Invalid package specifier 'jsr:@deno-test/libs/math@^1.0.0/'. Did you mean to write 'jsr:@deno-test/libs@^1.0.0//math'?");
   }
 
   fn create_resolver(workspace_dir: &WorkspaceDirectory) -> WorkspaceResolver {
