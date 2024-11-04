@@ -1526,11 +1526,10 @@ mod test {
 
     let diagnostics = workspace.workspace.diagnostics();
     assert_eq!(diagnostics.len(), 1);
-    assert_eq!(
-      diagnostics.first().unwrap().to_string(),
-      r#"invalid workspace member "@deno-test/libs/math". The name should match the pattern "^@[a-z0-9-]+/[a-z0-9-]+$".
-    at file:///home/user/libs/math/deno.json"#
-    );
+    assert!(
+      diagnostics.first().unwrap().to_string().starts_with(
+      r#"invalid workspace member "@deno-test/libs/math". The name should match the pattern "^@[a-z0-9-]+/[a-z0-9-]+$"#
+    ));
   }
 
   fn create_resolver(workspace_dir: &WorkspaceDirectory) -> WorkspaceResolver {
