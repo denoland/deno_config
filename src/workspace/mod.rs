@@ -681,7 +681,9 @@ impl Workspace {
         if !is_valid_jsr_pkg_name(name) {
           diagnostics.push(WorkspaceDiagnostic {
             config_url: config.specifier.clone(),
-            kind: WorkspaceDiagnosticKind::InvalidMemberName { name: name.clone() },
+            kind: WorkspaceDiagnosticKind::InvalidMemberName {
+              name: name.clone(),
+            },
           });
         }
       }
