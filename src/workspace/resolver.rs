@@ -172,8 +172,6 @@ pub enum MappedResolutionError {
   ImportMap(#[from] ImportMapError),
   #[error(transparent)]
   Workspace(#[from] WorkspaceResolveError),
-  #[error("{0}")]
-  Other(String),
 }
 
 impl MappedResolutionError {
@@ -188,7 +186,6 @@ impl MappedResolutionError {
         ImportMapError::Other(_) => false,
       },
       MappedResolutionError::Workspace(_) => false,
-      Self::Other(_) => false,
     }
   }
 }
