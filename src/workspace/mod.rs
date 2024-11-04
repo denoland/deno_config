@@ -1945,7 +1945,7 @@ fn is_valid_jsr_pkg_name(name: &str) -> bool {
   ));
   match jsr {
     Ok(jsr) => jsr.sub_path().is_none(),
-    Err(_) => return false,
+    Err(_) => false,
   }
 }
 
