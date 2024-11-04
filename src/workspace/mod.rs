@@ -26,6 +26,7 @@ use discovery::ConfigFileDiscovery;
 use discovery::ConfigFolder;
 use discovery::DenoOrPkgJson;
 use indexmap::IndexMap;
+use regex::Regex;
 use thiserror::Error;
 use url::Url;
 
@@ -141,6 +142,8 @@ pub enum WorkspaceDiagnosticKind {
     previous: bool,
     suggestion: NodeModulesDirMode,
   },
+  #[error("invalid workspace member \"{name}\". The name should match the pattern \"{JSR_PKG_NAME_REGEX}\".")]
+  InvalidMember { name: String },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -675,6 +678,14 @@ impl Workspace {
       config: &ConfigFile,
       diagnostics: &mut Vec<WorkspaceDiagnostic>,
     ) {
+      if let Some(name) = &config.json.name {
+        if !is_valid_jsr_pkg_name(name) {
+          diagnostics.push(WorkspaceDiagnostic {
+            config_url: config.specifier.clone(),
+            kind: WorkspaceDiagnosticKind::InvalidMember { name: name.clone() },
+          });
+        }
+      }
       if config.json.deprecated_workspaces.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: config.specifier.clone(),
@@ -1926,6 +1937,12 @@ fn parent_specifier_str(specifier: &str) -> Option<&str> {
   } else {
     None
   }
+}
+
+const JSR_PKG_NAME_REGEX: &str = r"^@[a-z0-9-]+/[a-z0-9-]+$";
+fn is_valid_jsr_pkg_name(package_name: &str) -> bool {
+  let re = Regex::new(JSR_PKG_NAME_REGEX).unwrap();
+  re.is_match(package_name)
 }
 
 #[cfg(test)]

@@ -552,7 +552,7 @@ impl WorkspaceResolver {
         if let Some(path) = specifier.strip_prefix(&member.name) {
           if path.is_empty() || path.starts_with('/') {
             let path = path.strip_prefix('/').unwrap_or(path);
-            let pkg_req_ref = JsrPackageReqReference::from_str(&format!(
+            let pkg_req_ref = match JsrPackageReqReference::from_str(&format!(
               "jsr:{}{}/{}",
               member.name,
               member
@@ -561,8 +561,14 @@ impl WorkspaceResolver {
                 .map(|v| format!("@^{}", v))
                 .unwrap_or_else(String::new),
               path
-            ))
-            .map_err(|e| MappedResolutionError::Other(e.to_string()))?;
+            )) {
+              Ok(pkg_req_ref) => pkg_req_ref,
+              Err(_) => {
+                // Ignore the error as it will be surfaced as a diagnostic
+                // in workspace.diagnostics() routine.
+                continue;
+              }
+            };
             return self.resolve_workspace_jsr_pkg(member, pkg_req_ref);
           }
         }
@@ -1517,8 +1523,17 @@ mod test {
       "@deno-test/libs/math",
       &url_from_file_path(&root_dir().join("main.ts")).unwrap(),
     );
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err().to_string(), "Invalid package specifier 'jsr:@deno-test/libs/math@^1.0.0/'. Did you mean to write 'jsr:@deno-test/libs@^1.0.0//math'?");
+    // Resolve shouldn't panic and tt should result in unmapped
+    // bare specifier error as the package name is invalid.
+    assert!(result.err().unwrap().is_unmapped_bare_specifier());
+
+    let diagnostics = workspace.workspace.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+      diagnostics.first().unwrap().to_string(),
+      r#"invalid workspace member "@deno-test/libs/math". The name should match the pattern "^@[a-z0-9-]+/[a-z0-9-]+$".
+    at file:///home/user/libs/math/deno.json"#
+    );
   }
 
   fn create_resolver(workspace_dir: &WorkspaceDirectory) -> WorkspaceResolver {
