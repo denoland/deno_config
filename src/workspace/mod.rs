@@ -26,7 +26,6 @@ use discovery::ConfigFileDiscovery;
 use discovery::ConfigFolder;
 use discovery::DenoOrPkgJson;
 use indexmap::IndexMap;
-use regex::Regex;
 use thiserror::Error;
 use url::Url;
 
@@ -142,7 +141,7 @@ pub enum WorkspaceDiagnosticKind {
     previous: bool,
     suggestion: NodeModulesDirMode,
   },
-  #[error("invalid workspace member \"{name}\". The name should match the pattern \"{JSR_PKG_NAME_REGEX}\".")]
+  #[error("invalid workspace member \"{name}\".")]
   InvalidMember { name: String },
 }
 
@@ -1939,10 +1938,15 @@ fn parent_specifier_str(specifier: &str) -> Option<&str> {
   }
 }
 
-const JSR_PKG_NAME_REGEX: &str = r"^@[a-z0-9-]+/[a-z0-9-]+$";
-fn is_valid_jsr_pkg_name(package_name: &str) -> bool {
-  let re = Regex::new(JSR_PKG_NAME_REGEX).unwrap();
-  re.is_match(package_name)
+fn is_valid_jsr_pkg_name(name: &str) -> bool {
+  let jsr = deno_semver::jsr::JsrPackageReqReference::from_str(&format!(
+    "jsr:{}@*",
+    name
+  ));
+  match jsr {
+    Ok(jsr) => jsr.sub_path().is_none(),
+    Err(_) => return false,
+  }
 }
 
 #[cfg(test)]
