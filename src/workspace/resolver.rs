@@ -549,20 +549,24 @@ impl WorkspaceResolver {
         if let Some(path) = specifier.strip_prefix(&member.name) {
           if path.is_empty() || path.starts_with('/') {
             let path = path.strip_prefix('/').unwrap_or(path);
-            return self.resolve_workspace_jsr_pkg(
-              member,
-              JsrPackageReqReference::from_str(&format!(
-                "jsr:{}{}/{}",
-                member.name,
-                member
-                  .version
-                  .as_ref()
-                  .map(|v| format!("@^{}", v))
-                  .unwrap_or_else(String::new),
-                path
-              ))
-              .unwrap(),
-            );
+            let pkg_req_ref = match JsrPackageReqReference::from_str(&format!(
+              "jsr:{}{}/{}",
+              member.name,
+              member
+                .version
+                .as_ref()
+                .map(|v| format!("@^{}", v))
+                .unwrap_or_else(String::new),
+              path
+            )) {
+              Ok(pkg_req_ref) => pkg_req_ref,
+              Err(_) => {
+                // Ignore the error as it will be surfaced as a diagnostic
+                // in workspace.diagnostics() routine.
+                continue;
+              }
+            };
+            return self.resolve_workspace_jsr_pkg(member, pkg_req_ref);
           }
         }
       }
@@ -1491,6 +1495,42 @@ mod test {
       }
       _ => unreachable!(),
     }
+  }
+
+  #[test]
+  fn invalid_package_name_with_slashes() {
+    let mut fs = TestFileSystem::default();
+    fs.insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./libs/math"]
+      }),
+    );
+    fs.insert_json(
+      root_dir().join("libs/math/deno.json"),
+      json!({
+        "name": "@deno-test/libs/math", // Invalid package name containing slashes
+        "version": "1.0.0",
+        "exports": "./mod.ts"
+      }),
+    );
+    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let resolver = create_resolver(&workspace);
+    let result = resolver.resolve(
+      "@deno-test/libs/math",
+      &url_from_file_path(&root_dir().join("main.ts")).unwrap(),
+    );
+    // Resolve shouldn't panic and tt should result in unmapped
+    // bare specifier error as the package name is invalid.
+    assert!(result.err().unwrap().is_unmapped_bare_specifier());
+
+    let diagnostics = workspace.workspace.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert!(diagnostics
+      .first()
+      .unwrap()
+      .to_string()
+      .starts_with(r#"Invalid workspace member name "@deno-test/libs/math"."#));
   }
 
   fn create_resolver(workspace_dir: &WorkspaceDirectory) -> WorkspaceResolver {

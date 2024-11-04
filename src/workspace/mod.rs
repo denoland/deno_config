@@ -141,6 +141,8 @@ pub enum WorkspaceDiagnosticKind {
     previous: bool,
     suggestion: NodeModulesDirMode,
   },
+  #[error("Invalid workspace member name \"{name}\". Ensure the name is in the format '@scope/name'.")]
+  InvalidMemberName { name: String },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -675,6 +677,16 @@ impl Workspace {
       config: &ConfigFile,
       diagnostics: &mut Vec<WorkspaceDiagnostic>,
     ) {
+      if let Some(name) = &config.json.name {
+        if !is_valid_jsr_pkg_name(name) {
+          diagnostics.push(WorkspaceDiagnostic {
+            config_url: config.specifier.clone(),
+            kind: WorkspaceDiagnosticKind::InvalidMemberName {
+              name: name.clone(),
+            },
+          });
+        }
+      }
       if config.json.deprecated_workspaces.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: config.specifier.clone(),
@@ -1925,6 +1937,17 @@ fn parent_specifier_str(specifier: &str) -> Option<&str> {
     Some(&specifier[..index + 1])
   } else {
     None
+  }
+}
+
+fn is_valid_jsr_pkg_name(name: &str) -> bool {
+  let jsr = deno_semver::jsr::JsrPackageReqReference::from_str(&format!(
+    "jsr:{}@*",
+    name
+  ));
+  match jsr {
+    Ok(jsr) => jsr.sub_path().is_none(),
+    Err(_) => false,
   }
 }
 
