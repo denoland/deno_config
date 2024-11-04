@@ -767,6 +767,9 @@ fn resolve_workspace_for_config_folder(
         .iter()
         .partition(|member| is_glob_pattern(member) || member.starts_with('!'));
 
+      // Deno workspaces can discover wildcard members that use either `deno.json`, `deno.jsonc` or `package.json`.
+      // But it only works for Deno workspaces, npm workspaces don't discover `deno.json(c)` files, otherwise
+      // we'd be incompatible with npm workspaces if we discovered more files.
       let deno_json_paths = collect_member_config_folders(
         "Deno",
         pattern_members,
@@ -824,6 +827,8 @@ fn resolve_workspace_for_config_folder(
         .iter()
         .partition(|member| is_glob_pattern(member) || member.starts_with('!'));
 
+      // npm workspaces can discover wildcard members `package.json` files, but not `deno.json(c)` files, otherwise
+      // we'd be incompatible with npm workspaces if we discovered more files than just `package.json`.
       let pkg_json_paths = collect_member_config_folders(
         "npm",
         pattern_members,
