@@ -141,8 +141,8 @@ pub enum WorkspaceDiagnosticKind {
     previous: bool,
     suggestion: NodeModulesDirMode,
   },
-  #[error("invalid workspace member \"{name}\".")]
-  InvalidMember { name: String },
+  #[error("Invalid workspace member name \"{name}\". Ensure the name is in the format '@scope/name'.")]
+  InvalidMemberName { name: String },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -681,7 +681,7 @@ impl Workspace {
         if !is_valid_jsr_pkg_name(name) {
           diagnostics.push(WorkspaceDiagnostic {
             config_url: config.specifier.clone(),
-            kind: WorkspaceDiagnosticKind::InvalidMember { name: name.clone() },
+            kind: WorkspaceDiagnosticKind::InvalidMemberName { name: name.clone() },
           });
         }
       }

@@ -1530,7 +1530,7 @@ mod test {
       .first()
       .unwrap()
       .to_string()
-      .starts_with(r#"invalid workspace member "@deno-test/libs/math"."#));
+      .starts_with(r#"Invalid workspace member name "@deno-test/libs/math"."#));
   }
 
   fn create_resolver(workspace_dir: &WorkspaceDirectory) -> WorkspaceResolver {
