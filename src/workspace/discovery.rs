@@ -772,7 +772,7 @@ fn resolve_workspace_for_config_folder(
         pattern_members,
         &deno_json.specifier,
         &deno_json.dir_path(),
-        &["deno.json", "deno.jsonc"],
+        &["deno.json", "deno.jsonc", "package.json"],
       )?;
 
       let mut member_dir_urls =
