@@ -460,6 +460,16 @@ pub struct TaskDefinition {
   pub dependencies: Vec<String>,
 }
 
+#[cfg(test)]
+impl From<&str> for TaskDefinition {
+    fn from(value: &str) -> Self {
+        Self {
+          command: value.to_string(),
+          dependencies: vec![],
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Task {
@@ -1656,7 +1666,10 @@ mod tests {
 
   impl Task {
     fn new(s: impl AsRef<str>) -> Self {
-      Self::Definition(s.as_ref().to_string())
+      Self::Definition(TaskDefinition {
+        command: s.as_ref().to_string(),
+        dependencies: vec![],
+    })
     }
   }
 

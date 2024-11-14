@@ -2175,10 +2175,10 @@ mod test {
     let root_deno_json = Some(WorkspaceMemberTasksConfigFile {
       folder_url: url_from_directory_path(&root_dir()).unwrap(),
       tasks: IndexMap::from([
-        ("hi".to_string(), Task::Definition("echo hi".to_string())),
+        ("hi".to_string(), Task::Definition("echo hi".into())),
         (
           "overwrite".to_string(),
-          Task::Definition("echo overwrite".to_string()),
+          Task::Definition("echo overwrite".into()),
         ),
       ]),
     });
@@ -2215,9 +2215,9 @@ mod test {
               tasks: IndexMap::from([
                 (
                   "overwrite".to_string(),
-                  Task::Definition("echo overwritten".to_string())
+                  Task::Definition("echo overwritten".into())
                 ),
-                ("bye".to_string(), Task::Definition("echo bye".to_string())),
+                ("bye".to_string(), Task::Definition("echo bye".into())),
               ]),
             }),
             package_json: None,
