@@ -458,6 +458,8 @@ pub struct TaskDefinition {
   pub command: String,
   #[serde(default)]
   pub dependencies: Vec<String>,
+  #[serde(default)]
+  pub description: Option<String>,
 }
 
 #[cfg(test)]
@@ -466,6 +468,7 @@ impl From<&str> for TaskDefinition {
     Self {
       command: value.to_string(),
       dependencies: vec![],
+      description: None,
     }
   }
 }
@@ -1669,6 +1672,7 @@ mod tests {
       Self::Definition(TaskDefinition {
         command: s.as_ref().to_string(),
         dependencies: vec![],
+        description: None,
       })
     }
   }
