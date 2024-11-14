@@ -462,12 +462,12 @@ pub struct TaskDefinition {
 
 #[cfg(test)]
 impl From<&str> for TaskDefinition {
-    fn from(value: &str) -> Self {
-        Self {
-          command: value.to_string(),
-          dependencies: vec![],
-        }
+  fn from(value: &str) -> Self {
+    Self {
+      command: value.to_string(),
+      dependencies: vec![],
     }
+  }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1669,7 +1669,7 @@ mod tests {
       Self::Definition(TaskDefinition {
         command: s.as_ref().to_string(),
         dependencies: vec![],
-    })
+      })
     }
   }
 
