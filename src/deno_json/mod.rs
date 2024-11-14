@@ -477,6 +477,7 @@ impl From<&str> for TaskDefinition {
 #[serde(untagged)]
 pub enum Task {
   Definition(TaskDefinition),
+  // TODO(bartlomieju): remove this variant, use `String(String)`
   Commented {
     definition: TaskDefinition,
     comments: Vec<String>,
