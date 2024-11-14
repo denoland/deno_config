@@ -468,6 +468,7 @@ impl From<&str> for TaskDefinition {
     }
   }
 }
+
 impl TaskDefinition {
   pub fn deserialize_tasks<'de, D>(
     deserializer: D,
