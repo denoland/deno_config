@@ -701,10 +701,103 @@ fn resolve_workspace_for_config_folder(
         }
       })
     };
+
+  let collect_member_config_folders =
+    |kind: &'static str,
+     pattern_members: Vec<&String>,
+     file_specifier: &Url,
+     dir_path: &Path,
+     config_file_names: &'static [&'static str]|
+     -> Result<Vec<PathBuf>, WorkspaceDiscoverErrorKind> {
+      let patterns = pattern_members
+        .iter()
+        .flat_map(|raw_member| {
+          config_file_names.iter().map(|config_file_name| {
+            PathOrPattern::from_relative(
+              dir_path,
+              &format!(
+                "{}{}",
+                ensure_trailing_slash(raw_member),
+                config_file_name
+              ),
+            )
+            .map_err(|err| {
+              ResolveWorkspaceMemberError::MemberToPattern {
+                kind,
+                base: root_config_file_directory_url.clone(),
+                member: raw_member.to_string(),
+                source: err,
+              }
+            })
+          })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+      let paths = if patterns.is_empty() {
+        Vec::new()
+      } else {
+        FileCollector::new(|_| true)
+          .ignore_git_folder()
+          .ignore_node_modules()
+          .set_vendor_folder(maybe_vendor_dir.clone())
+          .collect_file_patterns(
+            opts.fs,
+            FilePatterns {
+              base: dir_path.to_path_buf(),
+              include: Some(PathOrPatternSet::new(patterns)),
+              exclude: PathOrPatternSet::new(Vec::new()),
+            },
+          )
+          .map_err(|err| {
+            WorkspaceDiscoverErrorKind::FailedCollectingMembers {
+              kind,
+              config_url: file_specifier.clone(),
+              source: err,
+            }
+          })?
+      };
+
+      Ok(paths)
+    };
+
   if let Some(deno_json) = root_config_folder.deno_json() {
     if let Some(workspace_config) = deno_json.to_workspace_config()? {
-      for raw_member in &workspace_config.members {
-        let member_dir_url = resolve_member_url(raw_member)?;
+      let (pattern_members, path_members): (Vec<_>, Vec<_>) = workspace_config
+        .members
+        .iter()
+        .partition(|member| is_glob_pattern(member) || member.starts_with('!'));
+
+      // Deno workspaces can discover wildcard members that use either `deno.json`, `deno.jsonc` or `package.json`.
+      // But it only works for Deno workspaces, npm workspaces don't discover `deno.json(c)` files, otherwise
+      // we'd be incompatible with npm workspaces if we discovered more files.
+      let deno_json_paths = collect_member_config_folders(
+        "Deno",
+        pattern_members,
+        &deno_json.specifier,
+        &deno_json.dir_path(),
+        &["deno.json", "deno.jsonc", "package.json"],
+      )?;
+
+      let mut member_dir_urls =
+        IndexSet::with_capacity(path_members.len() + deno_json_paths.len());
+      for path_member in path_members {
+        let member_dir_url = resolve_member_url(path_member)?;
+        member_dir_urls.insert((path_member.clone(), member_dir_url));
+      }
+      for deno_json_path in deno_json_paths {
+        let member_dir_url =
+          url_from_directory_path(deno_json_path.parent().unwrap()).unwrap();
+        member_dir_urls.insert((
+          deno_json_path
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string(),
+          member_dir_url,
+        ));
+      }
+
+      for (raw_member, member_dir_url) in member_dir_urls {
         if member_dir_url == root_config_file_directory_url {
           return Err(
             ResolveWorkspaceMemberError::InvalidSelfReference {
@@ -715,8 +808,8 @@ fn resolve_workspace_for_config_folder(
         }
         validate_member_url_is_descendant(&member_dir_url)?;
         let member_config_folder = find_member_config_folder(&member_dir_url)?;
-        let previous_member =
-          final_members.insert(new_rc(member_dir_url), member_config_folder);
+        let previous_member = final_members
+          .insert(new_rc(member_dir_url.clone()), member_config_folder);
         if previous_member.is_some() {
           return Err(
             ResolveWorkspaceMemberError::Duplicate {
@@ -733,44 +826,17 @@ fn resolve_workspace_for_config_folder(
       let (pattern_members, path_members): (Vec<_>, Vec<_>) = members
         .iter()
         .partition(|member| is_glob_pattern(member) || member.starts_with('!'));
-      let patterns = pattern_members
-        .iter()
-        .map(|raw_member| {
-          PathOrPattern::from_relative(
-            pkg_json.dir_path(),
-            &format!("{}package.json", ensure_trailing_slash(raw_member)),
-          )
-          .map_err(|err| {
-            ResolveWorkspaceMemberError::NpmMemberToPattern {
-              base: root_config_file_directory_url.clone(),
-              member: raw_member.to_string(),
-              source: err,
-            }
-          })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-      let pkg_json_paths = if patterns.is_empty() {
-        Vec::new()
-      } else {
-        FileCollector::new(|_| true)
-          .ignore_git_folder()
-          .ignore_node_modules()
-          .set_vendor_folder(maybe_vendor_dir.clone())
-          .collect_file_patterns(
-            opts.fs,
-            FilePatterns {
-              base: pkg_json.dir_path().to_path_buf(),
-              include: Some(PathOrPatternSet::new(patterns)),
-              exclude: PathOrPatternSet::new(Vec::new()),
-            },
-          )
-          .map_err(|err| {
-            WorkspaceDiscoverErrorKind::FailedCollectingNpmMembers {
-              package_json_url: pkg_json.specifier(),
-              source: err,
-            }
-          })?
-      };
+
+      // npm workspaces can discover wildcard members `package.json` files, but not `deno.json(c)` files, otherwise
+      // we'd be incompatible with npm workspaces if we discovered more files than just `package.json`.
+      let pkg_json_paths = collect_member_config_folders(
+        "npm",
+        pattern_members,
+        &pkg_json.specifier(),
+        pkg_json.dir_path(),
+        &["package.json"],
+      )?;
+
       let mut member_dir_urls =
         IndexSet::with_capacity(path_members.len() + pkg_json_paths.len());
       for path_member in path_members {
