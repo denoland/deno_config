@@ -8,9 +8,6 @@ use deno_path_util::url_parent;
 use deno_path_util::url_to_file_path;
 use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
-use jsonc_parser::common::Ranged;
-use jsonc_parser::CollectOptions;
-use jsonc_parser::CommentCollectionStrategy;
 use jsonc_parser::ParseResult;
 use serde::de;
 use serde::de::Unexpected;
@@ -23,7 +20,6 @@ use serde_json::json;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -477,18 +473,13 @@ impl From<&str> for TaskDefinition {
 #[serde(untagged)]
 pub enum Task {
   Definition(TaskDefinition),
-  // TODO(bartlomieju): remove this variant, use `String(String)`
-  Commented {
-    definition: TaskDefinition,
-    comments: Vec<String>,
-  },
+  String(String),
 }
 
 impl Task {
   pub fn definition(&self) -> &TaskDefinition {
     match self {
       Task::Definition(d) => d,
-      Task::Commented { definition, .. } => definition,
     }
   }
 }
@@ -641,111 +632,13 @@ pub struct ConfigFileJson {
   pub unstable: Vec<String>,
 }
 
-/// collects comments attached to tasks and
-/// returns a new object where each task
-/// has a list of the comments that accompanied it.
-/// i.e. it will be the following form
-///
-/// ```json
-/// {
-///   "tasks": {
-///     "task1": {
-///       "comments": ["first comment line", "second comment line"],
-///       "definition": "deno run ..."
-///     }
-///   }
-/// }
-/// ```
-fn decorate_tasks_json(
-  text: &str,
-  tokens: &[jsonc_parser::tokens::TokenAndRange<'_>],
-  comments: &HashMap<usize, std::rc::Rc<Vec<jsonc_parser::ast::Comment<'_>>>>,
-  tasks: &jsonc_parser::ast::Object,
-) -> Value {
-  let mut new_tasks = serde_json::Map::new();
-
-  // we want to exclude comments that aren't on their own line
-  // so the roundabout method here is to
-  // figure out whether there's a newline between the
-  // previous token and the comment in question
-
-  let task_tokens_start = tokens
-    .binary_search_by(|t| {
-      // we want the greatest token that is less than or equal to the start of the tasks
-      if t.range.end <= tasks.range.start {
-        std::cmp::Ordering::Less
-      } else {
-        std::cmp::Ordering::Greater
-      }
-    })
-    .unwrap_err();
-  let task_tokens_end = tokens[task_tokens_start..]
-    .iter()
-    .take_while(|t| t.range.end <= tasks.range.end)
-    .count()
-    + task_tokens_start;
-
-  let task_tokens = &tokens[task_tokens_start..task_tokens_end];
-
-  for prop in &tasks.properties {
-    let prop_comments =
-      comments.get(&prop.range.start).cloned().unwrap_or_default();
-
-    let mut comment_texts = Vec::with_capacity(prop_comments.len());
-
-    for comment in prop_comments.iter() {
-      let token_pos = task_tokens
-        .binary_search_by(|t| {
-          // we want to find the greatest token that is less than the start of comment
-          // (we can't search for token end == comment start because the
-          // preceding range might be a comment)
-          if t.range.end <= comment.range().start {
-            std::cmp::Ordering::Less
-          } else {
-            std::cmp::Ordering::Greater
-          }
-        })
-        .unwrap_err();
-      // the previous and next tokens
-      match (task_tokens.get(token_pos - 1), task_tokens.get(token_pos)) {
-        (Some(prev), Some(next)) => {
-          // on a different line than the previous and next tokens
-          if text[prev.range.end..comment.range().start].contains('\n')
-            && text[comment.range().end..next.range.start].contains('\n')
-          {
-            let comment_lines = comment.text().trim().split('\n').map(|s| {
-              s.trim().trim_start_matches('*').trim_start().to_string()
-            });
-            comment_texts.extend(comment_lines);
-          } else {
-            continue;
-          }
-        }
-        _ => continue,
-      };
-    }
-
-    new_tasks.insert(
-      prop.name.as_str().to_string(),
-      json!({
-        "comments": comment_texts,
-        "definition": Value::from(prop.value.clone()),
-      }),
-    );
-  }
-
-  Value::Object(new_tasks)
-}
-
 pub trait DenoJsonCache {
   fn get(&self, path: &Path) -> Option<ConfigFileRc>;
   fn set(&self, path: PathBuf, deno_json: ConfigFileRc);
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ConfigParseOptions {
-  pub include_task_comments: bool,
-}
+pub struct ConfigParseOptions {}
 
 #[allow(clippy::disallowed_types)]
 pub type ConfigFileRc = crate::sync::MaybeArc<ConfigFile>;
@@ -853,40 +746,15 @@ impl ConfigFile {
   pub fn new(
     text: &str,
     specifier: Url,
-    parse_options: &ConfigParseOptions,
+    _parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
-    let need_comments_tokens = parse_options.include_task_comments;
     let jsonc = match jsonc_parser::parse_to_ast(
       text,
-      &CollectOptions {
-        comments: if need_comments_tokens {
-          CommentCollectionStrategy::Separate
-        } else {
-          CommentCollectionStrategy::Off
-        },
-        tokens: need_comments_tokens,
-      },
+      &Default::default(),
       &Default::default(),
     ) {
       Ok(ParseResult {
-        comments: Some(comments),
-        value: Some(jsonc_parser::ast::Value::Object(value)),
-        tokens: Some(tokens),
-        ..
-      }) => {
-        let mut value_json =
-          Value::from(jsonc_parser::ast::Value::Object(value.clone()));
-        if let Some(tasks) = value.get_object("tasks") {
-          let decorated_tasks =
-            decorate_tasks_json(text, &tokens, &comments, tasks);
-          value_json["tasks"] = decorated_tasks
-        }
-        value_json
-      }
-      Ok(ParseResult {
-        comments: None,
         value: Some(value @ jsonc_parser::ast::Value::Object(_)),
-        tokens: None,
         ..
       }) => Value::from(value),
       Ok(ParseResult { value: None, .. }) => {
@@ -2720,9 +2588,7 @@ Caused by:
     let config = ConfigFile::new(
       config_text,
       root_url().join("deno.jsonc").unwrap(),
-      &ConfigParseOptions {
-        include_task_comments: true,
-      },
+      &Default::default(),
     )
     .unwrap();
     assert_eq!(
@@ -2730,46 +2596,12 @@ Caused by:
       IndexMap::from([
         (
           "dev".into(),
-          Task::Commented {
-            definition: "deno run -A --watch mod.ts".into(),
-            comments: vec!["dev task".into()]
-          }
+          Task::Definition("deno run -A --watch mod.ts".into(),)
         ),
-        (
-          "run".into(),
-          Task::Commented {
-            definition: "deno run -A mod.ts".into(),
-            comments: vec![
-              "run task".into(),
-              "with multiple line comments".into()
-            ]
-          }
-        ),
-        (
-          "test".into(),
-          Task::Commented {
-            definition: "deno test".into(),
-            comments: vec![
-              "test task".into(),
-              "".into(),
-              "with multi-line comments".into()
-            ]
-          }
-        ),
-        (
-          "fmt".into(),
-          Task::Commented {
-            definition: "deno fmt".into(),
-            comments: vec![]
-          }
-        ),
-        (
-          "lint".into(),
-          Task::Commented {
-            definition: "deno lint".into(),
-            comments: vec![]
-          }
-        )
+        ("run".into(), Task::Definition("deno run -A mod.ts".into(),)),
+        ("test".into(), Task::Definition("deno test".into(),)),
+        ("fmt".into(), Task::Definition("deno fmt".into(),)),
+        ("lint".into(), Task::Definition("deno lint".into(),))
       ])
     );
   }
