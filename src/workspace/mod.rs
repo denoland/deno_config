@@ -47,7 +47,6 @@ use crate::deno_json::NodeModulesDirParseError;
 use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
-use crate::deno_json::Task;
 use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
 use crate::deno_json::TsConfigForEmit;
@@ -1671,7 +1670,7 @@ impl WorkspaceDirectory {
 
 pub enum TaskOrScript<'a> {
   /// A task from a deno.json.
-  Task(&'a IndexMap<String, Task>, &'a TaskDefinition),
+  Task(&'a IndexMap<String, TaskDefinition>, &'a TaskDefinition),
   /// A script from a package.json.
   Script(&'a IndexMap<String, String>, &'a str),
 }
@@ -1684,7 +1683,7 @@ pub struct WorkspaceMemberTasksConfigFile<TValue> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceMemberTasksConfig {
-  pub deno_json: Option<WorkspaceMemberTasksConfigFile<Task>>,
+  pub deno_json: Option<WorkspaceMemberTasksConfigFile<TaskDefinition>>,
   pub package_json: Option<WorkspaceMemberTasksConfigFile<String>>,
 }
 
@@ -1723,12 +1722,10 @@ impl WorkspaceMemberTasksConfig {
       .deno_json
       .as_ref()
       .and_then(|config| {
-        config.tasks.get(name).map(|t| {
-          (
-            &config.folder_url,
-            TaskOrScript::Task(&config.tasks, t.definition()),
-          )
-        })
+        config
+          .tasks
+          .get(name)
+          .map(|t| (&config.folder_url, TaskOrScript::Task(&config.tasks, t)))
       })
       .or_else(|| {
         self.package_json.as_ref().and_then(|config| {
@@ -2175,11 +2172,8 @@ mod test {
     let root_deno_json = Some(WorkspaceMemberTasksConfigFile {
       folder_url: url_from_directory_path(&root_dir()).unwrap(),
       tasks: IndexMap::from([
-        ("hi".to_string(), Task::Definition("echo hi".into())),
-        (
-          "overwrite".to_string(),
-          Task::Definition("echo overwrite".into()),
-        ),
+        ("hi".to_string(), "echo hi".into()),
+        ("overwrite".to_string(), "echo overwrite".into()),
       ]),
     });
     let root = Some(WorkspaceMemberTasksConfig {
@@ -2213,11 +2207,8 @@ mod test {
               folder_url: url_from_directory_path(&root_dir().join("member"))
                 .unwrap(),
               tasks: IndexMap::from([
-                (
-                  "overwrite".to_string(),
-                  Task::Definition("echo overwritten".into())
-                ),
-                ("bye".to_string(), Task::Definition("echo bye".into())),
+                ("overwrite".to_string(), "echo overwritten".into()),
+                ("bye".to_string(), "echo bye".into()),
               ]),
             }),
             package_json: None,
