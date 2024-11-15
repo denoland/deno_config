@@ -450,16 +450,74 @@ pub struct WorkspaceConfig {
 pub struct PatchConfigParseError(#[source] serde_json::Error);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Task {
-  Definition(String),
+pub struct TaskDefinition {
+  pub command: String,
+  #[serde(default)]
+  pub dependencies: Vec<String>,
+  #[serde(default)]
+  pub description: Option<String>,
 }
 
-impl Task {
-  pub fn definition(&self) -> &str {
-    match self {
-      Task::Definition(d) => d,
+#[cfg(test)]
+impl From<&str> for TaskDefinition {
+  fn from(value: &str) -> Self {
+    Self {
+      command: value.to_string(),
+      dependencies: vec![],
+      description: None,
     }
+  }
+}
+
+impl TaskDefinition {
+  pub fn deserialize_tasks<'de, D>(
+    deserializer: D,
+  ) -> Result<IndexMap<String, TaskDefinition>, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    use serde::de::{MapAccess, Visitor};
+    use std::fmt;
+
+    struct TasksVisitor;
+
+    impl<'de> Visitor<'de> for TasksVisitor {
+      type Value = IndexMap<String, TaskDefinition>;
+
+      fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a map of task definitions")
+      }
+
+      fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+      where
+        M: MapAccess<'de>,
+      {
+        let mut map = IndexMap::with_capacity(access.size_hint().unwrap_or(4));
+
+        while let Some((key, value)) =
+          access.next_entry::<String, serde_json::Value>()?
+        {
+          let task_def = match value {
+            serde_json::Value::String(command) => TaskDefinition {
+              command,
+              dependencies: Vec::new(),
+              description: None,
+            },
+            serde_json::Value::Object(_) => {
+              serde_json::from_value(value).map_err(serde::de::Error::custom)?
+            }
+            _ => {
+              return Err(serde::de::Error::custom("invalid task definition"))
+            }
+          };
+          map.insert(key, task_def);
+        }
+
+        Ok(map)
+      }
+    }
+
+    deserializer.deserialize_map(TasksVisitor)
   }
 }
 
@@ -1250,10 +1308,11 @@ impl ConfigFile {
 
   pub fn to_tasks_config(
     &self,
-  ) -> Result<Option<IndexMap<String, Task>>, AnyError> {
+  ) -> Result<Option<IndexMap<String, TaskDefinition>>, AnyError> {
     if let Some(config) = self.json.tasks.clone() {
-      let tasks_config: IndexMap<String, Task> = serde_json::from_value(config)
-        .context("Failed to parse \"tasks\" configuration")?;
+      let tasks_config: IndexMap<String, TaskDefinition> =
+        TaskDefinition::deserialize_tasks(config)
+          .context("Failed to parse \"tasks\" configuration")?;
       Ok(Some(tasks_config))
     } else {
       Ok(None)
@@ -1329,7 +1388,7 @@ impl ConfigFile {
 
   pub fn resolve_tasks_config(
     &self,
-  ) -> Result<IndexMap<String, Task>, AnyError> {
+  ) -> Result<IndexMap<String, TaskDefinition>, AnyError> {
     let maybe_tasks_config = self.to_tasks_config()?;
     let tasks_config = maybe_tasks_config.unwrap_or_default();
     for key in tasks_config.keys() {
@@ -1515,12 +1574,6 @@ mod tests {
   use crate::fs::RealDenoConfigFs;
   use crate::glob::PathOrPattern;
 
-  impl Task {
-    fn new(s: impl AsRef<str>) -> Self {
-      Self::Definition(s.as_ref().to_string())
-    }
-  }
-
   #[macro_export]
   macro_rules! assert_contains {
     ($string:expr, $($test:expr),+ $(,)?) => {
@@ -1592,7 +1645,12 @@ mod tests {
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
-        "server": "deno run --allow-net --allow-read server.ts"
+        "server": "deno run --allow-net --allow-read server.ts",
+        "client": {
+          "description": "Build client project",
+          "command": "deno run -A client.js",
+          "dependencies": ["build"]
+        }
       },
       "unstable": ["kv", "ffi"]
     }"#;
@@ -1666,11 +1724,19 @@ mod tests {
     let tasks_config = config_file.to_tasks_config().unwrap().unwrap();
     assert_eq!(
       tasks_config["build"],
-      Task::new("deno run --allow-read --allow-write build.ts"),
+      "deno run --allow-read --allow-write build.ts".into(),
     );
     assert_eq!(
       tasks_config["server"],
-      Task::new("deno run --allow-net --allow-read server.ts"),
+      "deno run --allow-net --allow-read server.ts".into(),
+    );
+    assert_eq!(
+      tasks_config["client"],
+      TaskDefinition {
+        description: Some("Build client project".to_string()),
+        command: "deno run -A client.js".to_string(),
+        dependencies: vec!["build".to_string()]
+      }
     );
 
     assert_eq!(
@@ -2569,14 +2635,11 @@ Caused by:
     assert_eq!(
       config.resolve_tasks_config().unwrap(),
       IndexMap::from([
-        (
-          "dev".into(),
-          Task::Definition("deno run -A --watch mod.ts".into(),)
-        ),
-        ("run".into(), Task::Definition("deno run -A mod.ts".into(),)),
-        ("test".into(), Task::Definition("deno test".into(),)),
-        ("fmt".into(), Task::Definition("deno fmt".into(),)),
-        ("lint".into(), Task::Definition("deno lint".into(),))
+        ("dev".into(), "deno run -A --watch mod.ts".into(),),
+        ("run".into(), "deno run -A mod.ts".into(),),
+        ("test".into(), "deno test".into(),),
+        ("fmt".into(), "deno fmt".into(),),
+        ("lint".into(), "deno lint".into(),)
       ])
     );
   }
