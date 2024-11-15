@@ -47,7 +47,7 @@ use crate::deno_json::NodeModulesDirParseError;
 use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
-use crate::deno_json::TaskDefinition;
+pub use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
 use crate::deno_json::TsConfigForEmit;
 use crate::deno_json::TsConfigType;
