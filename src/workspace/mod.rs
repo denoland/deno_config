@@ -1708,6 +1708,29 @@ impl WorkspaceMemberTasksConfig {
         .unwrap_or(true)
   }
 
+  pub fn task_names(&self) -> impl Iterator<Item = &str> {
+    self
+      .deno_json
+      .as_ref()
+      .into_iter()
+      .flat_map(|d| d.tasks.keys())
+      .chain(
+        self
+          .package_json
+          .as_ref()
+          .into_iter()
+          .flat_map(|d| d.tasks.keys())
+          .filter(|pkg_json_key| {
+            self
+              .deno_json
+              .as_ref()
+              .map(|d| !d.tasks.contains_key(pkg_json_key.as_str()))
+              .unwrap_or(true)
+          }),
+      )
+      .map(|s| s.as_str())
+  }
+
   pub fn tasks_count(&self) -> usize {
     self.deno_json.as_ref().map(|d| d.tasks.len()).unwrap_or(0)
       + self
@@ -1752,6 +1775,28 @@ impl WorkspaceTasksConfig {
       root: self.root.map(|c| c.with_only_pkg_json()),
       member: self.member.map(|c| c.with_only_pkg_json()),
     }
+  }
+
+  pub fn task_names(&self) -> impl Iterator<Item = &str> {
+    self
+      .member
+      .as_ref()
+      .into_iter()
+      .flat_map(|r| r.task_names())
+      .chain(
+        self
+          .root
+          .as_ref()
+          .into_iter()
+          .flat_map(|m| m.task_names())
+          .filter(|root_key| {
+            self
+              .member
+              .as_ref()
+              .map(|m| m.task(root_key).is_none())
+              .unwrap_or(true)
+          }),
+      )
   }
 
   pub fn task(&self, name: &str) -> Option<(&Url, TaskOrScript)> {
@@ -2191,6 +2236,10 @@ mod test {
           member: root.clone(),
         }
       );
+      assert_eq!(
+        tasks_config.task_names().collect::<Vec<_>>(),
+        ["hi", "overwrite"]
+      );
     }
     // member
     {
@@ -2214,6 +2263,10 @@ mod test {
             package_json: None,
           }),
         }
+      );
+      assert_eq!(
+        tasks_config.task_names().collect::<Vec<_>>(),
+        ["overwrite", "bye", "hi"]
       );
     }
     // pkg json
@@ -2239,6 +2292,10 @@ mod test {
             }),
           })
         }
+      );
+      assert_eq!(
+        tasks_config.task_names().collect::<Vec<_>>(),
+        ["hi", "overwrite", "script"]
       );
     }
   }
