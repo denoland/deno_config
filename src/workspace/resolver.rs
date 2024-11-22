@@ -585,7 +585,12 @@ impl WorkspaceResolver {
         }
         previously_found_dir = true;
 
-        for (bare_specifier, dep_result) in &pkg_json_folder.deps {
+        for (bare_specifier, dep_result) in pkg_json_folder
+          .deps
+          .dependencies
+          .iter()
+          .chain(pkg_json_folder.deps.dev_dependencies.iter())
+        {
           if let Some(path) = specifier.strip_prefix(bare_specifier) {
             if path.is_empty() || path.starts_with('/') {
               let sub_path = path.strip_prefix('/').unwrap_or(path);
