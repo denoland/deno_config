@@ -19,8 +19,10 @@ pub struct FsDirEntry {
 
 pub trait DenoConfigFs {
   fn stat_sync(&self, path: &Path) -> Result<FsMetadata, std::io::Error>;
-  fn read_to_string_lossy(&self, path: &Path)
-    -> Result<String, std::io::Error>;
+  fn read_to_string_lossy(
+    &self,
+    path: &Path,
+  ) -> Result<Cow<'static, str>, std::io::Error>;
   fn read_dir(&self, path: &Path) -> Result<Vec<FsDirEntry>, std::io::Error>;
 
   fn exists(&self, path: &Path) -> bool {
@@ -45,11 +47,11 @@ impl DenoConfigFs for RealDenoConfigFs {
   fn read_to_string_lossy(
     &self,
     path: &Path,
-  ) -> Result<String, std::io::Error> {
+  ) -> Result<Cow<'static, str>, std::io::Error> {
     // allowed here for the real fs
     #[allow(clippy::disallowed_methods)]
     let bytes = std::fs::read(path)?;
-    Ok(string_from_utf8_lossy(bytes))
+    Ok(Cow::Owned(string_from_utf8_lossy(bytes)))
   }
 
   fn read_dir(&self, path: &Path) -> Result<Vec<FsDirEntry>, std::io::Error> {
@@ -96,7 +98,11 @@ impl<'a> deno_package_json::fs::DenoPkgJsonFs
     &self,
     path: &Path,
   ) -> Result<String, std::io::Error> {
-    self.0.read_to_string_lossy(path)
+    // todo(https://github.com/denoland/deno_package_json/commit/b4c01334db0f7376e45c74b50b3b126aae493031): avoid clone
+    self
+      .0
+      .read_to_string_lossy(path)
+      .map(|cow| cow.into_owned())
   }
 }
 
@@ -192,7 +198,7 @@ impl DenoConfigFs for TestFileSystem {
   fn read_to_string_lossy(
     &self,
     path: &Path,
-  ) -> Result<String, std::io::Error> {
+  ) -> Result<Cow<'static, str>, std::io::Error> {
     let path = deno_path_util::normalize_path(path);
     path
       .parent()
@@ -203,7 +209,7 @@ impl DenoConfigFs for TestFileSystem {
           .and_then(|d| d.entries.get(path.file_name()?.to_str()?))
           .and_then(|e| match e {
             DirEntry::Directory => None,
-            DirEntry::File(text) => Some(text.clone()),
+            DirEntry::File(text) => Some(Cow::Owned(text.clone())),
           })
       })
       .ok_or_else(|| {
