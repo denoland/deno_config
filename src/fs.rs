@@ -194,7 +194,7 @@ impl DenoConfigFs for TestFileSystem {
   fn read_to_string_lossy(
     &self,
     path: &Path,
-  ) -> Result<String, std::io::Error> {
+  ) -> Result<Cow<'static, str>, std::io::Error> {
     let path = deno_path_util::normalize_path(path);
     path
       .parent()
@@ -208,6 +208,7 @@ impl DenoConfigFs for TestFileSystem {
             DirEntry::File(text) => Some(text.clone()),
           })
       })
+      .map(Cow::from)
       .ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, "file not found")
       })
