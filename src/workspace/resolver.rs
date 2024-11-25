@@ -7,6 +7,7 @@ use std::path::Path;
 use anyhow::Error as AnyError;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
+use deno_package_json::PackageJsonDepWorkspaceReq;
 use deno_package_json::PackageJsonDeps;
 use deno_package_json::PackageJsonRc;
 use deno_path_util::url_from_directory_path;
@@ -735,7 +736,7 @@ impl WorkspaceResolver {
     self
       .resolve_workspace_pkg_json_folder_for_pkg_json_dep(
         &pkg_req.name,
-        &pkg_req.version_req,
+        &PackageJsonDepWorkspaceReq::VersionReq(pkg_req.version_req.clone()),
       )
       .ok()
   }
@@ -743,7 +744,7 @@ impl WorkspaceResolver {
   pub fn resolve_workspace_pkg_json_folder_for_pkg_json_dep(
     &self,
     name: &str,
-    version_req: &VersionReq,
+    workspace_version_req: &PackageJsonDepWorkspaceReq,
   ) -> Result<&Path, WorkspaceResolvePkgJsonFolderError> {
     // this is not conditional on pkg_json_dep_resolution because we want
     // to be able to do this resolution to figure out mapping an npm specifier
@@ -757,31 +758,39 @@ impl WorkspaceResolver {
           .into(),
       );
     };
-    match version_req.inner() {
-      RangeSetOrTag::RangeSet(set) => {
-        if let Some(version) = pkg_json
-          .version
-          .as_ref()
-          .and_then(|v| Version::parse_from_npm(v).ok())
-        {
-          if set.satisfies(&version) {
-            Ok(pkg_json.dir_path())
-          } else {
-            Err(
-              WorkspaceResolvePkgJsonFolderErrorKind::VersionNotSatisfied(
-                version_req.clone(),
-                version,
-              )
-              .into(),
-            )
+    match workspace_version_req {
+      PackageJsonDepWorkspaceReq::VersionReq(version_req) => {
+        match version_req.inner() {
+          RangeSetOrTag::RangeSet(set) => {
+            if let Some(version) = pkg_json
+              .version
+              .as_ref()
+              .and_then(|v| Version::parse_from_npm(v).ok())
+            {
+              if set.satisfies(&version) {
+                Ok(pkg_json.dir_path())
+              } else {
+                Err(
+                  WorkspaceResolvePkgJsonFolderErrorKind::VersionNotSatisfied(
+                    version_req.clone(),
+                    version,
+                  )
+                  .into(),
+                )
+              }
+            } else {
+              // just match it
+              Ok(pkg_json.dir_path())
+            }
           }
-        } else {
-          // just match it
-          Ok(pkg_json.dir_path())
+          RangeSetOrTag::Tag(_) => {
+            // always match tags
+            Ok(pkg_json.dir_path())
+          }
         }
       }
-      RangeSetOrTag::Tag(_) => {
-        // always match tags
+      PackageJsonDepWorkspaceReq::Tilde | PackageJsonDepWorkspaceReq::Caret => {
+        // always match tilde and caret requirements
         Ok(pkg_json.dir_path())
       }
     }
@@ -1044,7 +1053,9 @@ mod test {
       let resolve = |name: &str, req: &str| {
         resolver.resolve_workspace_pkg_json_folder_for_pkg_json_dep(
           name,
-          &VersionReq::parse_from_npm(req).unwrap(),
+          &PackageJsonDepWorkspaceReq::VersionReq(
+            VersionReq::parse_from_npm(req).unwrap(),
+          ),
         )
       };
       assert_eq!(
