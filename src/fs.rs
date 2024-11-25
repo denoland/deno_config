@@ -19,8 +19,10 @@ pub struct FsDirEntry {
 
 pub trait DenoConfigFs {
   fn stat_sync(&self, path: &Path) -> Result<FsMetadata, std::io::Error>;
-  fn read_to_string_lossy(&self, path: &Path)
-    -> Result<Cow<'static, str>, std::io::Error>;
+  fn read_to_string_lossy(
+    &self,
+    path: &Path,
+  ) -> Result<Cow<'static, str>, std::io::Error>;
   fn read_dir(&self, path: &Path) -> Result<Vec<FsDirEntry>, std::io::Error>;
 
   fn exists(&self, path: &Path) -> bool {
