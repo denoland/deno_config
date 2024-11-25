@@ -77,7 +77,7 @@ dependencies = [
  "anyhow",
  "deno_package_json",
  "deno_path_util",
- "deno_semver 0.5.8",
+ "deno_semver",
  "glob",
  "ignore",
  "import_map",
@@ -125,7 +125,7 @@ checksum = "80b0a3d81c592624a1ae15332a04b4dc2b7c163ef1dfc7c60171f736d1babdf5"
 dependencies = [
  "deno_error",
  "deno_path_util",
- "deno_semver 0.6.0",
+ "deno_semver",
  "indexmap",
  "serde",
  "serde_json",
@@ -140,19 +140,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4889646c1ce8437a6fde3acb057fd7e2d039e62c61f5063fc125ed1ede114dc6"
 dependencies = [
  "percent-encoding",
- "thiserror 1.0.61",
- "url",
-]
-
-[[package]]
-name = "deno_semver"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc1ed90f285a3933ed56f392571ac8b8291a82b9ae294fd03cdd2b054b0196f5"
-dependencies = [
- "monch",
- "once_cell",
- "serde",
  "thiserror 1.0.61",
  "url",
 ]

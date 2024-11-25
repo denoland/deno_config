@@ -20,7 +20,7 @@ pub struct FsDirEntry {
 pub trait DenoConfigFs {
   fn stat_sync(&self, path: &Path) -> Result<FsMetadata, std::io::Error>;
   fn read_to_string_lossy(&self, path: &Path)
-    -> Result<String, std::io::Error>;
+    -> Result<Cow<'static, str>, std::io::Error>;
   fn read_dir(&self, path: &Path) -> Result<Vec<FsDirEntry>, std::io::Error>;
 
   fn exists(&self, path: &Path) -> bool {
@@ -45,11 +45,11 @@ impl DenoConfigFs for RealDenoConfigFs {
   fn read_to_string_lossy(
     &self,
     path: &Path,
-  ) -> Result<String, std::io::Error> {
+  ) -> Result<Cow<'static, str>, std::io::Error> {
     // allowed here for the real fs
     #[allow(clippy::disallowed_methods)]
     let bytes = std::fs::read(path)?;
-    Ok(string_from_utf8_lossy(bytes))
+    Ok(string_from_utf8_lossy(bytes).into())
   }
 
   fn read_dir(&self, path: &Path) -> Result<Vec<FsDirEntry>, std::io::Error> {
@@ -95,7 +95,7 @@ impl<'a> deno_package_json::fs::DenoPkgJsonFs
   fn read_to_string_lossy(
     &self,
     path: &Path,
-  ) -> Result<String, std::io::Error> {
+  ) -> Result<Cow<'static, str>, std::io::Error> {
     self.0.read_to_string_lossy(path)
   }
 }
