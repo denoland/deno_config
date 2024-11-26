@@ -1540,7 +1540,7 @@ mod test {
     // bare specifier error as the package name is invalid.
     assert!(result.err().unwrap().is_unmapped_bare_specifier());
 
-    let diagnostics = workspace.workspace.diagnostics();
+    let diagnostics = workspace.workspace.diagnostics(false);
     assert_eq!(diagnostics.len(), 1);
     assert!(diagnostics
       .first()
