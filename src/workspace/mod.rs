@@ -5157,7 +5157,7 @@ mod test {
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 1);
     let new_pkg_json = PackageJson::load_from_string(
       root_dir().join("package.json"),
-      r#"{ "name": "cached-name" }"#.to_string(),
+      r#"{ "name": "cached-name" }"#,
     )
     .unwrap();
     cache

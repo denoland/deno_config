@@ -1444,7 +1444,7 @@ mod test {
       assert_eq!(format!("{:#}", err), "Invalid URL 'https://raw.githubusercontent.com%2Fdyedgreen%2Fdeno-sqlite%2Frework_api%2Fmod.ts'");
       assert_eq!(
         format!("{:#}", err.source().unwrap()),
-        "invalid domain character"
+        "invalid international domain name"
       );
     }
     // sibling dir
