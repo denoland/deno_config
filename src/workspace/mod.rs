@@ -1486,9 +1486,7 @@ impl WorkspaceDirectory {
     cli_args: FilePatterns,
   ) -> Result<FilePatterns, AnyError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
-      return Ok(FilePatterns::new_with_base(
-        url_to_file_path(&self.dir_url).unwrap(),
-      ));
+      return Ok(cli_args);
     };
     let member_patterns = deno_json.member.to_exclude_files_config()?;
     let mut patterns = match &deno_json.root {
