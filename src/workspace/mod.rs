@@ -1326,7 +1326,7 @@ impl WorkspaceDirectory {
     })
   }
 
-  fn deno_json_for_compiler_options(&self) -> Option<&ConfigFileRc> {
+  pub fn deno_json_for_compiler_options(&self) -> Option<&ConfigFileRc> {
     self
       .maybe_deno_json()
       .filter(|c| c.json.compiler_options.is_some())
