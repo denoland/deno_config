@@ -451,7 +451,7 @@ pub struct PatchConfigParseError(#[source] serde_json::Error);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TaskDefinition {
-  pub command: String,
+  pub command: Option<String>,
   #[serde(default)]
   pub dependencies: Vec<String>,
   #[serde(default)]
@@ -462,7 +462,7 @@ pub struct TaskDefinition {
 impl From<&str> for TaskDefinition {
   fn from(value: &str) -> Self {
     Self {
-      command: value.to_string(),
+      command: Some(value.to_string()),
       dependencies: vec![],
       description: None,
     }
@@ -499,7 +499,7 @@ impl TaskDefinition {
         {
           let task_def = match value {
             serde_json::Value::String(command) => TaskDefinition {
-              command,
+              command: Some(command),
               dependencies: Vec::new(),
               description: None,
             },
@@ -1734,7 +1734,7 @@ mod tests {
       tasks_config["client"],
       TaskDefinition {
         description: Some("Build client project".to_string()),
-        command: "deno run -A client.js".to_string(),
+        command: Some("deno run -A client.js".to_string()),
         dependencies: vec!["build".to_string()]
       }
     );
