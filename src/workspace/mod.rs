@@ -1423,6 +1423,8 @@ impl WorkspaceDirectory {
         },
       },
       files: combine_patterns(root_config.files, member_config.files),
+      // TODO(bartlomieju): fix me
+      plugins: vec![]
     })
   }
 
