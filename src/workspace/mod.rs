@@ -1395,6 +1395,8 @@ impl WorkspaceDirectory {
     // combine the configs
     Ok(LintConfig {
       options: LintOptionsConfig {
+        // TODO(bartlomieju): fix me
+        plugins: vec![],
         rules: {
           let root_opts = root_config.options;
           let member_opts = member_config.options;
@@ -1421,8 +1423,6 @@ impl WorkspaceDirectory {
         },
       },
       files: combine_patterns(root_config.files, member_config.files),
-      // TODO(bartlomieju): fix me
-      plugins: vec![]
     })
   }
 
