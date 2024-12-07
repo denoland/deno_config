@@ -872,13 +872,20 @@ impl Workspace {
           .collect::<Vec<_>>()
       })
       .filter(|s| !s.is_empty());
-    let base_specifier = url_from_directory_path(&cli_args.base)?;
+    let base_path = cli_args.base.clone();
     let mut cli_args_by_folder =
       self.split_cli_args_by_deno_json_folder(cli_args);
     (|| {
       let remote_specifiers = remote_specifiers?;
-      let base_dir_specifier = self.resolve_folder(&base_specifier)?.0;
-      let patterns = cli_args_by_folder.get_mut(base_dir_specifier)?;
+      let base_specifier = url_from_directory_path(&base_path).ok()?;
+      let base_dir_specifier = self.resolve_folder(&base_specifier)?.0.clone();
+      let patterns = cli_args_by_folder
+        .entry(base_dir_specifier)
+        .or_insert_with(|| FilePatterns {
+          base: base_path,
+          include: Some(Default::default()),
+          exclude: Default::default(),
+        });
       let include = patterns.include.as_mut()?.inner_mut();
       include
         .extend(remote_specifiers.into_iter().map(PathOrPattern::RemoteUrl));
