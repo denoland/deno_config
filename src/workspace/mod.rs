@@ -855,7 +855,35 @@ impl Workspace {
       FilePatterns,
     ) -> Result<TConfig, AnyError>,
   ) -> Result<Vec<(WorkspaceDirectory, TConfig)>, AnyError> {
-    let cli_args_by_folder = self.split_cli_args_by_deno_json_folder(cli_args);
+    // Remote specifiers are lost when splitting by folder. Extract them and
+    // insert them later into the dir associated with `cli_args.base`.
+    let remote_specifiers = cli_args
+      .include
+      .as_ref()
+      .map(|p| {
+        p.inner()
+          .iter()
+          .filter_map(|p| match p {
+            PathOrPattern::RemoteUrl(s) => Some(s.clone()),
+            PathOrPattern::Path(_) => None,
+            PathOrPattern::NegatedPath(_) => None,
+            PathOrPattern::Pattern(_) => None,
+          })
+          .collect::<Vec<_>>()
+      })
+      .filter(|s| !s.is_empty());
+    let base_specifier = url_from_directory_path(&cli_args.base)?;
+    let mut cli_args_by_folder =
+      self.split_cli_args_by_deno_json_folder(cli_args);
+    (|| {
+      let remote_specifiers = remote_specifiers?;
+      let base_dir_specifier = self.resolve_folder(&base_specifier)?.0;
+      let patterns = cli_args_by_folder.get_mut(base_dir_specifier)?;
+      let include = patterns.include.as_mut()?.inner_mut();
+      include
+        .extend(remote_specifiers.into_iter().map(PathOrPattern::RemoteUrl));
+      Some(())
+    })();
     let mut result = Vec::with_capacity(cli_args_by_folder.len());
     for (folder_url, patterns) in cli_args_by_folder {
       let dir = self.resolve_member_dir(&folder_url);
