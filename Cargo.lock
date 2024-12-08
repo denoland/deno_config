@@ -89,6 +89,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "string_capacity",
  "tempfile",
  "thiserror 1.0.61",
  "url",
@@ -413,9 +414,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.9"
+version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af150ab688ff2122fcef229be89cb50dd66af9e01a4ff320cc137eecc9bacc38"
+checksum = "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674"
 
 [[package]]
 name = "jsonc-parser"
@@ -662,6 +663,15 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "string_capacity"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d66c912ea6a5e9d1b1cc1be9c72325a5502f0b868578a7dd0fa97bb710626c2"
+dependencies = [
+ "itoa",
+]
 
 [[package]]
 name = "syn"
