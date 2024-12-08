@@ -8,6 +8,7 @@ use anyhow::bail;
 use deno_path_util::normalize_path;
 use deno_path_util::url_to_file_path;
 use indexmap::IndexMap;
+use string_capacity::StringBuilder;
 use thiserror::Error;
 use url::Url;
 
@@ -613,17 +614,20 @@ impl GlobPattern {
       Some(p) => (true, p),
       None => (false, p),
     };
+    let base_str = base.to_string_lossy().replace('\\', "/");
     let p = p.strip_prefix("./").unwrap_or(p);
-    let mut pattern = String::new();
-    if is_negated {
-      pattern.push('!');
-    }
-    pattern.push_str(&base.to_string_lossy().replace('\\', "/"));
-    if !pattern.ends_with('/') {
-      pattern.push('/');
-    }
     let p = p.strip_suffix('/').unwrap_or(p);
-    pattern.push_str(p);
+    let pattern = StringBuilder::build(|builder| {
+      if is_negated {
+        builder.append('!');
+      }
+      builder.append(&base_str);
+      if !base_str.ends_with('/') {
+        builder.append('/');
+      }
+      builder.append(p);
+    })
+    .unwrap();
     GlobPattern::new(&pattern)
   }
 
