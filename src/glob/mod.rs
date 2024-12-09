@@ -5,10 +5,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::bail;
+use capacity_builder::StringBuilder;
 use deno_path_util::normalize_path;
 use deno_path_util::url_to_file_path;
 use indexmap::IndexMap;
-use string_capacity::StringBuilder;
 use thiserror::Error;
 use url::Url;
 

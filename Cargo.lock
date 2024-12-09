@@ -40,6 +40,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "capacity_builder"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2c0f637033edd76ceb881faaee372868a383f0ed7a4a59e8fdf90db2502f3d3"
+dependencies = [
+ "itoa",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -75,6 +84,7 @@ name = "deno_config"
 version = "0.40.0"
 dependencies = [
  "anyhow",
+ "capacity_builder",
  "deno_package_json",
  "deno_path_util",
  "deno_semver",
@@ -89,7 +99,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
- "string_capacity",
  "tempfile",
  "thiserror 1.0.61",
  "url",
@@ -663,15 +672,6 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
-
-[[package]]
-name = "string_capacity"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d66c912ea6a5e9d1b1cc1be9c72325a5502f0b868578a7dd0fa97bb710626c2"
-dependencies = [
- "itoa",
-]
 
 [[package]]
 name = "syn"
