@@ -51,7 +51,7 @@ pub struct LintRulesConfig {
 #[derive(Debug, Error, JsError)]
 pub enum IntoResolvedError {
   #[class(inherit)]
-  #[error("{0}")]
+  #[error(transparent)]
   UrlToFilePath(#[from] UrlToFilePathError),
   #[class(inherit)]
   #[error("Invalid include: {0}")]
@@ -709,16 +709,16 @@ pub enum ConfigFileError {
   #[error("Only file: specifiers are supported for security reasons in import maps stored in a deno.json. To use a remote import map, use the --import-map flag and \"deno.importMap\" in the language server config")]
   OnlyFileSpecifiersSupported,
   #[class(inherit)]
-  #[error("{0}")]
+  #[error(transparent)]
   UrlToFilePath(#[from] UrlToFilePathError),
   #[class(inherit)]
-  #[error("{0}")]
+  #[error(transparent)]
   UrlParse(#[from] url::ParseError),
   #[class(inherit)]
-  #[error("{0}")]
+  #[error(transparent)]
   SerdeJson(#[from] serde_json::Error),
   #[class(inherit)]
-  #[error("{0}")]
+  #[error(transparent)]
   ImportMap(#[from] import_map::ImportMapError),
   #[class(inherit)]
   #[error("{0}")]
@@ -831,7 +831,7 @@ pub enum ResolveTaskConfigError {
   #[error("Configuration file task names must start with an alphabetic character. Task: {0}")]
   TaskNameInvalidStartingCharacter(String),
   #[class(inherit)]
-  #[error("{0}")]
+  #[error(transparent)]
   ToInvalidConfig(#[from] ToInvalidConfigError),
 }
 
@@ -859,10 +859,10 @@ pub enum ResolveExportValueUrlsError {
 #[derive(Debug, Error, JsError)]
 pub enum ToLockConfigError {
   #[class(inherit)]
-  #[error("{0}")]
+  #[error(transparent)]
   ToInvalidConfigError(#[from] ToInvalidConfigError),
   #[class(inherit)]
-  #[error("{0}")]
+  #[error(transparent)]
   UrlToFilePath(#[from] UrlToFilePathError),
 }
 
