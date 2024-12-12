@@ -551,7 +551,7 @@ pub enum ConfigFileReadError {
     #[inherit]
     source: std::io::Error,
   },
-  #[class(type)] // TODO
+  #[class(type)]
   #[error("Unable to parse config file JSON {specifier}.")]
   Parse {
     specifier: Url,
