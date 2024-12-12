@@ -3,6 +3,7 @@
 #![deny(clippy::print_stderr)]
 #![deny(clippy::print_stdout)]
 #![deny(clippy::unused_async)]
+#![deny(clippy::unnecessary_wraps)]
 
 #[cfg(feature = "deno_json")]
 pub mod deno_json;

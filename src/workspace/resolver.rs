@@ -1,10 +1,9 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use std::borrow::Cow;
-use std::collections::BTreeMap;
-use std::path::Path;
-
-use anyhow::Error as AnyError;
+use crate::deno_json::ConfigFileError;
+use crate::sync::new_rc;
+use crate::workspace::Workspace;
+use deno_error::{JsError, JsErrorClass};
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDepWorkspaceReq;
@@ -18,18 +17,18 @@ use deno_semver::RangeSetOrTag;
 use deno_semver::Version;
 use deno_semver::VersionReq;
 use import_map::specifier::SpecifierError;
-use import_map::ImportMap;
 use import_map::ImportMapDiagnostic;
 use import_map::ImportMapError;
 use import_map::ImportMapWithDiagnostics;
+use import_map::{ImportMap, ImportMapErrorKind};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::path::Path;
 use thiserror::Error;
 use url::Url;
-
-use crate::sync::new_rc;
-use crate::workspace::Workspace;
 
 use super::UrlRc;
 
@@ -48,16 +47,23 @@ struct PkgJsonResolverFolderConfig {
   pkg_json: PackageJsonRc,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum WorkspaceResolverCreateError {
+  #[class(inherit)]
   #[error("Failed loading import map specified in '{referrer}'")]
   ImportMapFetch {
     referrer: Url,
     #[source]
-    source: AnyError,
+    #[inherit]
+    source: ConfigFileError,
   },
+  #[class(inherit)]
   #[error(transparent)]
-  ImportMap(#[from] import_map::ImportMapError),
+  ImportMap(
+    #[from]
+    #[inherit]
+    ImportMapError,
+  ),
 }
 
 /// Whether to resolve dependencies by reading the dependencies list
@@ -182,16 +188,17 @@ impl MappedResolutionError {
         SpecifierError::InvalidUrl(_) => false,
         SpecifierError::ImportPrefixMissing { .. } => true,
       },
-      MappedResolutionError::ImportMap(err) => match err {
-        ImportMapError::UnmappedBareSpecifier(_, _) => true,
-        ImportMapError::Other(_) => false,
+      MappedResolutionError::ImportMap(err) => match **err {
+        ImportMapErrorKind::UnmappedBareSpecifier(_, _) => true,
+        _ => false,
       },
       MappedResolutionError::Workspace(_) => false,
     }
   }
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, JsError)]
+#[class(inherit)]
 #[error(transparent)]
 pub struct WorkspaceResolvePkgJsonFolderError(
   Box<WorkspaceResolvePkgJsonFolderErrorKind>,
@@ -218,7 +225,8 @@ where
   }
 }
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, JsError, Clone, PartialEq, Eq)]
+#[class(type)]
 pub enum WorkspaceResolvePkgJsonFolderErrorKind {
   #[error("Could not find package.json with name '{0}' in workspace.")]
   NotFound(String),
@@ -239,12 +247,12 @@ impl WorkspaceResolver {
   pub(crate) fn from_workspace(
     workspace: &Workspace,
     options: CreateResolverOptions,
-    read_file: impl FnOnce(&Path) -> Result<String, AnyError>,
+    read_file: impl FnOnce(&Path) -> Result<String, Box<dyn JsErrorClass>>,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     fn resolve_import_map(
       workspace: &Workspace,
       specified_import_map: Option<SpecifiedImportMap>,
-      read_file: impl FnOnce(&Path) -> Result<String, AnyError>,
+      read_file: impl FnOnce(&Path) -> Result<String, Box<dyn JsErrorClass>>,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
       let root_deno_json = workspace.root_deno_json();
@@ -440,7 +448,7 @@ impl WorkspaceResolver {
   pub fn try_from_serializable(
     root_dir_url: Url,
     serializable_workspace_resolver: SerializableWorkspaceResolver,
-  ) -> anyhow::Result<Self> {
+  ) -> Result<Self, ImportMapError> {
     let import_map = match serializable_workspace_resolver.import_map {
       Some(import_map) => Some(
         import_map::parse_from_json_with_options(

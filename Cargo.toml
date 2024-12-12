@@ -15,7 +15,6 @@ sync = ["deno_package_json/sync"]
 workspace = ["deno_json", "deno_semver", "package_json"]
 
 [dependencies]
-anyhow = "1.0.57"
 indexmap = { version = "2", features = ["serde"] }
 jsonc-parser = { version = "0.26.0", features = ["serde"], optional = true }
 log = "0.4.20"
@@ -26,11 +25,12 @@ phf = { version = "0.11", features = ["macros"], optional = true }
 serde = { version = "1.0.149", features = ["derive"] }
 serde_json = "1.0.85"
 url = { version = "2.3.1" }
-import_map = { version = "0.20.0", features = ["ext"], optional = true }
-thiserror = "1.0.61"
+import_map = { version = "0.21.0", features = ["ext"], optional = true }
+thiserror = "2"
+deno_error = { version = "0.5.2", features = ["url"] }
 deno_semver = { version = "0.6.0", optional = true }
 deno_package_json = { version = "0.2.1", optional = true }
-deno_path_util = "0.2.0"
+deno_path_util = "0.2.2"
 
 [dev-dependencies]
 tempfile = "3.4.0"
