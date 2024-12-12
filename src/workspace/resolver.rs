@@ -55,7 +55,7 @@ pub enum WorkspaceResolverCreateError {
     referrer: Url,
     #[source]
     #[inherit]
-    source: ConfigFileError,
+    source: Box<ConfigFileError>,
   },
   #[class(inherit)]
   #[error(transparent)]
@@ -188,10 +188,9 @@ impl MappedResolutionError {
         SpecifierError::InvalidUrl(_) => false,
         SpecifierError::ImportPrefixMissing { .. } => true,
       },
-      MappedResolutionError::ImportMap(err) => match **err {
-        ImportMapErrorKind::UnmappedBareSpecifier(_, _) => true,
-        _ => false,
-      },
+      MappedResolutionError::ImportMap(err) => {
+        matches!(**err, ImportMapErrorKind::UnmappedBareSpecifier(_, _))
+      }
       MappedResolutionError::Workspace(_) => false,
     }
   }
@@ -280,7 +279,7 @@ impl WorkspaceResolver {
               .to_import_map_value(read_file)
               .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
                 referrer: deno_json.specifier.clone(),
-                source,
+                source: Box::new(source),
               })?
               .unwrap_or_else(|| {
                 (

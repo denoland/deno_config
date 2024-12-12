@@ -1,5 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use boxed_error::Boxed;
 use deno_error::JsError;
 use deno_error::JsErrorClass;
 use deno_path_util::url_from_file_path;
@@ -48,8 +49,11 @@ pub struct LintRulesConfig {
   pub exclude: Option<Vec<String>>,
 }
 
+#[derive(Debug, JsError, Boxed)]
+pub struct IntoResolvedError(pub Box<IntoResolvedErrorKind>);
+
 #[derive(Debug, Error, JsError)]
-pub enum IntoResolvedError {
+pub enum IntoResolvedErrorKind {
   #[class(inherit)]
   #[error(transparent)]
   UrlToFilePath(#[from] UrlToFilePathError),
@@ -82,7 +86,7 @@ impl SerializedFilesConfig {
             &config_dir,
             &i,
           )
-          .map_err(IntoResolvedError::InvalidInclude)?,
+          .map_err(IntoResolvedErrorKind::InvalidInclude)?,
         ),
         None => None,
       },
@@ -90,7 +94,7 @@ impl SerializedFilesConfig {
         &config_dir,
         &self.exclude,
       )
-      .map_err(IntoResolvedError::InvalidExclude)?,
+      .map_err(IntoResolvedErrorKind::InvalidExclude)?,
     })
   }
 }

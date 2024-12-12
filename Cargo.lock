@@ -78,6 +78,7 @@ checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
 name = "deno_config"
 version = "0.40.0"
 dependencies = [
+ "boxed_error",
  "deno_error",
  "deno_package_json",
  "deno_path_util",
