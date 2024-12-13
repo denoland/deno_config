@@ -3,7 +3,8 @@
 use crate::deno_json::ConfigFileError;
 use crate::sync::new_rc;
 use crate::workspace::Workspace;
-use deno_error::{JsError, JsErrorClass};
+use deno_error::JsError;
+use deno_error::JsErrorClass;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDepWorkspaceReq;
@@ -155,7 +156,8 @@ pub enum MappedResolution<'a> {
   },
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, JsError)]
+#[class(type)]
 pub enum WorkspaceResolveError {
   #[error("Failed joining '{}' to '{}'. {:#}", .sub_path, .base, .error)]
   InvalidExportPath {
@@ -171,12 +173,15 @@ pub enum WorkspaceResolveError {
   },
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum MappedResolutionError {
+  #[class(inherit)]
   #[error(transparent)]
   Specifier(#[from] SpecifierError),
+  #[class(inherit)]
   #[error(transparent)]
   ImportMap(#[from] ImportMapError),
+  #[class(inherit)]
   #[error(transparent)]
   Workspace(#[from] WorkspaceResolveError),
 }
