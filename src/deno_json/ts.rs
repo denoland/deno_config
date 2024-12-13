@@ -1,6 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::Error as AnyError;
+use crate::deno_json::ConfigFileError;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
@@ -140,7 +140,7 @@ pub struct ParsedTsConfigOptions {
 pub fn parse_compiler_options(
   compiler_options: serde_json::Map<String, Value>,
   maybe_specifier: Option<&Url>,
-) -> Result<ParsedTsConfigOptions, AnyError> {
+) -> ParsedTsConfigOptions {
   let mut allowed: serde_json::Map<String, Value> =
     serde_json::Map::with_capacity(compiler_options.len());
   let mut ignored: Vec<String> = Vec::with_capacity(compiler_options.len());
@@ -170,10 +170,10 @@ pub fn parse_compiler_options(
     None
   };
 
-  Ok(ParsedTsConfigOptions {
+  ParsedTsConfigOptions {
     options: allowed,
     maybe_ignored,
-  })
+  }
 }
 
 /// A structure for managing the configuration of TypeScript
@@ -223,7 +223,7 @@ impl TsConfig {
   pub fn merge_tsconfig_from_config_file(
     &mut self,
     maybe_config_file: Option<&super::ConfigFile>,
-  ) -> Result<Option<IgnoredCompilerOptions>, AnyError> {
+  ) -> Result<Option<IgnoredCompilerOptions>, ConfigFileError> {
     if let Some(config_file) = maybe_config_file {
       let ParsedTsConfigOptions {
         options,
