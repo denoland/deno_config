@@ -8,7 +8,7 @@ use anyhow::Error as AnyError;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDepWorkspaceReq;
-use deno_package_json::PackageJsonDeps;
+use deno_package_json::PackageJsonDepsRc;
 use deno_package_json::PackageJsonRc;
 use deno_path_util::url_from_directory_path;
 use deno_path_util::url_to_file_path;
@@ -44,7 +44,7 @@ pub struct ResolverWorkspaceJsrPackage {
 
 #[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
-  deps: PackageJsonDeps,
+  deps: PackageJsonDepsRc,
   pkg_json: PackageJsonRc,
 }
 
@@ -336,7 +336,7 @@ impl WorkspaceResolver {
         (
           dir_url.clone(),
           PkgJsonResolverFolderConfig {
-            deps,
+            deps: deps.clone(),
             pkg_json: pkg_json.clone(),
           },
         )
@@ -375,7 +375,10 @@ impl WorkspaceResolver {
           new_rc(
             url_from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
           ),
-          PkgJsonResolverFolderConfig { deps, pkg_json },
+          PkgJsonResolverFolderConfig {
+            deps: deps.clone(),
+            pkg_json,
+          },
         )
       })
       .collect::<BTreeMap<_, _>>();
