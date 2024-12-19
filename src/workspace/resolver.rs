@@ -595,7 +595,7 @@ impl WorkspaceResolver {
           .iter()
           .chain(pkg_json_folder.deps.dev_dependencies.iter())
         {
-          if let Some(path) = specifier.strip_prefix(bare_specifier) {
+          if let Some(path) = specifier.strip_prefix(bare_specifier.as_str()) {
             if path.is_empty() || path.starts_with('/') {
               let sub_path = path.strip_prefix('/').unwrap_or(path);
               return Ok(MappedResolution::PackageJson {
