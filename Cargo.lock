@@ -45,9 +45,9 @@ dependencies = [
 
 [[package]]
 name = "capacity_builder"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ced42635df19d69e4296203f3d09edf81993fc33f70d1dd9a53e9659964a1ad"
+checksum = "8f2d24a6dcf0cd402a21b65d35340f3a49ff3475dc5fdac91d22d2733e6641c6"
 dependencies = [
  "capacity_builder_macros",
  "ecow",
@@ -57,9 +57,9 @@ dependencies = [
 
 [[package]]
 name = "capacity_builder_macros"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2883cccc7b2ed65fb29c1141063b0c544be562aed530bac4f4ada2f163c7618d"
+checksum = "3b4a6cae9efc04cc6cbb8faf338d2c497c165c83e74509cf4dbedea948bbf6e5"
 dependencies = [
  "quote",
  "syn",
