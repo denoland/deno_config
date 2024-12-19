@@ -462,7 +462,7 @@ impl Workspace {
     Some(NpmPackageConfig {
       workspace_dir: self.resolve_member_dir(&pkg_json.specifier()),
       nv: PackageNv {
-        name: pkg_json.name.clone()?,
+        name: deno_semver::StackString::from(pkg_json.name.as_ref()?.as_str()),
         version: {
           let version = pkg_json.version.as_ref()?;
           deno_semver::Version::parse_from_npm(version).ok()?
