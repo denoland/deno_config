@@ -581,7 +581,7 @@ impl<'de> Deserialize<'de> for NodeModulesDirMode {
   {
     struct NodeModulesDirModeVisitor;
 
-    impl<'de> Visitor<'de> for NodeModulesDirModeVisitor {
+    impl Visitor<'_> for NodeModulesDirModeVisitor {
       type Value = NodeModulesDirMode;
 
       fn expecting(

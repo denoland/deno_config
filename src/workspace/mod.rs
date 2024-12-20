@@ -1134,16 +1134,14 @@ impl WorkspaceDirectory {
             // so this is ok for now
             let path = &paths[0];
             match fs.stat_sync(path) {
-              Ok(info) => {
-                return Ok(
-                  url_from_directory_path(if info.is_directory {
-                    path
-                  } else {
-                    path.parent().unwrap()
-                  })
-                  .unwrap(),
-                )
-              }
+              Ok(info) => Ok(
+                url_from_directory_path(if info.is_directory {
+                  path
+                } else {
+                  path.parent().unwrap()
+                })
+                .unwrap(),
+              ),
               Err(_err) => {
                 // assume the parent is a directory
                 match path.parent() {

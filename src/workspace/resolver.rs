@@ -715,16 +715,14 @@ impl WorkspaceResolver {
           .into(),
         ),
       },
-      None => {
-        return Err(
-          WorkspaceResolveError::UnknownExport {
-            package_name: pkg.name.clone(),
-            export_name: export_name.to_string(),
-            exports: pkg.exports.keys().cloned().collect(),
-          }
-          .into(),
-        )
-      }
+      None => Err(
+        WorkspaceResolveError::UnknownExport {
+          package_name: pkg.name.clone(),
+          export_name: export_name.to_string(),
+          exports: pkg.exports.keys().cloned().collect(),
+        }
+        .into(),
+      ),
     }
   }
 
