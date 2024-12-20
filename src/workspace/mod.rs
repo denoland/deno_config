@@ -462,7 +462,7 @@ impl Workspace {
     Some(NpmPackageConfig {
       workspace_dir: self.resolve_member_dir(&pkg_json.specifier()),
       nv: PackageNv {
-        name: pkg_json.name.clone()?,
+        name: deno_semver::StackString::from(pkg_json.name.as_ref()?.as_str()),
         version: {
           let version = pkg_json.version.as_ref()?;
           deno_semver::Version::parse_from_npm(version).ok()?
@@ -1134,16 +1134,14 @@ impl WorkspaceDirectory {
             // so this is ok for now
             let path = &paths[0];
             match fs.stat_sync(path) {
-              Ok(info) => {
-                return Ok(
-                  url_from_directory_path(if info.is_directory {
-                    path
-                  } else {
-                    path.parent().unwrap()
-                  })
-                  .unwrap(),
-                )
-              }
+              Ok(info) => Ok(
+                url_from_directory_path(if info.is_directory {
+                  path
+                } else {
+                  path.parent().unwrap()
+                })
+                .unwrap(),
+              ),
               Err(_err) => {
                 // assume the parent is a directory
                 match path.parent() {

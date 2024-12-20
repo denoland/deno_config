@@ -8,7 +8,7 @@ use anyhow::Error as AnyError;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDepWorkspaceReq;
-use deno_package_json::PackageJsonDeps;
+use deno_package_json::PackageJsonDepsRc;
 use deno_package_json::PackageJsonRc;
 use deno_path_util::url_from_directory_path;
 use deno_path_util::url_to_file_path;
@@ -44,7 +44,7 @@ pub struct ResolverWorkspaceJsrPackage {
 
 #[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
-  deps: PackageJsonDeps,
+  deps: PackageJsonDepsRc,
   pkg_json: PackageJsonRc,
 }
 
@@ -336,7 +336,7 @@ impl WorkspaceResolver {
         (
           dir_url.clone(),
           PkgJsonResolverFolderConfig {
-            deps,
+            deps: deps.clone(),
             pkg_json: pkg_json.clone(),
           },
         )
@@ -375,7 +375,10 @@ impl WorkspaceResolver {
           new_rc(
             url_from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
           ),
-          PkgJsonResolverFolderConfig { deps, pkg_json },
+          PkgJsonResolverFolderConfig {
+            deps: deps.clone(),
+            pkg_json,
+          },
         )
       })
       .collect::<BTreeMap<_, _>>();
@@ -592,7 +595,7 @@ impl WorkspaceResolver {
           .iter()
           .chain(pkg_json_folder.deps.dev_dependencies.iter())
         {
-          if let Some(path) = specifier.strip_prefix(bare_specifier) {
+          if let Some(path) = specifier.strip_prefix(bare_specifier.as_str()) {
             if path.is_empty() || path.starts_with('/') {
               let sub_path = path.strip_prefix('/').unwrap_or(path);
               return Ok(MappedResolution::PackageJson {
@@ -712,16 +715,14 @@ impl WorkspaceResolver {
           .into(),
         ),
       },
-      None => {
-        return Err(
-          WorkspaceResolveError::UnknownExport {
-            package_name: pkg.name.clone(),
-            export_name: export_name.to_string(),
-            exports: pkg.exports.keys().cloned().collect(),
-          }
-          .into(),
-        )
-      }
+      None => Err(
+        WorkspaceResolveError::UnknownExport {
+          package_name: pkg.name.clone(),
+          export_name: export_name.to_string(),
+          exports: pkg.exports.keys().cloned().collect(),
+        }
+        .into(),
+      ),
     }
   }
 

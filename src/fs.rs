@@ -81,7 +81,7 @@ impl DenoConfigFs for RealDenoConfigFs {
   }
 }
 
-impl<'a> Default for &'a dyn DenoConfigFs {
+impl Default for &dyn DenoConfigFs {
   fn default() -> Self {
     &RealDenoConfigFs
   }
@@ -91,9 +91,7 @@ impl<'a> Default for &'a dyn DenoConfigFs {
 pub struct DenoConfigPkgJsonAdapterFs<'a>(pub &'a dyn DenoConfigFs);
 
 #[cfg(feature = "package_json")]
-impl<'a> deno_package_json::fs::DenoPkgJsonFs
-  for DenoConfigPkgJsonAdapterFs<'a>
-{
+impl deno_package_json::fs::DenoPkgJsonFs for DenoConfigPkgJsonAdapterFs<'_> {
   fn read_to_string_lossy(
     &self,
     path: &Path,
