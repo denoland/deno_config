@@ -96,6 +96,7 @@ struct SerializedLintConfig {
   #[serde(rename = "files")]
   pub deprecated_files: serde_json::Value,
   pub report: Option<String>,
+  pub plugins: Vec<String>,
 }
 
 impl SerializedLintConfig {
@@ -109,7 +110,7 @@ impl SerializedLintConfig {
       log::warn!( "Warning: \"files\" configuration in \"lint\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
     }
     Ok(LintConfig {
-      options: LintOptionsConfig { rules: self.rules },
+      options: LintOptionsConfig { rules: self.rules, plugins: self.plugins },
       files: files.into_resolved(config_file_specifier)?,
     })
   }
@@ -118,6 +119,7 @@ impl SerializedLintConfig {
 #[derive(Clone, Debug, Default, Hash, PartialEq)]
 pub struct LintOptionsConfig {
   pub rules: LintRulesConfig,
+  pub plugins: Vec<String>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq)]
