@@ -97,7 +97,7 @@ impl<'a, Sys: FsRead + FsMetadata> GitIgnoreTree<'a, Sys> {
   ) -> Option<Rc<DirGitIgnores>> {
     if let Some(parent) = maybe_parent {
       // stop searching if the parent dir had a .git directory in it
-      if self.sys.fs_exists_no_err(&parent.join(".git")) {
+      if self.sys.fs_exists_no_err(parent.join(".git")) {
         return None;
       }
     }
@@ -107,7 +107,7 @@ impl<'a, Sys: FsRead + FsMetadata> GitIgnoreTree<'a, Sys> {
     });
     let current = self
       .sys
-      .fs_read_to_string_lossy(&dir_path.join(".gitignore"))
+      .fs_read_to_string_lossy(dir_path.join(".gitignore"))
       .ok()
       .and_then(|text| {
         let mut builder = ignore::gitignore::GitignoreBuilder::new(dir_path);

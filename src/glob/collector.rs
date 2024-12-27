@@ -181,8 +181,6 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
           let Ok(metadata) = entry.metadata() else {
             continue;
           };
-          eprintln!("PATH: {:?}", next_dir);
-          eprintln!("PATH: {:?}", entry);
           handle_entry(entry.path().into_owned(), &metadata, &mut pending_dirs)
         }
       }
