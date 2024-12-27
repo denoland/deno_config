@@ -22,11 +22,11 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
+use sys_traits::FsRead;
 use thiserror::Error;
 use ts::parse_compiler_options;
 use url::Url;
 
-use crate::fs::DenoConfigFs;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPatternSet;
 use crate::util::is_skippable_io_error;
@@ -706,7 +706,7 @@ impl ConfigFile {
   }
 
   pub(crate) fn maybe_find_in_folder(
-    fs: &dyn DenoConfigFs,
+    sys: &impl FsRead,
     maybe_cache: Option<&dyn DenoJsonCache>,
     folder: &Path,
     config_file_names: &[&str],
@@ -725,7 +725,7 @@ impl ConfigFile {
       if let Some(item) = maybe_cache.and_then(|c| c.get(&file_path)) {
         return Ok(Some(item));
       }
-      match ConfigFile::read(fs, &file_path, parse_options) {
+      match ConfigFile::read(sys, &file_path, parse_options) {
         Ok(cf) => {
           let cf = crate::sync::new_rc(cf);
           log::debug!("Config file found at '{}'", file_path.display());
@@ -746,32 +746,32 @@ impl ConfigFile {
   }
 
   pub fn read(
-    fs: &dyn DenoConfigFs,
+    sys: &impl FsRead,
     config_path: &Path,
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
     debug_assert!(config_path.is_absolute());
     let specifier = url_from_file_path(config_path)
       .map_err(|_| ConfigFileReadError::PathToUrl(config_path.to_path_buf()))?;
-    Self::from_specifier_and_path(fs, specifier, config_path, parse_options)
+    Self::from_specifier_and_path(sys, specifier, config_path, parse_options)
   }
 
   pub fn from_specifier(
-    fs: &dyn DenoConfigFs,
+    sys: &impl FsRead,
     specifier: Url,
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
     let config_path = url_to_file_path(&specifier)?;
-    Self::from_specifier_and_path(fs, specifier, &config_path, parse_options)
+    Self::from_specifier_and_path(sys, specifier, &config_path, parse_options)
   }
 
   fn from_specifier_and_path(
-    fs: &dyn DenoConfigFs,
+    sys: &impl FsRead,
     specifier: Url,
     config_path: &Path,
     parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
-    let text = fs.read_to_string_lossy(config_path).map_err(|err| {
+    let text = sys.fs_read_to_string_lossy(config_path).map_err(|err| {
       ConfigFileReadError::FailedReading {
         specifier: specifier.clone(),
         source: err,
@@ -1569,9 +1569,9 @@ mod tests {
   use deno_path_util::url_to_file_path;
   use pretty_assertions::assert_eq;
   use std::path::PathBuf;
+  use sys_traits::impls::RealSys;
 
   use super::*;
-  use crate::fs::RealDenoConfigFs;
   use crate::glob::PathOrPattern;
 
   #[macro_export]
@@ -1597,7 +1597,7 @@ mod tests {
   fn read_config_file_absolute() {
     let path = testdata_path().join("module_graph/tsconfig.json");
     let config_file = ConfigFile::read(
-      &RealDenoConfigFs,
+      &RealSys,
       path.as_path(),
       &ConfigParseOptions::default(),
     )
@@ -1609,7 +1609,7 @@ mod tests {
   fn include_config_path_on_error() {
     let path = testdata_path().join("404.json");
     let error = ConfigFile::read(
-      &RealDenoConfigFs,
+      &RealSys,
       path.as_path(),
       &ConfigParseOptions::default(),
     )

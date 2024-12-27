@@ -5,6 +5,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use sys_traits::FsMetadata;
+use sys_traits::FsRead;
+
 /// Resolved gitignore for a directory.
 pub struct DirGitIgnores {
   current: Option<Rc<ignore::gitignore::Gitignore>>,
@@ -34,20 +37,20 @@ impl DirGitIgnores {
 
 /// Resolves gitignores in a directory tree taking into account
 /// ancestor gitignores that may be found in a directory.
-pub struct GitIgnoreTree<'a> {
-  fs: &'a dyn crate::fs::DenoConfigFs,
+pub struct GitIgnoreTree<'a, Sys: FsRead + FsMetadata> {
+  sys: &'a Sys,
   ignores: HashMap<PathBuf, Option<Rc<DirGitIgnores>>>,
   include_paths: Vec<PathBuf>,
 }
 
-impl<'a> GitIgnoreTree<'a> {
+impl<'a, Sys: FsRead + FsMetadata> GitIgnoreTree<'a, Sys> {
   pub fn new(
-    fs: &'a dyn crate::fs::DenoConfigFs,
+    sys: &'a Sys,
     // paths that should override what's in the gitignore
     include_paths: Vec<PathBuf>,
   ) -> Self {
     Self {
-      fs,
+      sys,
       ignores: Default::default(),
       include_paths,
     }
@@ -94,7 +97,7 @@ impl<'a> GitIgnoreTree<'a> {
   ) -> Option<Rc<DirGitIgnores>> {
     if let Some(parent) = maybe_parent {
       // stop searching if the parent dir had a .git directory in it
-      if self.fs.exists(&parent.join(".git")) {
+      if self.sys.fs_exists_no_err(parent.join(".git")) {
         return None;
       }
     }
@@ -103,8 +106,8 @@ impl<'a> GitIgnoreTree<'a> {
       self.get_resolved_git_ignore_inner(parent, Some(dir_path))
     });
     let current = self
-      .fs
-      .read_to_string_lossy(&dir_path.join(".gitignore"))
+      .sys
+      .fs_read_to_string_lossy(dir_path.join(".gitignore"))
       .ok()
       .and_then(|text| {
         let mut builder = ignore::gitignore::GitignoreBuilder::new(dir_path);
@@ -134,17 +137,22 @@ impl<'a> GitIgnoreTree<'a> {
 
 #[cfg(test)]
 mod test {
-  use crate::fs::TestFileSystem;
+  use sys_traits::impls::InMemorySys;
+  use sys_traits::FsCreateDirAll;
+  use sys_traits::FsWrite;
 
   use super::*;
 
   #[test]
   fn git_ignore_tree() {
-    let mut fs = TestFileSystem::default();
-    fs.insert("/.gitignore", "file.txt");
-    fs.insert("/sub_dir/.gitignore", "data.txt");
-    fs.insert("/sub_dir/sub_dir/.gitignore", "!file.txt\nignore.txt");
-    let mut ignore_tree = GitIgnoreTree::new(&fs, Vec::new());
+    let sys = InMemorySys::default();
+    sys.fs_create_dir_all("/sub_dir/sub_dir").unwrap();
+    sys.fs_write("/.gitignore", "file.txt").unwrap();
+    sys.fs_write("/sub_dir/.gitignore", "data.txt").unwrap();
+    sys
+      .fs_write("/sub_dir/sub_dir/.gitignore", "!file.txt\nignore.txt")
+      .unwrap();
+    let mut ignore_tree = GitIgnoreTree::new(&sys, Vec::new());
     let mut run_test = |path: &str, expected: bool| {
       let path = PathBuf::from(path);
       let gitignore =
