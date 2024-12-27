@@ -35,16 +35,12 @@ url = { version = "2.3.1" }
 import_map = { version = "0.20.0", features = ["ext"], optional = true }
 thiserror = "1.0.61"
 deno_semver = { version = "0.7.1", optional = true }
-deno_package_json = { version = "0.3.0", optional = true }
-deno_path_util = "0.2.2"
+deno_package_json = { version = "0.4.0", optional = true }
+deno_path_util = "0.3.0"
 sys_traits.workspace = true
 
 [dev-dependencies]
 tempfile = "3.4.0"
 pretty_assertions = "1.4.0"
 sys_traits = { workspace = true, features = ["memory", "real", "serde_json"] }
-
-[patch.crates-io]
-deno_path_util = { git = "https://github.com/denoland/deno_path_util", branch = "refactor_use_sys_traits" }
-deno_package_json = { git = "https://github.com/dsherret/deno_package_json", branch = "sys_traits" }
  
