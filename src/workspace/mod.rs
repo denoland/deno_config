@@ -4855,23 +4855,23 @@ mod test {
 
   #[test]
   fn test_resolve_file_patterns_for_members() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member-a", "./member-b", "member-c"],
         "exclude": ["./excluded.ts", "./member-b/excluded.ts", "./member-c/excluded"],
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member-a/deno.json"),
       json!({
         "exclude": ["./excluded.ts"],
       }),
     );
-    fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("member-c/deno.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    sys.fs_insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member-c/deno.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let mut patterns_by_dir = workspace_dir
       .workspace
       .resolve_file_patterns_for_members(&FilePatterns {
