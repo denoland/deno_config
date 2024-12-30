@@ -47,7 +47,6 @@ use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
-use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
@@ -611,12 +610,6 @@ impl Workspace {
       member_config: &ConfigFile,
       diagnostics: &mut Vec<WorkspaceDiagnostic>,
     ) {
-      if member_config.json.compiler_options.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: member_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
-        });
-      }
       if member_config.json.import_map.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
@@ -764,23 +757,8 @@ impl Workspace {
     diagnostics
   }
 
-  pub fn check_js(&self) -> bool {
-    self
-      .with_root_config_only(|root_config| root_config.get_check_js())
-      .unwrap_or(false)
-  }
-
   pub fn vendor_dir_path(&self) -> Option<&PathBuf> {
     self.vendor_dir.as_ref()
-  }
-
-  pub fn to_compiler_options(
-    &self,
-  ) -> Result<Option<ParsedTsConfigOptions>, AnyError> {
-    self
-      .with_root_config_only(|root_config| root_config.to_compiler_options())
-      .map(|o| o.map(Some))
-      .unwrap_or(Ok(None))
   }
 
   pub fn to_lint_config(&self) -> Result<WorkspaceLintConfig, AnyError> {
@@ -810,16 +788,6 @@ impl Workspace {
       .unwrap_or(Ok(Default::default()))
   }
 
-  pub fn resolve_ts_config_for_emit(
-    &self,
-    config_type: TsConfigType,
-  ) -> Result<TsConfigForEmit, AnyError> {
-    get_ts_config_for_emit(
-      config_type,
-      self.root_deno_json().map(|c| c.as_ref()),
-    )
-  }
-
   pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, AnyError> {
     self
       .with_root_config_only(|root_config| root_config.to_import_map_path())
@@ -836,24 +804,13 @@ impl Workspace {
     }
   }
 
-  pub fn to_compiler_option_types(
+  pub fn resolve_file_patterns_for_members(
     self: &WorkspaceRc,
-  ) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
-    self
-      .with_root_config_only(|root_config| {
-        root_config.to_compiler_option_types()
-      })
-      .unwrap_or(Ok(Vec::new()))
-  }
-
-  pub fn to_maybe_jsx_import_source_config(
-    self: &WorkspaceRc,
-  ) -> Result<Option<JsxImportSourceConfig>, AnyError> {
-    self
-      .with_root_config_only(|root_config| {
-        root_config.to_maybe_jsx_import_source_config()
-      })
-      .unwrap_or(Ok(None))
+    cli_args: &FilePatterns,
+  ) -> Result<Vec<(WorkspaceDirectory, FilePatterns)>, AnyError> {
+    self.resolve_config_for_members(cli_args, |dir, patterns| {
+      dir.to_resolved_file_patterns(patterns)
+    })
   }
 
   pub fn resolve_bench_config_for_members(
@@ -900,7 +857,42 @@ impl Workspace {
       FilePatterns,
     ) -> Result<TConfig, AnyError>,
   ) -> Result<Vec<(WorkspaceDirectory, TConfig)>, AnyError> {
-    let cli_args_by_folder = self.split_cli_args_by_deno_json_folder(cli_args);
+    // Remote specifiers are lost when splitting by folder. Extract them and
+    // insert them later into the dir associated with `cli_args.base`.
+    let remote_specifiers = cli_args
+      .include
+      .as_ref()
+      .map(|p| {
+        p.inner()
+          .iter()
+          .filter_map(|p| match p {
+            PathOrPattern::RemoteUrl(s) => Some(s.clone()),
+            PathOrPattern::Path(_) => None,
+            PathOrPattern::NegatedPath(_) => None,
+            PathOrPattern::Pattern(_) => None,
+          })
+          .collect::<Vec<_>>()
+      })
+      .filter(|s| !s.is_empty());
+    let base_path = cli_args.base.clone();
+    let mut cli_args_by_folder =
+      self.split_cli_args_by_deno_json_folder(cli_args);
+    (|| {
+      let remote_specifiers = remote_specifiers?;
+      let base_specifier = url_from_directory_path(&base_path).ok()?;
+      let base_dir_specifier = self.resolve_folder(&base_specifier)?.0.clone();
+      let patterns = cli_args_by_folder
+        .entry(base_dir_specifier)
+        .or_insert_with(|| FilePatterns {
+          base: base_path,
+          include: Some(Default::default()),
+          exclude: Default::default(),
+        });
+      let include = patterns.include.as_mut()?.inner_mut();
+      include
+        .extend(remote_specifiers.into_iter().map(PathOrPattern::RemoteUrl));
+      Some(())
+    })();
     let mut result = Vec::with_capacity(cli_args_by_folder.len());
     for (folder_url, patterns) in cli_args_by_folder {
       let dir = self.resolve_member_dir(&folder_url);
@@ -1371,6 +1363,47 @@ impl WorkspaceDirectory {
     })
   }
 
+  pub fn deno_json_for_compiler_options(&self) -> Option<&ConfigFileRc> {
+    self
+      .maybe_deno_json()
+      .filter(|c| c.json.compiler_options.is_some())
+      .or_else(|| self.workspace.root_deno_json())
+      .filter(|c| c.json.compiler_options.is_some())
+  }
+
+  pub fn check_js(&self) -> bool {
+    self
+      .deno_json_for_compiler_options()
+      .map(|c| c.get_check_js())
+      .unwrap_or(false)
+  }
+
+  pub fn to_ts_config_for_emit(
+    &self,
+    config_type: TsConfigType,
+  ) -> Result<TsConfigForEmit, AnyError> {
+    let deno_json = self.deno_json_for_compiler_options();
+    get_ts_config_for_emit(config_type, deno_json.map(|c| c.as_ref()))
+  }
+
+  pub fn to_compiler_option_types(
+    &self,
+  ) -> Result<Vec<(Url, Vec<String>)>, AnyError> {
+    self
+      .deno_json_for_compiler_options()
+      .map(|c| c.to_compiler_option_types())
+      .unwrap_or(Ok(Vec::new()))
+  }
+
+  pub fn to_maybe_jsx_import_source_config(
+    &self,
+  ) -> Result<Option<JsxImportSourceConfig>, AnyError> {
+    self
+      .deno_json_for_compiler_options()
+      .map(|c| c.to_maybe_jsx_import_source_config())
+      .unwrap_or(Ok(None))
+  }
+
   pub fn to_lint_config(
     &self,
     cli_args: FilePatterns,
@@ -1483,6 +1516,26 @@ impl WorkspaceDirectory {
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
+  }
+
+  pub fn to_resolved_file_patterns(
+    &self,
+    cli_args: FilePatterns,
+  ) -> Result<FilePatterns, AnyError> {
+    let Some(deno_json) = self.deno_json.as_ref() else {
+      return Ok(cli_args);
+    };
+    let member_patterns = deno_json.member.to_exclude_files_config()?;
+    let mut patterns = match &deno_json.root {
+      Some(root) => {
+        combine_patterns(root.to_exclude_files_config()?, member_patterns)
+      }
+      None => member_patterns,
+    };
+    self.exclude_includes_with_member_for_base_for_root(&mut patterns);
+    combine_files_config_with_cli_args(&mut patterns, cli_args);
+    self.append_workspace_members_to_exclude(&mut patterns);
+    Ok(patterns)
   }
 
   pub fn to_bench_config(
@@ -2307,45 +2360,28 @@ mod test {
     let workspace_dir = workspace_for_root_and_member(
       json!({
         "compilerOptions": {
+          "checkJs": false
+        },
+      }),
+      json!({
+        "compilerOptions": {
           "checkJs": true,
           "types": ["./types.d.ts"],
           "jsx": "react-jsx",
           "jsxImportSource": "npm:react",
           "jsxImportSourceTypes": "npm:@types/react",
-        }
-      }),
-      json!({
-        "compilerOptions": {
-          "checkJs": false
-        }
+        },
       }),
     );
     assert_eq!(
-      workspace_dir
-        .workspace
-        .to_compiler_options()
-        .unwrap()
-        .unwrap()
-        .options,
-      *json!({
-        // ignores member config
-        "checkJs": true,
-        "jsx": "react-jsx",
-        "jsxImportSource": "npm:react",
-      })
-      .as_object()
-      .unwrap()
-    );
-    assert_eq!(
-      workspace_dir.workspace.to_compiler_option_types().unwrap(),
+      workspace_dir.to_compiler_option_types().unwrap(),
       vec![(
-        Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+        Url::from_file_path(root_dir().join("member/deno.json")).unwrap(),
         vec!["./types.d.ts".to_string()]
-      )]
+      )],
     );
     assert_eq!(
       workspace_dir
-        .workspace
         .to_maybe_jsx_import_source_config()
         .unwrap()
         .unwrap(),
@@ -2353,14 +2389,14 @@ mod test {
         default_specifier: Some("npm:react".to_string()),
         default_types_specifier: Some("npm:@types/react".to_string()),
         module: "jsx-runtime".to_string(),
-        base_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      }
+        base_url: Url::from_file_path(root_dir().join("member/deno.json"))
+          .unwrap(),
+      },
     );
-    assert_eq!(workspace_dir.workspace.check_js(), true);
+    assert_eq!(workspace_dir.check_js(), true);
     assert_eq!(
       workspace_dir
-        .workspace
-        .resolve_ts_config_for_emit(TsConfigType::Emit)
+        .to_ts_config_for_emit(TsConfigType::Emit)
         .unwrap(),
       TsConfigForEmit {
         ts_config: TsConfig(json!({
@@ -2383,14 +2419,7 @@ mod test {
         maybe_ignored_options: None,
       }
     );
-    assert_eq!(
-      workspace_dir.workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
-        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
-          .unwrap(),
-      }]
-    );
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
   }
 
   #[test]
@@ -4822,6 +4851,105 @@ mod test {
         )])
       );
     }
+  }
+
+  #[test]
+  fn test_resolve_file_patterns_for_members() {
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member-a", "./member-b", "member-c"],
+        "exclude": ["./excluded.ts", "./member-b/excluded.ts", "./member-c/excluded"],
+      }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("member-a/deno.json"),
+      json!({
+        "exclude": ["./excluded.ts"],
+      }),
+    );
+    sys.fs_insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member-c/deno.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
+    let mut patterns_by_dir = workspace_dir
+      .workspace
+      .resolve_file_patterns_for_members(&FilePatterns {
+        base: root_dir(),
+        include: Some(
+          PathOrPatternSet::from_include_relative_path_or_patterns(
+            &root_dir(),
+            &[
+              "file.ts".to_string(),
+              "excluded.ts".to_string(),
+              "member-a/file.ts".to_string(),
+              "member-a/excluded.ts".to_string(),
+              "member-b/file.ts".to_string(),
+              "member-b/excluded.ts".to_string(),
+              "member-c/folder/file.ts".to_string(),
+              "member-c/excluded/file.ts".to_string(),
+            ],
+          )
+          .unwrap(),
+        ),
+        exclude: Default::default(),
+      })
+      .unwrap();
+    patterns_by_dir.sort_by_cached_key(|(d, _)| d.dir_url().clone());
+    let patterns = patterns_by_dir
+      .into_iter()
+      .map(|(_, p)| p)
+      .collect::<Vec<_>>();
+    assert_eq!(
+      patterns,
+      vec![
+        FilePatterns {
+          base: root_dir(),
+          include: Some(PathOrPatternSet::new(vec![
+            PathOrPattern::Path(root_dir().join("file.ts")),
+            PathOrPattern::Path(root_dir().join("excluded.ts")),
+          ])),
+          exclude: PathOrPatternSet::new(vec![
+            PathOrPattern::Path(root_dir().join("excluded.ts")),
+            PathOrPattern::Path(root_dir().join("member-b/excluded.ts")),
+            PathOrPattern::Path(root_dir().join("member-c/excluded")),
+            PathOrPattern::Path(root_dir().join("member-a")),
+            PathOrPattern::Path(root_dir().join("member-b")),
+            PathOrPattern::Path(root_dir().join("member-c")),
+          ]),
+        },
+        FilePatterns {
+          base: root_dir().join("member-a"),
+          include: Some(PathOrPatternSet::new(vec![
+            PathOrPattern::Path(root_dir().join("member-a/file.ts")),
+            PathOrPattern::Path(root_dir().join("member-a/excluded.ts")),
+          ])),
+          exclude: PathOrPatternSet::new(vec![PathOrPattern::Path(
+            root_dir().join("member-a/excluded.ts")
+          ),]),
+        },
+        FilePatterns {
+          base: root_dir().join("member-b"),
+          include: Some(PathOrPatternSet::new(vec![
+            PathOrPattern::Path(root_dir().join("member-b/file.ts")),
+            PathOrPattern::Path(root_dir().join("member-b/excluded.ts")),
+          ])),
+          exclude: PathOrPatternSet::new(vec![PathOrPattern::Path(
+            root_dir().join("member-b/excluded.ts")
+          ),]),
+        },
+        FilePatterns {
+          base: root_dir().join("member-c"),
+          include: Some(PathOrPatternSet::new(vec![
+            PathOrPattern::Path(root_dir().join("member-c/excluded/file.ts")),
+            PathOrPattern::Path(root_dir().join("member-c/folder/file.ts")),
+          ])),
+          exclude: PathOrPatternSet::new(vec![PathOrPattern::Path(
+            root_dir().join("member-c/excluded")
+          ),]),
+        },
+      ]
+    );
   }
 
   #[test]
