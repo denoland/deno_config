@@ -8,7 +8,7 @@ use anyhow::Error as AnyError;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDepWorkspaceReq;
-use deno_package_json::PackageJsonDeps;
+use deno_package_json::PackageJsonDepsRc;
 use deno_package_json::PackageJsonRc;
 use deno_path_util::url_from_directory_path;
 use deno_path_util::url_to_file_path;
@@ -44,7 +44,7 @@ pub struct ResolverWorkspaceJsrPackage {
 
 #[derive(Debug)]
 struct PkgJsonResolverFolderConfig {
-  deps: PackageJsonDeps,
+  deps: PackageJsonDepsRc,
   pkg_json: PackageJsonRc,
 }
 
@@ -336,7 +336,7 @@ impl WorkspaceResolver {
         (
           dir_url.clone(),
           PkgJsonResolverFolderConfig {
-            deps,
+            deps: deps.clone(),
             pkg_json: pkg_json.clone(),
           },
         )
@@ -375,7 +375,10 @@ impl WorkspaceResolver {
           new_rc(
             url_from_directory_path(pkg_json.path.parent().unwrap()).unwrap(),
           ),
-          PkgJsonResolverFolderConfig { deps, pkg_json },
+          PkgJsonResolverFolderConfig {
+            deps: deps.clone(),
+            pkg_json,
+          },
         )
       })
       .collect::<BTreeMap<_, _>>();
@@ -592,7 +595,7 @@ impl WorkspaceResolver {
           .iter()
           .chain(pkg_json_folder.deps.dev_dependencies.iter())
         {
-          if let Some(path) = specifier.strip_prefix(bare_specifier) {
+          if let Some(path) = specifier.strip_prefix(bare_specifier.as_str()) {
             if path.is_empty() || path.starts_with('/') {
               let sub_path = path.strip_prefix('/').unwrap_or(path);
               return Ok(MappedResolution::PackageJson {
@@ -712,16 +715,14 @@ impl WorkspaceResolver {
           .into(),
         ),
       },
-      None => {
-        return Err(
-          WorkspaceResolveError::UnknownExport {
-            package_name: pkg.name.clone(),
-            export_name: export_name.to_string(),
-            exports: pkg.exports.keys().cloned().collect(),
-          }
-          .into(),
-        )
-      }
+      None => Err(
+        WorkspaceResolveError::UnknownExport {
+          package_name: pkg.name.clone(),
+          export_name: export_name.to_string(),
+          exports: pkg.exports.keys().cloned().collect(),
+        }
+        .into(),
+      ),
     }
   }
 
@@ -860,10 +861,10 @@ mod test {
   use deno_path_util::url_from_file_path;
   use deno_semver::VersionReq;
   use serde_json::json;
+  use sys_traits::impls::InMemorySys;
   use url::Url;
 
   use super::*;
-  use crate::fs::TestFileSystem;
   use crate::workspace::WorkspaceDirectory;
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
@@ -878,8 +879,8 @@ mod test {
 
   #[test]
   fn pkg_json_resolution() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": [
@@ -889,7 +890,7 @@ mod test {
         ]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("a/deno.json"),
       json!({
         "imports": {
@@ -897,7 +898,7 @@ mod test {
         },
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("b/package.json"),
       json!({
         "dependencies": {
@@ -905,14 +906,14 @@ mod test {
         },
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("c/package.json"),
       json!({
         "name": "pkg",
         "version": "0.5.0"
       }),
     );
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let workspace = workspace_at_start_dir(&sys, &root_dir());
     let resolver = create_resolver(&workspace);
     assert_eq!(resolver.diagnostics(), Vec::new());
     let resolve = |name: &str, referrer: &str| {
@@ -984,8 +985,8 @@ mod test {
 
   #[test]
   fn single_pkg_no_import_map() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "name": "@scope/pkg",
@@ -993,7 +994,7 @@ mod test {
         "exports": "./mod.ts"
       }),
     );
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let workspace = workspace_at_start_dir(&sys, &root_dir());
     let resolver = create_resolver(&workspace);
     assert_eq!(resolver.diagnostics(), Vec::new());
     let result = resolver
@@ -1015,8 +1016,8 @@ mod test {
 
   #[test]
   fn resolve_workspace_pkg_json_folder() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": [
@@ -1026,27 +1027,27 @@ mod test {
         ]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("a/package.json"),
       json!({
         "name": "@scope/a",
         "version": "1.0.0",
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("b/package.json"),
       json!({
         "name": "@scope/b",
         "version": "2.0.0",
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("no-version/package.json"),
       json!({
         "name": "@scope/no-version",
       }),
     );
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let workspace = workspace_at_start_dir(&sys, &root_dir());
     let resolver = create_resolver(&workspace);
     // resolve for pkg json dep
     {
@@ -1112,21 +1113,21 @@ mod test {
 
   #[test]
   fn resolve_workspace_pkg_json_workspace_deno_json_import_map() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["*"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("a/package.json"),
       json!({
         "name": "@scope/a",
         "version": "1.0.0",
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("a/deno.json"),
       json!({
         "name": "@scope/jsr-pkg",
@@ -1135,7 +1136,7 @@ mod test {
       }),
     );
 
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let workspace = workspace_at_start_dir(&sys, &root_dir());
     let resolver = create_resolver(&workspace);
     {
       let resolution = resolver
@@ -1180,9 +1181,9 @@ mod test {
 
   #[test]
   fn specified_import_map() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(root_dir().join("deno.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(root_dir().join("deno.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let resolver = workspace_dir
       .workspace
       .create_resolver(
@@ -1214,15 +1215,15 @@ mod test {
 
   #[test]
   fn workspace_specified_import_map() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./a"]
       }),
     );
-    fs.insert_json(root_dir().join("a").join("deno.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    sys.fs_insert_json(root_dir().join("a").join("deno.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     workspace_dir
       .workspace
       .create_resolver(
@@ -1244,14 +1245,14 @@ mod test {
 
   #[test]
   fn resolves_patch_member_with_version() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "patch": ["../patch"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("../patch/deno.json"),
       json!({
         "name": "@scope/patch",
@@ -1259,7 +1260,7 @@ mod test {
         "exports": "./mod.ts"
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let resolver = workspace_dir
       .workspace
       .create_resolver(
@@ -1318,21 +1319,21 @@ mod test {
 
   #[test]
   fn resolves_patch_member_no_version() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "patch": ["../patch"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("../patch/deno.json"),
       json!({
         "name": "@scope/patch",
         "exports": "./mod.ts"
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let resolver = workspace_dir
       .workspace
       .create_resolver(
@@ -1367,14 +1368,14 @@ mod test {
 
   #[test]
   fn resolves_workspace_member() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("./member/deno.json"),
       json!({
         "name": "@scope/member",
@@ -1382,7 +1383,7 @@ mod test {
         "exports": "./mod.ts"
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let resolver = workspace_dir
       .workspace
       .create_resolver(
@@ -1443,8 +1444,8 @@ mod test {
 
   #[test]
   fn resolves_patch_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "imports": {
@@ -1453,13 +1454,13 @@ mod test {
         "patch": ["../patch"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("../patch/deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("../patch/member/deno.json"),
       json!({
         "name": "@scope/patch",
@@ -1470,7 +1471,7 @@ mod test {
         }
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let resolver = workspace_dir
       .workspace
       .create_resolver(
@@ -1515,14 +1516,14 @@ mod test {
 
   #[test]
   fn invalid_package_name_with_slashes() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./libs/math"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("libs/math/deno.json"),
       json!({
         "name": "@deno-test/libs/math", // Invalid package name containing slashes
@@ -1530,7 +1531,7 @@ mod test {
         "exports": "./mod.ts"
       }),
     );
-    let workspace = workspace_at_start_dir(&fs, &root_dir());
+    let workspace = workspace_at_start_dir(&sys, &root_dir());
     let resolver = create_resolver(&workspace);
     let result = resolver.resolve(
       "@deno-test/libs/math",
@@ -1563,13 +1564,13 @@ mod test {
   }
 
   fn workspace_at_start_dir(
-    fs: &TestFileSystem,
+    sys: &InMemorySys,
     start_dir: &Path,
   ) -> WorkspaceDirectory {
     WorkspaceDirectory::discover(
+      sys,
       WorkspaceDiscoverStart::Paths(&[start_dir.to_path_buf()]),
       &WorkspaceDiscoverOptions {
-        fs,
         discover_pkg_json: true,
         ..Default::default()
       },

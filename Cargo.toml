@@ -1,11 +1,17 @@
 [package]
 name = "deno_config"
 description = "Config file implementation for the Deno CLI"
-version = "0.40.0"
+version = "0.42.0"
 edition = "2021"
 authors = ["the Deno authors"]
 license = "MIT"
 repository = "https://github.com/denoland/deno_config"
+
+[workspace]
+members = ["."]
+
+[workspace.dependencies]
+sys_traits = "0.1.0"
 
 [features]
 default = ["workspace"]
@@ -28,10 +34,12 @@ serde_json = "1.0.85"
 url = { version = "2.3.1" }
 import_map = { version = "0.20.0", features = ["ext"], optional = true }
 thiserror = "1.0.61"
-deno_semver = { version = "0.6.0", optional = true }
-deno_package_json = { version = "0.2.1", optional = true }
-deno_path_util = "0.2.0"
+deno_semver = { version = "0.7.1", optional = true }
+deno_package_json = { version = "0.4.0", optional = true }
+deno_path_util = "0.3.0"
+sys_traits.workspace = true
 
 [dev-dependencies]
 tempfile = "3.4.0"
 pretty_assertions = "1.4.0"
+sys_traits = { workspace = true, features = ["memory", "real", "serde_json"] }
