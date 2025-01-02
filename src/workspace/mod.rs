@@ -26,6 +26,9 @@ use discovery::ConfigFileDiscovery;
 use discovery::ConfigFolder;
 use discovery::DenoOrPkgJson;
 use indexmap::IndexMap;
+use sys_traits::FsMetadata;
+use sys_traits::FsRead;
+use sys_traits::FsReadDir;
 use thiserror::Error;
 use url::Url;
 
@@ -308,7 +311,6 @@ pub trait WorkspaceCache {
 
 #[derive(Default, Clone)]
 pub struct WorkspaceDiscoverOptions<'a> {
-  pub fs: &'a dyn crate::fs::DenoConfigFs,
   /// A cache for deno.json files. This is mostly only useful in the LSP where
   /// workspace discovery may occur multiple times.
   pub deno_json_cache: Option<&'a dyn crate::deno_json::DenoJsonCache>,
@@ -1111,13 +1113,14 @@ impl WorkspaceDirectory {
     )
   }
 
-  pub fn discover(
+  pub fn discover<TSys: FsMetadata + FsRead + FsReadDir>(
+    sys: &TSys,
     start: WorkspaceDiscoverStart,
     opts: &WorkspaceDiscoverOptions,
   ) -> Result<Self, WorkspaceDiscoverError> {
     fn resolve_start_dir(
+      sys: &impl FsMetadata,
       start: &WorkspaceDiscoverStart,
-      fs: &dyn crate::fs::DenoConfigFs,
     ) -> Result<Url, WorkspaceDiscoverError> {
       match start {
         WorkspaceDiscoverStart::Paths(paths) => {
@@ -1133,9 +1136,9 @@ impl WorkspaceDirectory {
             // at the moment because we only use this for lint and fmt,
             // so this is ok for now
             let path = &paths[0];
-            match fs.stat_sync(path) {
-              Ok(info) => Ok(
-                url_from_directory_path(if info.is_directory {
+            match sys.fs_is_dir(path) {
+              Ok(is_dir) => Ok(
+                url_from_directory_path(if is_dir {
                   path
                 } else {
                   path.parent().unwrap()
@@ -1174,8 +1177,9 @@ impl WorkspaceDirectory {
       }
     }
 
-    let start_dir = resolve_start_dir(&start, opts.fs)?;
-    let config_file_discovery = discover_workspace_config_files(start, opts)?;
+    let start_dir = resolve_start_dir(sys, &start)?;
+    let config_file_discovery =
+      discover_workspace_config_files(sys, start, opts)?;
 
     let context = match config_file_discovery {
       ConfigFileDiscovery::None {
@@ -2003,12 +2007,12 @@ mod test {
   use deno_path_util::url_from_directory_path;
   use pretty_assertions::assert_eq;
   use serde_json::json;
+  use sys_traits::impls::InMemorySys;
 
   use crate::assert_contains;
   use crate::deno_json::DenoJsonCache;
   use crate::deno_json::ProseWrap;
   use crate::deno_json::TsConfig;
-  use crate::fs::TestFileSystem;
   use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
@@ -2026,14 +2030,14 @@ mod test {
 
   #[test]
   fn test_empty_workspaces() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": []
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("sub_dir").join("deno.json"),
       json!({
         "workspace": []
@@ -2041,9 +2045,9 @@ mod test {
     );
 
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir().join("sub_dir")]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         ..Default::default()
       },
     )
@@ -2061,19 +2065,19 @@ mod test {
 
   #[test]
   fn test_duplicate_members() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member/a", "./member/../member/a"],
       }),
     );
-    fs.insert_json(root_dir().join("member/a/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member/a/deno.json"), json!({}));
 
     let workspace_config_err = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         ..Default::default()
       },
     )
@@ -2089,8 +2093,8 @@ mod test {
   #[test]
   fn test_workspace_invalid_self_reference() {
     for reference in [".", "../sub_dir"] {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
+      let sys = InMemorySys::default();
+      sys.fs_insert_json(
         root_dir().join("sub_dir").join("deno.json"),
         json!({
           "workspace": [reference],
@@ -2098,9 +2102,9 @@ mod test {
       );
 
       let workspace_config_err = WorkspaceDirectory::discover(
+        &sys,
         WorkspaceDiscoverStart::Paths(&[root_dir().join("sub_dir")]),
         &WorkspaceDiscoverOptions {
-          fs: &fs,
           ..Default::default()
         },
       )
@@ -2116,8 +2120,8 @@ mod test {
 
   #[test]
   fn test_workspaces_outside_root_config_dir() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["../a"]
@@ -2125,9 +2129,9 @@ mod test {
     );
 
     let workspace_config_err = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         ..Default::default()
       },
     )
@@ -2142,7 +2146,7 @@ mod test {
 
   #[test]
   fn test_workspaces_json_jsonc() {
-    let mut fs = TestFileSystem::default();
+    let sys = InMemorySys::default();
     let config_text = json!({
       "workspace": [
         "./a",
@@ -2158,14 +2162,14 @@ mod test {
       "version": "0.2.0"
     });
 
-    fs.insert_json(root_dir().join("deno.json"), config_text);
-    fs.insert_json(root_dir().join("a/deno.json"), config_text_a);
-    fs.insert_json(root_dir().join("b/deno.jsonc"), config_text_b);
+    sys.fs_insert_json(root_dir().join("deno.json"), config_text);
+    sys.fs_insert_json(root_dir().join("a/deno.json"), config_text_a);
+    sys.fs_insert_json(root_dir().join("b/deno.jsonc"), config_text_b);
 
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         ..Default::default()
       },
     )
@@ -2175,8 +2179,8 @@ mod test {
 
   #[test]
   fn test_tasks() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member", "./pkg_json"],
@@ -2186,7 +2190,7 @@ mod test {
         }
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
         "tasks": {
@@ -2195,7 +2199,7 @@ mod test {
         }
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("pkg_json/package.json"),
       json!({
         "scripts": {
@@ -2204,10 +2208,10 @@ mod test {
       }),
     );
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       // start at root for this test
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         ..Default::default()
       },
@@ -2401,8 +2405,8 @@ mod test {
         "importMap": "./member.json",
       }),
       |fs| {
-        fs.insert_json(root_dir().join("other.json"), json!({}));
-        fs.insert_json(root_dir().join("member/member.json"), json!({}));
+        fs.fs_insert_json(root_dir().join("other.json"), json!({}));
+        fs.fs_insert_json(root_dir().join("member/member.json"), json!({}));
       },
     );
     assert_eq!(
@@ -2435,7 +2439,7 @@ mod test {
         ],
       }),
       |fs| {
-        fs.insert_json(root_dir().join("../dir/deno.json"), json!({}));
+        fs.fs_insert_json(root_dir().join("../dir/deno.json"), json!({}));
       },
     );
     assert_eq!(
@@ -2456,7 +2460,7 @@ mod test {
       }),
       json!({}),
       |fs| {
-        fs.insert_json(
+        fs.fs_insert_json(
           root_dir().join("../dir/deno.json"),
           json!({
             "patch": ["./subdir"] // will be ignored
@@ -2478,14 +2482,14 @@ mod test {
 
   #[test]
   fn test_patch_not_exists() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "patch": ["./member"]
       }),
     );
-    let err = workspace_at_start_dir_err(&fs, &root_dir());
+    let err = workspace_at_start_dir_err(&sys, &root_dir());
     match err.into_kind() {
       WorkspaceDiscoverErrorKind::ResolvePatch {
         patch,
@@ -2510,16 +2514,16 @@ mod test {
 
   #[test]
   fn test_patch_workspace_member() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member"],
         "patch": ["./member"]
       }),
     );
-    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
-    let err = workspace_at_start_dir_err(&fs, &root_dir());
+    sys.fs_insert_json(root_dir().join("member/deno.json"), json!({}));
+    let err = workspace_at_start_dir_err(&sys, &root_dir());
     match err.into_kind() {
       WorkspaceDiscoverErrorKind::ResolvePatch {
         patch,
@@ -2539,15 +2543,15 @@ mod test {
 
   #[test]
   fn test_patch_npm_package() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "patch": ["./member"]
       }),
     );
-    fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     assert_eq!(
       workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
@@ -2632,7 +2636,7 @@ mod test {
       }),
       json!({}),
       |fs| {
-        fs.insert_json(root_dir().join("other.json"), json!({}));
+        fs.fs_insert_json(root_dir().join("other.json"), json!({}));
       },
     );
     assert_eq!(
@@ -3241,24 +3245,24 @@ mod test {
 
   #[test]
   fn test_root_member_workspace_on_member() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
         "workspace": ["./other_dir"]
       }),
     );
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       // start at root for this test
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         ..Default::default()
       },
     )
@@ -3297,12 +3301,12 @@ mod test {
     json: serde_json::Value,
     kinds: Vec<WorkspaceDiagnosticKind>,
   ) {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(root_dir().join("deno.json"), json);
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(root_dir().join("deno.json"), json);
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         ..Default::default()
       },
     )
@@ -3324,8 +3328,8 @@ mod test {
 
   #[test]
   fn test_multiple_pkgs_same_name() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member1", "./member2"]
@@ -3336,12 +3340,18 @@ mod test {
       "version": "1.0.0",
       "exports": "./main.ts",
     });
-    fs.insert_json(root_dir().join("member1").join("deno.json"), pkg.clone());
-    fs.insert_json(root_dir().join("member2").join("deno.json"), pkg.clone());
+    sys.fs_insert_json(
+      root_dir().join("member1").join("deno.json"),
+      pkg.clone(),
+    );
+    sys.fs_insert_json(
+      root_dir().join("member2").join("deno.json"),
+      pkg.clone(),
+    );
     let err = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         ..Default::default()
       },
     )
@@ -3372,8 +3382,8 @@ mod test {
 
   #[test]
   fn test_packages_for_publish_non_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "name": "@scope/pkg",
@@ -3381,7 +3391,8 @@ mod test {
         "exports": "./main.ts",
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
     let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
     let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -3390,14 +3401,14 @@ mod test {
 
   #[test]
   fn test_packages_for_publish_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./a", "./b", "./c", "./d"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("a/deno.json"),
       json!({
         "name": "@scope/a",
@@ -3405,7 +3416,7 @@ mod test {
         "exports": "./main.ts",
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("b/deno.json"),
       json!({
         "name": "@scope/b",
@@ -3413,12 +3424,12 @@ mod test {
         "exports": "./main.ts",
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("c/deno.json"),
       // not a package
       json!({}),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("d/package.json"),
       json!({
         "name": "pkg",
@@ -3427,7 +3438,7 @@ mod test {
     );
     // root
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -3435,7 +3446,7 @@ mod test {
     }
     // member
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("a"));
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("a"));
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -3443,14 +3454,14 @@ mod test {
     }
     // member, not a package
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("c"));
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("c"));
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       assert!(jsr_pkgs.is_empty());
     }
     // package.json
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("d"));
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("d"));
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       assert!(jsr_pkgs.is_empty());
@@ -3478,8 +3489,8 @@ mod test {
 
   #[test]
   fn test_packages_for_publish_root_is_package() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "name": "@scope/root",
@@ -3488,7 +3499,7 @@ mod test {
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
         "name": "@scope/pkg",
@@ -3499,7 +3510,7 @@ mod test {
     // in a member
     {
       let workspace_dir =
-        workspace_at_start_dir(&fs, &root_dir().join("member"));
+        workspace_at_start_dir(&sys, &root_dir().join("member"));
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -3507,7 +3518,7 @@ mod test {
     }
     // at the root
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -3521,14 +3532,14 @@ mod test {
 
   #[test]
   fn test_packages_for_publish_root_not_package() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
         "name": "@scope/pkg",
@@ -3537,7 +3548,7 @@ mod test {
       }),
     );
     // the workspace is not a jsr package so publish the members
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
     let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
     let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -3546,15 +3557,15 @@ mod test {
 
   #[test]
   fn test_packages_for_publish_npm_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./a", "./b", "./c", "./d"]
       }),
     );
-    fs.insert_json(root_dir().join("a/package.json"), json!({}));
-    fs.insert_json(
+    sys.fs_insert_json(root_dir().join("a/package.json"), json!({}));
+    sys.fs_insert_json(
       root_dir().join("a/deno.json"),
       json!({
         "name": "@scope/a",
@@ -3562,8 +3573,8 @@ mod test {
         "exports": "./main.ts",
       }),
     );
-    fs.insert_json(root_dir().join("b/package.json"), json!({}));
-    fs.insert_json(
+    sys.fs_insert_json(root_dir().join("b/package.json"), json!({}));
+    sys.fs_insert_json(
       root_dir().join("b/deno.json"),
       json!({
         "name": "@scope/b",
@@ -3571,13 +3582,13 @@ mod test {
         "exports": "./main.ts",
       }),
     );
-    fs.insert_json(root_dir().join("c/package.json"), json!({}));
-    fs.insert_json(
+    sys.fs_insert_json(root_dir().join("c/package.json"), json!({}));
+    sys.fs_insert_json(
       root_dir().join("c/deno.json"),
       // not a package
       json!({}),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("d/package.json"),
       json!({
         "name": "pkg",
@@ -3586,7 +3597,7 @@ mod test {
     );
     // root
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -3594,7 +3605,7 @@ mod test {
     }
     // member
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("a"));
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("a"));
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       let names = jsr_pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
@@ -3602,14 +3613,14 @@ mod test {
     }
     // member, not a package
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("c"));
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("c"));
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       assert!(jsr_pkgs.is_empty());
     }
     // package.json
     {
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("d"));
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("d"));
       assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
       let jsr_pkgs = workspace_dir.jsr_packages_for_publish();
       assert!(jsr_pkgs.is_empty());
@@ -3627,9 +3638,9 @@ mod test {
 
   #[test]
   fn test_no_auto_discovery_node_modules_dir() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(root_dir().join("deno.json"), json!({}));
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(root_dir().join("deno.json"), json!({}));
+    sys.fs_insert_json(
       root_dir().join("node_modules/package/package.json"),
       json!({
         "name": "@scope/pkg",
@@ -3637,7 +3648,7 @@ mod test {
       }),
     );
     let workspace_dir = workspace_at_start_dir(
-      &fs,
+      &sys,
       &root_dir().join("node_modules/package/sub_dir"),
     );
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
@@ -3647,44 +3658,62 @@ mod test {
 
   #[test]
   fn test_deno_workspace_globs() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./packages/*"]
       }),
     );
-    fs.insert_json(root_dir().join("packages/package-a/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("packages/package-b/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("packages/package-c/deno.jsonc"), json!({}));
+    sys.fs_insert_json(
+      root_dir().join("packages/package-a/deno.json"),
+      json!({}),
+    );
+    sys.fs_insert_json(
+      root_dir().join("packages/package-b/deno.json"),
+      json!({}),
+    );
+    sys.fs_insert_json(
+      root_dir().join("packages/package-c/deno.jsonc"),
+      json!({}),
+    );
     let workspace_dir =
-      workspace_at_start_dir(&fs, &root_dir().join("packages"));
+      workspace_at_start_dir(&sys, &root_dir().join("packages"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 4);
   }
 
   #[test]
   fn test_deno_workspace_globs_with_package_json() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./packages/*", "./examples/*"]
       }),
     );
-    fs.insert_json(root_dir().join("packages/package-a/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("packages/package-b/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("packages/package-c/deno.jsonc"), json!({}));
-    fs.insert_json(
+    sys.fs_insert_json(
+      root_dir().join("packages/package-a/deno.json"),
+      json!({}),
+    );
+    sys.fs_insert_json(
+      root_dir().join("packages/package-b/deno.json"),
+      json!({}),
+    );
+    sys.fs_insert_json(
+      root_dir().join("packages/package-c/deno.jsonc"),
+      json!({}),
+    );
+    sys.fs_insert_json(
       root_dir().join("examples/examples1/package.json"),
       json!({}),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("examples/examples2/package.json"),
       json!({}),
     );
     let workspace_dir =
-      workspace_at_start_dir(&fs, &root_dir().join("packages"));
+      workspace_at_start_dir(&sys, &root_dir().join("packages"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 4);
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
@@ -3693,8 +3722,8 @@ mod test {
   #[test]
   fn test_deno_workspace_negations() {
     for negation in ["!ignored/package-c", "!ignored/**"] {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
+      let sys = InMemorySys::default();
+      sys.fs_insert_json(
         root_dir().join("deno.json"),
         json!({
           "workspace": [
@@ -3703,19 +3732,19 @@ mod test {
           ]
         }),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("packages/package-a/deno.json"),
         json!({}),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("packages/package-b/deno.jsonc"),
         json!({}),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("ignored/package-c/deno.jsonc"),
         json!({}),
       );
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
       assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
       assert_eq!(workspace_dir.workspace.deno_jsons().count(), 3);
     }
@@ -3723,29 +3752,29 @@ mod test {
 
   #[test]
   fn test_deno_workspace_member_no_config_file_error() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
     // no deno.json in this folder, so should error
-    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    let err = workspace_at_start_dir_err(&sys, &root_dir().join("package"));
     assert_eq!(err.to_string(), normalize_err_text("Could not find config file for workspace member in '[ROOT_DIR_URL]/member/'."));
   }
 
   #[test]
   fn test_deno_workspace_member_deno_json_member_name() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member/deno.json"]
       }),
     );
     // no deno.json in this folder and the name was deno.json so give an error
-    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    let err = workspace_at_start_dir_err(&sys, &root_dir().join("package"));
     assert_eq!(err.to_string(), normalize_err_text(concat!(
       "Could not find config file for workspace member in '[ROOT_DIR_URL]/member/deno.json/'. ",
       "Ensure you specify the directory and not the configuration file in the workspace member."
@@ -3775,23 +3804,23 @@ mod test {
 
     for file_name in ["deno.json", "deno.jsonc"] {
       let config_file_path = root_dir().join("member-b").join(file_name);
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
+      let sys = InMemorySys::default();
+      sys.fs_insert_json(
         root_dir().join("deno.json"),
         json!({
           "workspace": ["./member-a"],
         }),
       );
-      fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
-      fs.insert_json(config_file_path.clone(), json!({}));
-      let err = workspace_at_start_dir_err(&fs, &root_dir().join("member-b"));
+      sys.fs_insert_json(root_dir().join("member-a/deno.json"), json!({}));
+      sys.fs_insert_json(config_file_path.clone(), json!({}));
+      let err = workspace_at_start_dir_err(&sys, &root_dir().join("member-b"));
       assert_err(&err, &config_file_path);
 
       // try for when the config file is specified as well
       let err = WorkspaceDirectory::discover(
+        &sys,
         WorkspaceDiscoverStart::ConfigFile(&config_file_path),
         &WorkspaceDiscoverOptions {
-          fs: &fs,
           discover_pkg_json: true,
           ..Default::default()
         },
@@ -3804,25 +3833,25 @@ mod test {
   #[test]
   fn test_config_not_deno_workspace_member_non_natural_config_file_name() {
     for file_name in ["other-name.json", "deno.jsonc"] {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
+      let sys = InMemorySys::default();
+      sys.fs_insert_json(
         root_dir().join("deno.json"),
         json!({
           "workspace": ["./member-a", "./member-b"],
         }),
       );
-      fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
+      sys.fs_insert_json(root_dir().join("member-a/deno.json"), json!({}));
       // this is the "natural" config file that would be discovered by
       // workspace discovery and since the file name specified does not
       // match it, the workspace is not discovered and an error does not
       // occur
-      fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
+      sys.fs_insert_json(root_dir().join("member-b/deno.json"), json!({}));
       let config_file_path = root_dir().join("member-b").join(file_name);
-      fs.insert_json(config_file_path.clone(), json!({}));
+      sys.fs_insert_json(config_file_path.clone(), json!({}));
       let workspace_dir = WorkspaceDirectory::discover(
+        &sys,
         WorkspaceDiscoverStart::ConfigFile(&config_file_path),
         &WorkspaceDiscoverOptions {
-          fs: &fs,
           discover_pkg_json: true,
           ..Default::default()
         },
@@ -3841,20 +3870,20 @@ mod test {
 
   #[test]
   fn test_config_workspace_non_natural_config_file_name() {
-    let mut fs = TestFileSystem::default();
+    let sys = InMemorySys::default();
     let root_config_path = root_dir().join("deno-other.json");
-    fs.insert_json(
+    sys.fs_insert_json(
       root_config_path.clone(),
       json!({
         "workspace": ["./member-a"],
       }),
     );
     let member_a_config = root_dir().join("member-a/deno.json");
-    fs.insert_json(member_a_config.clone(), json!({}));
+    sys.fs_insert_json(member_a_config.clone(), json!({}));
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::ConfigFile(&root_config_path),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         ..Default::default()
       },
@@ -3872,17 +3901,17 @@ mod test {
 
   #[test]
   fn test_npm_package_not_referenced_in_deno_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("package/package.json"), json!({}));
     // npm package needs to be a member of the deno workspace
-    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    let err = workspace_at_start_dir_err(&sys, &root_dir().join("package"));
     assert_eq!(
       err.to_string(),
       normalize_err_text(
@@ -3896,23 +3925,23 @@ mod test {
   #[test]
   fn test_multiple_workspaces_npm_package_referenced_in_package_json_workspace()
   {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./package"]
       }),
     );
-    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("package/package.json"), json!({}));
     let workspace_dir =
-      workspace_at_start_dir(&fs, &root_dir().join("package"));
+      workspace_at_start_dir(&sys, &root_dir().join("package"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 2);
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
@@ -3920,17 +3949,17 @@ mod test {
 
   #[test]
   fn test_npm_workspace_package_json_and_deno_json_ok() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./member"]
       }),
     );
-    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("member/package.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
     let workspace_dir =
-      workspace_at_start_dir(&fs, &root_dir().join("package"));
+      workspace_at_start_dir(&sys, &root_dir().join("package"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
@@ -3938,52 +3967,52 @@ mod test {
 
   #[test]
   fn test_npm_workspace_member_deno_json_error() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./member"]
       }),
     );
     // no package.json in this folder, so should error
-    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
-    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    sys.fs_insert_json(root_dir().join("member/deno.json"), json!({}));
+    let err = workspace_at_start_dir_err(&sys, &root_dir().join("package"));
     assert_eq!(err.to_string(), normalize_err_text("Could not find package.json for workspace member in '[ROOT_DIR_URL]/member/'."));
   }
 
   #[test]
   fn test_npm_workspace_member_no_config_file_error() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./member"]
       }),
     );
     // no package.json in this folder, so should error
-    let err = workspace_at_start_dir_err(&fs, &root_dir().join("package"));
+    let err = workspace_at_start_dir_err(&sys, &root_dir().join("package"));
     assert_eq!(err.to_string(), normalize_err_text("Could not find package.json for workspace member in '[ROOT_DIR_URL]/member/'."));
   }
 
   #[test]
   fn test_npm_workspace_globs() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./packages/*"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("packages/package-a/package.json"),
       json!({}),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("packages/package-b/package.json"),
       json!({}),
     );
     let workspace_dir =
-      workspace_at_start_dir(&fs, &root_dir().join("packages"));
+      workspace_at_start_dir(&sys, &root_dir().join("packages"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 3);
   }
@@ -3991,32 +4020,32 @@ mod test {
   #[test]
   fn test_npm_workspace_ignores_vendor_folder() {
     for (is_vendor, expected_count) in [(true, 3), (false, 4)] {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
+      let sys = InMemorySys::default();
+      sys.fs_insert_json(
         root_dir().join("deno.json"),
         json!({
           "vendor": is_vendor,
         }),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("package.json"),
         json!({
           "workspaces": ["./**/*"]
         }),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("packages/package-a/package.json"),
         json!({}),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("packages/package-b/package.json"),
         json!({}),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("vendor/package-c/package.json"),
         json!({}),
       );
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
       assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
       assert_eq!(
         workspace_dir.workspace.package_jsons().count(),
@@ -4028,8 +4057,8 @@ mod test {
   #[test]
   fn test_npm_workspace_negations() {
     for negation in ["!ignored/package-c", "!ignored/**"] {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
+      let sys = InMemorySys::default();
+      sys.fs_insert_json(
         root_dir().join("package.json"),
         json!({
           "workspaces": [
@@ -4038,19 +4067,19 @@ mod test {
           ]
         }),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("packages/package-a/package.json"),
         json!({}),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("packages/package-b/package.json"),
         json!({}),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("ignored/package-c/package.json"),
         json!({}),
       );
-      let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+      let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
       assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
       assert_eq!(workspace_dir.workspace.package_jsons().count(), 3);
     }
@@ -4058,8 +4087,8 @@ mod test {
 
   #[test]
   fn test_npm_workspace_self_reference_and_duplicate_references_ok() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": [
@@ -4070,30 +4099,31 @@ mod test {
         ]
       }),
     );
-    fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
   }
 
   #[test]
   fn test_npm_workspace_start_deno_json_not_in_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./package"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
         "unstable": ["byonm"],
       }),
     );
-    fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("package/package.json"), json!({}));
     // only resolves the member because it's not part of the workspace
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 1);
     assert_eq!(
@@ -4110,22 +4140,23 @@ mod test {
 
   #[test]
   fn test_npm_workspace_start_deno_json_part_of_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
         "lock": false,
         "unstable": ["byonm"],
       }),
     );
-    fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(
       workspace_dir
         .workspace
@@ -4153,23 +4184,23 @@ mod test {
 
   #[test]
   fn test_npm_workspace_start_deno_json_part_of_workspace_sub_folder() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
         "unstable": ["byonm"],
       }),
     );
-    fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    fs.insert("member/sub/sub_folder/sub/file.ts", "");
+    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
+    sys.fs_insert("member/sub/sub_folder/sub/file.ts", "");
     let workspace_dir = workspace_at_start_dir(
-      &fs,
+      &sys,
       // note how we're starting in a sub folder of the member
       &root_dir().join("member/sub/sub_folder/sub/"),
     );
@@ -4194,26 +4225,26 @@ mod test {
   #[test]
   fn test_npm_workspace_start_deno_json_part_of_workspace_sub_folder_other_deno_json(
   ) {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./member", "./member/sub"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({ "unstable": ["sloppy-imports"] }),
     );
-    fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    fs.insert_json(
+    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
+    sys.fs_insert_json(
       root_dir().join("member/sub/deno.json"),
       json!({ "unstable": ["byonm"] }),
     );
-    fs.insert_json(root_dir().join("member/sub/package.json"), json!({}));
-    fs.insert("member/sub/sub_folder/sub/file.ts", "");
+    sys.fs_insert_json(root_dir().join("member/sub/package.json"), json!({}));
+    sys.fs_insert("member/sub/sub_folder/sub/file.ts", "");
     let workspace_dir = workspace_at_start_dir(
-      &fs,
+      &sys,
       // note how we're starting in a sub folder of the member
       &root_dir().join("member/sub/sub_folder/sub/"),
     );
@@ -4230,17 +4261,18 @@ mod test {
 
   #[test]
   fn test_npm_workspace_start_package_json_not_in_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./package"]
       }),
     );
-    fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    fs.insert_json(root_dir().join("package/package.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("package/package.json"), json!({}));
     // only resolves the member because it's not part of the workspace
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir().join("member"));
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 0);
     assert_eq!(
@@ -4252,14 +4284,14 @@ mod test {
 
   #[test]
   fn test_resolve_multiple_dirs() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("workspace").join("deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("workspace").join("member/deno.json"),
       json!({
         "name": "@scope/pkg",
@@ -4268,7 +4300,7 @@ mod test {
       }),
     );
     let workspace_dir = workspace_at_start_dirs(
-      &fs,
+      &sys,
       &[
         root_dir().join("workspace/member"),
         root_dir().join("other_dir"), // will be ignored because it's not in the workspace
@@ -4283,19 +4315,20 @@ mod test {
 
   #[test]
   fn test_npm_workspace_ignore_pkg_json_between_member_and_root() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./member/nested"]
       }),
     );
     // will ignore this one
-    fs.insert_json(root_dir().join("member/package.json"), json!({}));
-    fs.insert_json(root_dir().join("member/nested/package.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
+    sys
+      .fs_insert_json(root_dir().join("member/nested/package.json"), json!({}));
     // only resolves the member because it's not part of the workspace
     let workspace_dir =
-      workspace_at_start_dir(&fs, &root_dir().join("member/nested"));
+      workspace_at_start_dir(&sys, &root_dir().join("member/nested"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 0);
     assert_eq!(
@@ -4313,19 +4346,20 @@ mod test {
 
   #[test]
   fn test_npm_workspace_ignore_deno_json_between_member_and_root() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("package.json"),
       json!({
         "workspaces": ["./member/nested"]
       }),
     );
     // will ignore this one
-    fs.insert_json(root_dir().join("member/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("member/nested/package.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member/deno.json"), json!({}));
+    sys
+      .fs_insert_json(root_dir().join("member/nested/package.json"), json!({}));
     // only resolves the member because it's not part of the workspace
     let workspace_dir =
-      workspace_at_start_dir(&fs, &root_dir().join("member/nested"));
+      workspace_at_start_dir(&sys, &root_dir().join("member/nested"));
     assert_eq!(workspace_dir.workspace.diagnostics(), Vec::new());
     assert_eq!(workspace_dir.workspace.deno_jsons().count(), 0);
     assert_eq!(workspace_dir.workspace.package_jsons().count(), 2);
@@ -4333,8 +4367,8 @@ mod test {
 
   #[test]
   fn test_resolve_multiple_dirs_outside_config() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("workspace/deno.json"),
       json!({
         "workspace": {
@@ -4342,11 +4376,12 @@ mod test {
         },
       }),
     );
-    fs.insert_json(root_dir().join("workspace/member/deno.json"), json!({}));
+    sys
+      .fs_insert_json(root_dir().join("workspace/member/deno.json"), json!({}));
     // this one will cause issues because it's not in the workspace
-    fs.insert_json(root_dir().join("other_dir/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("other_dir/deno.json"), json!({}));
     let err = workspace_at_start_dirs(
-      &fs,
+      &sys,
       &[
         root_dir().join("workspace/member"),
         root_dir().join("other_dir"),
@@ -4360,24 +4395,26 @@ mod test {
 
   #[test]
   fn test_resolve_multiple_dirs_outside_workspace() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("workspace/deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(root_dir().join("workspace/member/deno.json"), json!({}));
+    sys
+      .fs_insert_json(root_dir().join("workspace/member/deno.json"), json!({}));
     // this one will cause issues because it's not in the workspace
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("other_dir/deno.json"),
       json!({
         "workspace": ["./member"]
       }),
     );
-    fs.insert_json(root_dir().join("other_dir/member/deno.json"), json!({}));
+    sys
+      .fs_insert_json(root_dir().join("other_dir/member/deno.json"), json!({}));
     let err = workspace_at_start_dirs(
-      &fs,
+      &sys,
       &[
         root_dir().join("workspace/member"),
         root_dir().join("other_dir"),
@@ -4391,16 +4428,16 @@ mod test {
 
   #[test]
   fn test_specified_config_file_same_dir_discoverable_config_file() {
-    let mut fs = TestFileSystem::default();
+    let sys = InMemorySys::default();
     // should not start discovering this deno.json because it
     // should search for a workspace in the parent dir
-    fs.insert_json(root_dir().join("sub_dir/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("sub_dir/deno.json"), json!({}));
     let other_deno_json = root_dir().join("sub_dir/deno_other_name.json");
-    fs.insert_json(&other_deno_json, json!({}));
+    sys.fs_insert_json(&other_deno_json, json!({}));
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::ConfigFile(&other_deno_json),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         ..Default::default()
       },
@@ -4418,20 +4455,20 @@ mod test {
 
   #[test]
   fn test_config_workspace() {
-    let mut fs = TestFileSystem::default();
+    let sys = InMemorySys::default();
     let root_config_path = root_dir().join("deno.json");
-    fs.insert_json(
+    sys.fs_insert_json(
       root_config_path.clone(),
       json!({
         "workspace": ["./member-a"],
       }),
     );
     let member_a_config = root_dir().join("member-a/deno.json");
-    fs.insert_json(member_a_config.clone(), json!({}));
+    sys.fs_insert_json(member_a_config.clone(), json!({}));
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::ConfigFile(&root_config_path),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         ..Default::default()
       },
@@ -4449,16 +4486,16 @@ mod test {
 
   #[test]
   fn test_split_cli_args_by_deno_json_folder() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member-a", "./member-b"],
       }),
     );
-    fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    sys.fs_insert_json(root_dir().join("member-a/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     // single member
     {
       let split = workspace_dir.workspace.split_cli_args_by_deno_json_folder(
@@ -4754,9 +4791,9 @@ mod test {
 
   #[test]
   fn test_split_cli_args_by_deno_json_folder_no_config() {
-    let mut fs = TestFileSystem::default();
-    fs.insert(root_dir().join("path"), ""); // create the root directory
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let sys = InMemorySys::default();
+    sys.fs_insert(root_dir().join("path"), ""); // create the root directory
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     // two paths, looped to ensure that the order is maintained on
     // the output and not sorted
     let path1 = normalize_path(root_dir().join("./path-longer"));
@@ -4795,8 +4832,8 @@ mod test {
       config_key: &str,
       workspace_to_file_patterns: impl Fn(&WorkspaceDirectory) -> Vec<FilePatterns>,
     ) {
-      let mut fs = TestFileSystem::default();
-      fs.insert_json(
+      let sys = InMemorySys::default();
+      sys.fs_insert_json(
         root_dir().join("deno.json"),
         json!({
           "workspace": ["./member-a", "./member-b", "member-c"],
@@ -4805,7 +4842,7 @@ mod test {
           }
         }),
       );
-      fs.insert_json(
+      sys.fs_insert_json(
         root_dir().join("member-a/deno.json"),
         json!({
           config_key: {
@@ -4813,9 +4850,9 @@ mod test {
           }
         }),
       );
-      fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
-      fs.insert_json(root_dir().join("member-c/deno.json"), json!({}));
-      let workspace = workspace_at_start_dir(&fs, &root_dir());
+      sys.fs_insert_json(root_dir().join("member-b/deno.json"), json!({}));
+      sys.fs_insert_json(root_dir().join("member-c/deno.json"), json!({}));
+      let workspace = workspace_at_start_dir(&sys, &root_dir());
       assert_eq!(
         workspace_to_file_patterns(&workspace),
         vec![
@@ -4908,8 +4945,8 @@ mod test {
 
   #[test]
   fn test_resolve_config_for_members_excluded_member() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member-a", "./member-b"],
@@ -4918,9 +4955,9 @@ mod test {
         }
       }),
     );
-    fs.insert_json(root_dir().join("member-a/deno.json"), json!({}));
-    fs.insert_json(root_dir().join("member-b/deno.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    sys.fs_insert_json(root_dir().join("member-a/deno.json"), json!({}));
+    sys.fs_insert_json(root_dir().join("member-b/deno.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let config_for_members = workspace_dir
       .workspace
       .resolve_lint_config_for_members(&FilePatterns::new_with_base(root_dir()))
@@ -4967,18 +5004,18 @@ mod test {
     );
 
     // ensure the second file patterns is a no-op
-    fs.insert(root_dir().join("member-a/file.ts"), "");
-    fs.insert(root_dir().join("member-a/sub-dir/file.ts"), "");
+    sys.fs_insert(root_dir().join("member-a/file.ts"), "");
+    sys.fs_insert(root_dir().join("member-a/sub-dir/file.ts"), "");
     let files = FileCollector::new(|_| true)
-      .collect_file_patterns(&fs, file_patterns.remove(1))
+      .collect_file_patterns(&sys, file_patterns.remove(1))
       .unwrap();
     assert!(files.is_empty());
   }
 
   #[test]
   fn test_resolve_config_for_members_excluded_member_unexcluded_sub_dir() {
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member-a"],
@@ -4987,7 +5024,7 @@ mod test {
         }
       }),
     );
-    fs.insert_json(
+    sys.fs_insert_json(
       root_dir().join("member-a/deno.json"),
       json!({
         "lint": {
@@ -4996,7 +5033,7 @@ mod test {
         }
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&fs, &root_dir());
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let config_for_members = workspace_dir
       .workspace
       .resolve_lint_config_for_members(&FilePatterns::new_with_base(root_dir()))
@@ -5030,10 +5067,10 @@ mod test {
         },
       ]
     );
-    fs.insert(root_dir().join("member-a/file.ts"), "");
-    fs.insert(root_dir().join("member-a/sub-dir/file.ts"), "");
+    sys.fs_insert(root_dir().join("member-a/file.ts"), "");
+    sys.fs_insert(root_dir().join("member-a/sub-dir/file.ts"), "");
     let files = FileCollector::new(|_| true)
-      .collect_file_patterns(&fs, file_patterns.remove(1))
+      .collect_file_patterns(&sys, file_patterns.remove(1))
       .unwrap();
     // should only have member-a/sub-dir/file.ts and not member-a/file.ts
     assert_eq!(files, vec![root_dir().join("member-a/sub-dir/file.ts")]);
@@ -5094,13 +5131,16 @@ mod test {
 
   #[test]
   fn workspace_discovery_deno_json_cache() {
-    let mut fs = TestFileSystem::default();
-    fs.insert(root_dir().join("deno.json"), "{ \"nodeModulesDir\": true }");
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
+      root_dir().join("deno.json"),
+      json!({ "nodeModulesDir": true }),
+    );
     let cache = DenoJsonMemCache::default();
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         deno_json_cache: Some(&cache),
         ..Default::default()
@@ -5123,9 +5163,9 @@ mod test {
       .borrow_mut()
       .insert(root_dir().join("deno.json"), new_rc(new_config_file));
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         deno_json_cache: Some(&cache),
         ..Default::default()
@@ -5140,13 +5180,16 @@ mod test {
 
   #[test]
   fn workspace_discovery_pkg_json_cache() {
-    let mut fs = TestFileSystem::default();
-    fs.insert(root_dir().join("package.json"), "{ \"name\": \"member\" }");
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
+      root_dir().join("package.json"),
+      json!({ "name": "member" }),
+    );
     let cache = PkgJsonMemCache::default();
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         pkg_json_cache: Some(&cache),
         ..Default::default()
@@ -5165,9 +5208,9 @@ mod test {
       .borrow_mut()
       .insert(root_dir().join("package.json"), new_rc(new_pkg_json));
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         pkg_json_cache: Some(&cache),
         ..Default::default()
@@ -5187,26 +5230,32 @@ mod test {
 
   #[test]
   fn workspace_discovery_workspace_cache() {
-    let mut fs = TestFileSystem::default();
-    fs.insert(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("member/package-a/package.json"),
-      r#"{ "name": "member-a" }"#,
+      json!({
+        "name": "member-a"
+      }),
     );
-    fs.insert(
+    sys.fs_insert_json(
       root_dir().join("member/package-b/deno.json"),
-      r#"{ "name": "member-b" }"#,
+      json!({
+        "name": "member-b"
+      }),
     );
-    fs.insert(
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
-      r#"{ "workspace": ["member/package-a", "member/package-b"] }"#,
+      json!({
+        "workspace": ["member/package-a", "member/package-b"]
+      }),
     );
     let deno_json_cache = DenoJsonMemCache::default();
     let pkg_json_cache = PkgJsonMemCache::default();
     let workspace_cache = WorkspaceMemCache::default();
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         deno_json_cache: Some(&deno_json_cache),
         pkg_json_cache: Some(&pkg_json_cache),
@@ -5225,9 +5274,9 @@ mod test {
     pkg_json_cache.0.borrow_mut().clear();
     // should load and not write to the caches
     let workspace_dir = WorkspaceDirectory::discover(
+      &sys,
       WorkspaceDiscoverStart::Paths(&[root_dir()]),
       &WorkspaceDiscoverOptions {
-        fs: &fs,
         discover_pkg_json: true,
         deno_json_cache: Some(&deno_json_cache),
         pkg_json_cache: Some(&pkg_json_cache),
@@ -5246,18 +5295,18 @@ mod test {
 
   #[test]
   fn deno_workspace_discovery_workspace_cache() {
-    let mut fs = TestFileSystem::default();
-    fs.insert(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("member/package-a/deno.json"),
-      r#"{ "name": "member-a" }"#,
+      json!({ "name": "member-a" }),
     );
-    fs.insert(
+    sys.fs_insert_json(
       root_dir().join("member/package-b/deno.json"),
-      r#"{ "name": "member-b" }"#,
+      json!({ "name": "member-b" }),
     );
-    fs.insert(
+    sys.fs_insert_json(
       root_dir().join("deno.json"),
-      r#"{ "workspace": ["member/package-a", "member/package-b"] }"#,
+      json!({ "workspace": ["member/package-a", "member/package-b"] }),
     );
     let deno_json_cache = DenoJsonMemCache::default();
     let pkg_json_cache = PkgJsonMemCache::default();
@@ -5268,9 +5317,9 @@ mod test {
       root_dir().join("member/package-b"),
     ] {
       let workspace_dir = WorkspaceDirectory::discover(
+        &sys,
         WorkspaceDiscoverStart::Paths(&[start_dir]),
         &WorkspaceDiscoverOptions {
-          fs: &fs,
           discover_pkg_json: true,
           deno_json_cache: Some(&deno_json_cache),
           pkg_json_cache: Some(&pkg_json_cache),
@@ -5285,18 +5334,18 @@ mod test {
 
   #[test]
   fn npm_workspace_discovery_workspace_cache() {
-    let mut fs = TestFileSystem::default();
-    fs.insert(
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
       root_dir().join("member/package-a/package.json"),
-      r#"{ "name": "member-a" }"#,
+      json!({ "name": "member-a" }),
     );
-    fs.insert(
+    sys.fs_insert_json(
       root_dir().join("member/package-b/package.json"),
-      r#"{ "name": "member-b" }"#,
+      json!({ "name": "member-b" }),
     );
-    fs.insert(
+    sys.fs_insert_json(
       root_dir().join("package.json"),
-      r#"{ "workspaces": ["member/*"] }"#,
+      json!({ "workspaces": ["member/*"] }),
     );
     let deno_json_cache = DenoJsonMemCache::default();
     let pkg_json_cache = PkgJsonMemCache::default();
@@ -5307,9 +5356,9 @@ mod test {
       root_dir().join("member/package-b"),
     ] {
       let workspace_dir = WorkspaceDirectory::discover(
+        &sys,
         WorkspaceDiscoverStart::Paths(&[start_dir]),
         &WorkspaceDiscoverOptions {
-          fs: &fs,
           discover_pkg_json: true,
           deno_json_cache: Some(&deno_json_cache),
           pkg_json_cache: Some(&pkg_json_cache),
@@ -5332,49 +5381,49 @@ mod test {
   fn workspace_for_root_and_member_with_fs(
     mut root: serde_json::Value,
     member: serde_json::Value,
-    with_fs: impl FnOnce(&mut TestFileSystem),
+    with_sys: impl FnOnce(&InMemorySys),
   ) -> WorkspaceDirectory {
     root
       .as_object_mut()
       .unwrap()
       .insert("workspace".to_string(), json!(["./member"]));
-    let mut fs = TestFileSystem::default();
-    fs.insert_json(root_dir().join("deno.json"), root);
-    fs.insert_json(root_dir().join("member/deno.json"), member);
-    with_fs(&mut fs);
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(root_dir().join("deno.json"), root);
+    sys.fs_insert_json(root_dir().join("member/deno.json"), member);
+    with_sys(&sys);
     // start in the member
-    workspace_at_start_dir(&fs, &root_dir().join("member"))
+    workspace_at_start_dir(&sys, &root_dir().join("member"))
   }
 
   fn workspace_at_start_dir(
-    fs: &TestFileSystem,
+    sys: &InMemorySys,
     start_dir: &Path,
   ) -> WorkspaceDirectory {
-    workspace_at_start_dir_result(fs, start_dir).unwrap()
+    workspace_at_start_dir_result(sys, start_dir).unwrap()
   }
 
   fn workspace_at_start_dir_err(
-    fs: &TestFileSystem,
+    sys: &InMemorySys,
     start_dir: &Path,
   ) -> WorkspaceDiscoverError {
-    workspace_at_start_dir_result(fs, start_dir).unwrap_err()
+    workspace_at_start_dir_result(sys, start_dir).unwrap_err()
   }
 
   fn workspace_at_start_dir_result(
-    fs: &TestFileSystem,
+    sys: &InMemorySys,
     start_dir: &Path,
   ) -> Result<WorkspaceDirectory, WorkspaceDiscoverError> {
-    workspace_at_start_dirs(fs, &[start_dir.to_path_buf()])
+    workspace_at_start_dirs(sys, &[start_dir.to_path_buf()])
   }
 
   fn workspace_at_start_dirs(
-    fs: &TestFileSystem,
+    sys: &InMemorySys,
     start_dirs: &[PathBuf],
   ) -> Result<WorkspaceDirectory, WorkspaceDiscoverError> {
     WorkspaceDirectory::discover(
+      sys,
       WorkspaceDiscoverStart::Paths(start_dirs),
       &WorkspaceDiscoverOptions {
-        fs,
         discover_pkg_json: true,
         ..Default::default()
       },
