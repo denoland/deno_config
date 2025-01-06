@@ -1397,13 +1397,13 @@ impl WorkspaceDirectory {
       None => return Ok(member_config),
     };
     // combine the configs
+    let root_opts = root_config.options;
+    let member_opts = member_config.options;
+
     Ok(LintConfig {
       options: LintOptionsConfig {
-        // TODO(bartlomieju): fix me
-        plugins: vec![],
-        rules: {
-          let root_opts = root_config.options;
-          let member_opts = member_config.options;
+        plugins: member_opts.plugins,
+        rules: {      
           LintRulesConfig {
             tags: combine_option_vecs(
               root_opts.rules.tags,
@@ -2711,6 +2711,7 @@ mod test {
             "include": ["rule1"],
             "exclude": ["rule2"],
           },
+          "plugins": ["jsr:@deno/test-plugin1"]
         }
       }),
       json!({
@@ -2721,7 +2722,7 @@ mod test {
             "tags": ["tag1"],
             "include": ["rule2"],
           },
-          "plugins": ["jsr:@deno/test-plugin"]
+          "plugins": ["jsr:@deno/test-plugin2"]
         }
       }),
     );
@@ -2751,7 +2752,7 @@ mod test {
             include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
             exclude: Some(vec![])
           },
-          plugins: vec![],
+          plugins: vec!["jsr:@deno/test-plugin2".to_string()],
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -2779,7 +2780,7 @@ mod test {
             include: Some(vec!["rule1".to_string()]),
             exclude: Some(vec!["rule2".to_string()])
           },
-          plugins: vec![],
+          plugins: vec!["jsr:@deno/test-plugin1".to_string()]
         },
         files: FilePatterns {
           base: root_dir(),
