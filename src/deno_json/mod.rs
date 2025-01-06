@@ -849,7 +849,7 @@ pub enum ResolveExportValueUrlsError {
     specifier: Url,
     #[source]
     #[inherit]
-    error: ConfigFileExportsError,
+    error: Box<ConfigFileExportsError>,
   },
   #[class(inherit)]
   #[error("Failed to join {specifier} with {value}")]
@@ -1160,7 +1160,7 @@ impl ConfigFile {
       .to_exports_config()
       .map_err(|error| ResolveExportValueUrlsError::ExportsConfig {
         specifier: self.specifier.clone(),
-        error,
+        error: Box::new(error),
       })?
       .into_map();
     let mut exports = Vec::with_capacity(exports_config.len());
