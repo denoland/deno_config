@@ -2720,7 +2720,8 @@ mod test {
           "rules": {
             "tags": ["tag1"],
             "include": ["rule2"],
-          }
+          },
+          "plugins": ["jsr:@deno/test-plugin"]
         }
       }),
     );
@@ -2750,6 +2751,7 @@ mod test {
             include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
             exclude: Some(vec![])
           },
+          plugins: vec![],
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -2777,6 +2779,7 @@ mod test {
             include: Some(vec!["rule1".to_string()]),
             exclude: Some(vec!["rule2".to_string()])
           },
+          plugins: vec![],
         },
         files: FilePatterns {
           base: root_dir(),

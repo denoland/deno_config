@@ -110,7 +110,10 @@ impl SerializedLintConfig {
       log::warn!( "Warning: \"files\" configuration in \"lint\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
     }
     Ok(LintConfig {
-      options: LintOptionsConfig { rules: self.rules, plugins: self.plugins },
+      options: LintOptionsConfig {
+        rules: self.rules,
+        plugins: self.plugins,
+      },
       files: files.into_resolved(config_file_specifier)?,
     })
   }
@@ -1697,6 +1700,7 @@ mod tests {
             exclude: None,
             tags: Some(vec!["recommended".to_string()]),
           },
+          plugins: vec![],
         }
       }
     );
