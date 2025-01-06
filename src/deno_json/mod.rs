@@ -799,18 +799,20 @@ pub enum ConfigFileExportsError {
 #[derive(Debug, Error, JsError)]
 pub enum ToInvalidConfigError {
   #[class(inherit)]
-  #[error("Invalid {config} config: {error}")]
+  #[error("Invalid {config} config")]
   InvalidConfig {
     config: &'static str,
+    #[source]
     #[inherit]
-    error: IntoResolvedError,
+    source: IntoResolvedError,
   },
   #[class(inherit)]
-  #[error("Failed to parse \"{config}\" configuration: {error}")]
+  #[error("Failed to parse \"{config}\" configuration")]
   Parse {
     config: &'static str,
+    #[source]
     #[inherit]
-    error: serde_json::Error,
+    source: serde_json::Error,
   },
 }
 
@@ -1329,7 +1331,7 @@ impl ConfigFile {
       .into_resolved(&self.specifier)
       .map_err(|error| ToInvalidConfigError::InvalidConfig {
         config: "exclude",
-        error,
+        source: error,
       })
   }
 
@@ -1341,7 +1343,7 @@ impl ConfigFile {
         serde_json::from_value(exclude).map_err(|error| {
           ToInvalidConfigError::Parse {
             config: "exclude",
-            error,
+            source: error,
           }
         })?
       } else {
@@ -1362,7 +1364,7 @@ impl ConfigFile {
           serde_json::from_value(config).map_err(|error| {
             ToInvalidConfigError::Parse {
               config: "bench",
-              error,
+              source: error,
             }
           })?;
         // top level excludes at the start because they're lower priority
@@ -1371,7 +1373,7 @@ impl ConfigFile {
         serialized.into_resolved(&self.specifier).map_err(|error| {
           ToInvalidConfigError::InvalidConfig {
             config: "bench",
-            error,
+            source: error,
           }
         })
       }
@@ -1389,7 +1391,7 @@ impl ConfigFile {
           serde_json::from_value(config).map_err(|error| {
             ToInvalidConfigError::Parse {
               config: "fmt",
-              error,
+              source: error,
             }
           })?;
         // top level excludes at the start because they're lower priority
@@ -1398,7 +1400,7 @@ impl ConfigFile {
         serialized.into_resolved(&self.specifier).map_err(|error| {
           ToInvalidConfigError::InvalidConfig {
             config: "fmt",
-            error,
+            source: error,
           }
         })
       }
@@ -1417,7 +1419,7 @@ impl ConfigFile {
           serde_json::from_value(config).map_err(|error| {
             ToInvalidConfigError::Parse {
               config: "lint",
-              error,
+              source: error,
             }
           })?;
         // top level excludes at the start because they're lower priority
@@ -1426,7 +1428,7 @@ impl ConfigFile {
         serialized.into_resolved(&self.specifier).map_err(|error| {
           ToInvalidConfigError::InvalidConfig {
             config: "lint",
-            error,
+            source: error,
           }
         })
       }
@@ -1445,7 +1447,7 @@ impl ConfigFile {
           serde_json::from_value(config).map_err(|error| {
             ToInvalidConfigError::Parse {
               config: "test",
-              error,
+              source: error,
             }
           })?;
         // top level excludes at the start because they're lower priority
@@ -1454,7 +1456,7 @@ impl ConfigFile {
         serialized.into_resolved(&self.specifier).map_err(|error| {
           ToInvalidConfigError::InvalidConfig {
             config: "test",
-            error,
+            source: error,
           }
         })
       }
@@ -1474,7 +1476,7 @@ impl ConfigFile {
           serde_json::from_value(config).map_err(|error| {
             ToInvalidConfigError::Parse {
               config: "publish",
-              error,
+              source: error,
             }
           })?;
         // top level excludes at the start because they're lower priority
@@ -1483,7 +1485,7 @@ impl ConfigFile {
         serialized.into_resolved(&self.specifier).map_err(|error| {
           ToInvalidConfigError::InvalidConfig {
             config: "public",
-            error,
+            source: error,
           }
         })
       }
@@ -1567,7 +1569,7 @@ impl ConfigFile {
         TaskDefinition::deserialize_tasks(config).map_err(|error| {
           ToInvalidConfigError::Parse {
             config: "tasks",
-            error,
+            source: error,
           }
         })?;
       Ok(Some(tasks_config))
@@ -1676,7 +1678,7 @@ impl ConfigFile {
       let mut lock_config: LockConfig = serde_json::from_value(config)
         .map_err(|error| ToInvalidConfigError::Parse {
           config: "lock",
-          error,
+          source: error,
         })?;
       if let LockConfig::PathBuf(path)
       | LockConfig::Object {
