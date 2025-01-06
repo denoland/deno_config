@@ -7,7 +7,6 @@
 
 #[cfg(feature = "deno_json")]
 pub mod deno_json;
-pub mod fs;
 #[cfg(feature = "deno_json")]
 pub mod glob;
 #[cfg(feature = "deno_json")]

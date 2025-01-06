@@ -6,8 +6,12 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use deno_path_util::normalize_path;
+use sys_traits::FsDirEntry;
+use sys_traits::FsMetadata;
+use sys_traits::FsMetadataValue;
+use sys_traits::FsRead;
+use sys_traits::FsReadDir;
 
-use crate::fs::FsMetadata;
 use crate::glob::gitignore::DirGitIgnores;
 use crate::glob::gitignore::GitIgnoreTree;
 use crate::glob::FilePatternsMatch;
@@ -19,7 +23,7 @@ use super::FilePatterns;
 #[derive(Debug, Clone)]
 pub struct WalkEntry<'a> {
   pub path: &'a Path,
-  pub metadata: &'a FsMetadata,
+  pub metadata: &'a dyn FsMetadataValue,
   pub patterns: &'a FilePatterns,
 }
 
@@ -64,9 +68,9 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
     self
   }
 
-  pub fn collect_file_patterns(
+  pub fn collect_file_patterns<TSys: FsRead + FsMetadata + FsReadDir>(
     &self,
-    fs: &dyn crate::fs::DenoConfigFs,
+    sys: &TSys,
     file_patterns: FilePatterns,
   ) -> Vec<PathBuf> {
     fn is_pattern_matched(
@@ -114,7 +118,7 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
             .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-      Some(GitIgnoreTree::new(fs, include_paths))
+      Some(GitIgnoreTree::new(sys, include_paths))
     } else {
       None
     };
@@ -126,11 +130,11 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
       let mut pending_dirs = VecDeque::new();
       let mut handle_entry =
         |path: PathBuf,
-         metadata: &FsMetadata,
+         metadata: &dyn FsMetadataValue,
          pending_dirs: &mut VecDeque<PathBuf>| {
           let maybe_gitignore =
             maybe_git_ignores.as_mut().and_then(|git_ignores| {
-              if metadata.is_directory {
+              if metadata.file_type().is_dir() {
                 git_ignores.get_resolved_git_ignore_for_dir(&path)
               } else {
                 git_ignores.get_resolved_git_ignore_for_file(&path)
@@ -139,11 +143,11 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
           if !is_pattern_matched(
             maybe_gitignore.as_deref(),
             &path,
-            metadata.is_directory,
+            metadata.file_type().is_dir(),
             &file_patterns,
           ) {
             // ignore
-          } else if metadata.is_directory {
+          } else if metadata.file_type().is_dir() {
             // allow the user to opt out of ignoring by explicitly specifying the dir
             let opt_out_ignore = specified_path == path;
             let should_ignore_dir =
@@ -161,17 +165,23 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
           }
         };
 
-      if let Ok(metadata) = fs.stat_sync(&specified_path) {
+      if let Ok(metadata) = sys.fs_metadata(&specified_path) {
         handle_entry(specified_path.clone(), &metadata, &mut pending_dirs);
       }
 
       // use an iterator in order to minimize the number of file system operations
       while let Some(next_dir) = pending_dirs.pop_front() {
-        let Ok(entries) = fs.read_dir(&next_dir) else {
+        let Ok(entries) = sys.fs_read_dir(&next_dir) else {
           continue;
         };
         for entry in entries {
-          handle_entry(entry.path, &entry.metadata, &mut pending_dirs)
+          let Ok(entry) = entry else {
+            continue;
+          };
+          let Ok(metadata) = entry.metadata() else {
+            continue;
+          };
+          handle_entry(entry.path().into_owned(), &metadata, &mut pending_dirs)
         }
       }
     }
@@ -207,10 +217,10 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
 mod test {
   use std::path::PathBuf;
 
+  use sys_traits::impls::RealSys;
   use tempfile::TempDir;
 
   use super::*;
-  use crate::fs::RealDenoConfigFs;
   use crate::glob::FilePatterns;
   use crate::glob::PathOrPattern;
   use crate::glob::PathOrPatternSet;
@@ -288,7 +298,7 @@ mod test {
     });
 
     let result = file_collector
-      .collect_file_patterns(&RealDenoConfigFs, file_patterns.clone());
+      .collect_file_patterns(&RealSys, file_patterns.clone());
     let expected = [
       "README.md",
       "a.ts",
@@ -314,7 +324,7 @@ mod test {
       .ignore_node_modules()
       .set_vendor_folder(Some(child_dir_path.join("vendor").to_path_buf()));
     let result = file_collector
-      .collect_file_patterns(&RealDenoConfigFs, file_patterns.clone());
+      .collect_file_patterns(&RealSys, file_patterns.clone());
     let expected = [
       "README.md",
       "a.ts",
@@ -345,7 +355,7 @@ mod test {
       )]),
     };
     let result =
-      file_collector.collect_file_patterns(&RealDenoConfigFs, file_patterns);
+      file_collector.collect_file_patterns(&RealSys, file_patterns);
     let expected = [
       "README.md",
       "a.ts",

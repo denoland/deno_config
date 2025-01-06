@@ -15,6 +15,9 @@ use deno_path_util::url_from_file_path;
 use deno_path_util::url_parent;
 use deno_path_util::url_to_file_path;
 use indexmap::IndexSet;
+use sys_traits::FsMetadata;
+use sys_traits::FsRead;
+use sys_traits::FsReadDir;
 use url::Url;
 
 use crate::deno_json::ConfigFile;
@@ -158,7 +161,10 @@ fn config_folder_config_specifier(res: &ConfigFolder) -> Cow<Url> {
   }
 }
 
-pub fn discover_workspace_config_files(
+pub fn discover_workspace_config_files<
+  TSys: FsRead + FsMetadata + FsReadDir,
+>(
+  sys: &TSys,
   start: WorkspaceDiscoverStart,
   opts: &WorkspaceDiscoverOptions,
 ) -> Result<ConfigFileDiscovery, WorkspaceDiscoverError> {
@@ -173,7 +179,7 @@ pub fn discover_workspace_config_files(
       1 => {
         let dir = &dirs[0];
         let start = DirOrConfigFile::Dir(dir);
-        discover_workspace_config_files_for_single_dir(start, opts, None)
+        discover_workspace_config_files_for_single_dir(sys, start, opts, None)
       }
       _ => {
         let mut checked = HashSet::default();
@@ -185,6 +191,7 @@ pub fn discover_workspace_config_files(
         };
         for dir in dirs {
           let workspace = discover_workspace_config_files_for_single_dir(
+            sys,
             DirOrConfigFile::Dir(dir),
             opts,
             Some(&mut checked),
@@ -211,7 +218,7 @@ pub fn discover_workspace_config_files(
     },
     WorkspaceDiscoverStart::ConfigFile(file) => {
       let start = DirOrConfigFile::ConfigFile(file);
-      discover_workspace_config_files_for_single_dir(start, opts, None)
+      discover_workspace_config_files_for_single_dir(sys, start, opts, None)
     }
   }
 }
@@ -222,7 +229,10 @@ enum DirOrConfigFile<'a> {
   ConfigFile(&'a Path),
 }
 
-fn discover_workspace_config_files_for_single_dir(
+fn discover_workspace_config_files_for_single_dir<
+  TSys: FsRead + FsMetadata + FsReadDir,
+>(
+  sys: &TSys,
   start: DirOrConfigFile,
   opts: &WorkspaceDiscoverOptions,
   mut checked: Option<&mut HashSet<PathBuf>>,
@@ -258,9 +268,9 @@ fn discover_workspace_config_files_for_single_dir(
     if opts.discover_pkg_json {
       let pkg_json_path = folder_path.join("package.json");
       match PackageJson::load_from_path(
-        &pkg_json_path,
-        &crate::fs::DenoConfigPkgJsonAdapterFs(opts.fs),
+        sys,
         opts.pkg_json_cache,
+        &pkg_json_path,
       ) {
         Ok(pkg_json) => {
           log::debug!(
@@ -282,7 +292,7 @@ fn discover_workspace_config_files_for_single_dir(
   };
   let load_config_folder = |folder_path: &Path| -> Result<_, ConfigReadError> {
     let maybe_config_file = ConfigFile::maybe_find_in_folder(
-      opts.fs,
+      sys,
       opts.deno_json_cache,
       folder_path,
       &config_file_names,
@@ -302,7 +312,7 @@ fn discover_workspace_config_files_for_single_dir(
       let specifier = url_from_file_path(file).unwrap();
       let config_file = new_rc(
         ConfigFile::from_specifier(
-          opts.fs,
+          sys,
           specifier.clone(),
           &opts.config_parse_options,
         )
@@ -338,6 +348,7 @@ fn discover_workspace_config_files_for_single_dir(
 
           if config_folder.has_workspace_members() {
             return handle_workspace_folder_with_members(
+              sys,
               config_folder,
               Some(&parent_dir_url),
               opts,
@@ -350,8 +361,11 @@ fn discover_workspace_config_files_for_single_dir(
             config_folder.deno_json().map(|d| d.as_ref()),
             opts.maybe_vendor_override.as_ref(),
           );
-          let patches =
-            resolve_patch_config_folders(&config_folder, load_config_folder)?;
+          let patches = resolve_patch_config_folders(
+            sys,
+            &config_folder,
+            load_config_folder,
+          )?;
           return Ok(ConfigFileDiscovery::Workspace {
             workspace: new_rc(Workspace::new(
               config_folder,
@@ -383,6 +397,7 @@ fn discover_workspace_config_files_for_single_dir(
 
       if config_folder.has_workspace_members() {
         return handle_workspace_folder_with_members(
+          sys,
           config_folder,
           Some(&parent_dir_url),
           opts,
@@ -430,6 +445,7 @@ fn discover_workspace_config_files_for_single_dir(
       }
 
       return handle_workspace_with_members(
+        sys,
         workspace_with_members,
         first_config_folder_url.as_ref(),
         found_config_folders,
@@ -444,6 +460,7 @@ fn discover_workspace_config_files_for_single_dir(
     };
     if root_config_folder.has_workspace_members() {
       return handle_workspace_folder_with_members(
+        sys,
         root_config_folder,
         first_config_folder_url.as_ref(),
         opts,
@@ -486,7 +503,7 @@ fn discover_workspace_config_files_for_single_dir(
       opts.maybe_vendor_override.as_ref(),
     );
     let patches =
-      resolve_patch_config_folders(&config_folder, load_config_folder)?;
+      resolve_patch_config_folders(sys, &config_folder, load_config_folder)?;
     let workspace = new_rc(Workspace::new(
       config_folder,
       Default::default(),
@@ -507,7 +524,10 @@ fn discover_workspace_config_files_for_single_dir(
   }
 }
 
-fn handle_workspace_folder_with_members(
+fn handle_workspace_folder_with_members<
+  TSys: FsRead + FsMetadata + FsReadDir,
+>(
+  sys: &TSys,
   root_config_folder: ConfigFolder,
   first_config_folder_url: Option<&Url>,
   opts: &WorkspaceDiscoverOptions<'_>,
@@ -521,14 +541,17 @@ fn handle_workspace_folder_with_members(
     opts.maybe_vendor_override.as_ref(),
   );
   let raw_root_workspace = resolve_workspace_for_config_folder(
+    sys,
     root_config_folder,
     maybe_vendor_dir,
-    opts,
     &mut found_config_folders,
     load_config_folder,
   )?;
-  let patches =
-    resolve_patch_config_folders(&raw_root_workspace.root, load_config_folder)?;
+  let patches = resolve_patch_config_folders(
+    sys,
+    &raw_root_workspace.root,
+    load_config_folder,
+  )?;
   let root_workspace = new_rc(Workspace::new(
     raw_root_workspace.root,
     raw_root_workspace.members,
@@ -539,6 +562,7 @@ fn handle_workspace_folder_with_members(
     cache.set(root_workspace.root_dir_path(), root_workspace.clone());
   }
   handle_workspace_with_members(
+    sys,
     root_workspace,
     first_config_folder_url,
     found_config_folders,
@@ -547,7 +571,8 @@ fn handle_workspace_folder_with_members(
   )
 }
 
-fn handle_workspace_with_members(
+fn handle_workspace_with_members<TSys: FsRead + FsMetadata + FsReadDir>(
+  sys: &TSys,
   root_workspace: WorkspaceRc,
   first_config_folder_url: Option<&Url>,
   mut found_config_folders: HashMap<Url, ConfigFolder>,
@@ -575,8 +600,11 @@ fn handle_workspace_with_members(
             config_folder.deno_json().map(|d| d.as_ref()),
             opts.maybe_vendor_override.as_ref(),
           );
-          let patches =
-            resolve_patch_config_folders(&config_folder, load_config_folder)?;
+          let patches = resolve_patch_config_folders(
+            sys,
+            &config_folder,
+            load_config_folder,
+          )?;
           let workspace = new_rc(Workspace::new(
             config_folder,
             Default::default(),
@@ -638,10 +666,12 @@ struct RawResolvedWorkspace {
   vendor_dir: Option<PathBuf>,
 }
 
-fn resolve_workspace_for_config_folder(
+fn resolve_workspace_for_config_folder<
+  TSys: FsRead + FsMetadata + FsReadDir,
+>(
+  sys: &TSys,
   root_config_folder: ConfigFolder,
   maybe_vendor_dir: Option<PathBuf>,
-  opts: &WorkspaceDiscoverOptions,
   found_config_folders: &mut HashMap<Url, ConfigFolder>,
   load_config_folder: impl Fn(
     &Path,
@@ -740,7 +770,7 @@ fn resolve_workspace_for_config_folder(
           .ignore_node_modules()
           .set_vendor_folder(maybe_vendor_dir.clone())
           .collect_file_patterns(
-            opts.fs,
+            sys,
             FilePatterns {
               base: dir_path.to_path_buf(),
               include: Some(PathOrPatternSet::new(patterns)),
@@ -878,7 +908,8 @@ fn resolve_workspace_for_config_folder(
   })
 }
 
-fn resolve_patch_config_folders(
+fn resolve_patch_config_folders<TSys: FsRead + FsMetadata + FsReadDir>(
+  sys: &TSys,
   root_config_folder: &ConfigFolder,
   load_config_folder: impl Fn(
     &Path,
@@ -907,13 +938,16 @@ fn resolve_patch_config_folders(
   let mut final_config_folders = BTreeMap::new();
   for raw_member in &patch_members {
     let patch_dir_url = resolve_patch_dir_url(raw_member)?;
-    let patch_configs =
-      resolve_patch_member_config_folders(&patch_dir_url, &load_config_folder)
-        .map_err(|err| WorkspaceDiscoverErrorKind::ResolvePatch {
-          base: root_config_file_directory_url.clone(),
-          patch: raw_member.to_string(),
-          source: err,
-        })?;
+    let patch_configs = resolve_patch_member_config_folders(
+      sys,
+      &patch_dir_url,
+      &load_config_folder,
+    )
+    .map_err(|err| WorkspaceDiscoverErrorKind::ResolvePatch {
+      base: root_config_file_directory_url.clone(),
+      patch: raw_member.to_string(),
+      source: err,
+    })?;
 
     for patch_config_url in patch_configs.keys() {
       if *patch_config_url.as_ref() == root_config_file_directory_url {
@@ -934,7 +968,10 @@ fn resolve_patch_config_folders(
   Ok(final_config_folders)
 }
 
-fn resolve_patch_member_config_folders(
+fn resolve_patch_member_config_folders<
+  TSys: FsRead + FsMetadata + FsReadDir,
+>(
+  sys: &TSys,
   patch_dir_url: &Url,
   load_config_folder: impl Fn(
     &Path,
@@ -951,9 +988,9 @@ fn resolve_patch_member_config_folders(
     let maybe_vendor_dir =
       resolve_vendor_dir(config_folder.deno_json().map(|d| d.as_ref()), None);
     let mut raw_workspace = resolve_workspace_for_config_folder(
+      sys,
       config_folder,
       maybe_vendor_dir,
-      &WorkspaceDiscoverOptions::default(),
       &mut HashMap::new(),
       &load_config_folder,
     )
@@ -974,9 +1011,9 @@ fn resolve_patch_member_config_folders(
           None,
         );
         let Ok(mut raw_workspace) = resolve_workspace_for_config_folder(
+          sys,
           config_folder,
           maybe_vendor_dir,
-          &WorkspaceDiscoverOptions::default(),
           &mut HashMap::new(),
           &load_config_folder,
         ) else {

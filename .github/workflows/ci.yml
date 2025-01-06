@@ -18,7 +18,6 @@ jobs:
     env:
       CARGO_INCREMENTAL: 0
       GH_ACTIONS: 1
-      RUST_BACKTRACE: full
       RUSTFLAGS: -D warnings
 
     steps:
