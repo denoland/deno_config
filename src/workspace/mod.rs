@@ -1403,7 +1403,7 @@ impl WorkspaceDirectory {
     Ok(LintConfig {
       options: LintOptionsConfig {
         plugins: member_opts.plugins,
-        rules: {      
+        rules: {
           LintRulesConfig {
             tags: combine_option_vecs(
               root_opts.rules.tags,
