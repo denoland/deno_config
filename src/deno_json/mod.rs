@@ -2036,9 +2036,10 @@ mod tests {
     .unwrap();
 
     let err = config_file.to_fmt_config().err().unwrap();
+    assert_eq!(err.to_string(), "Invalid fmt config");
     assert_eq!(
-      format!("{}", err),
-      r#"Invalid fmt config: Invalid exclude: The negation of '!dist/data' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data' after 'dist/'."#
+      std::error::Error::source(&err).unwrap().to_string(),
+      r#"Invalid exclude: The negation of '!dist/data' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data' after 'dist/'."#
     );
   }
 
@@ -2058,9 +2059,10 @@ mod tests {
     .unwrap();
 
     let err = config_file.to_lint_config().err().unwrap();
+    assert_eq!(err.to_string(), "Invalid lint config");
     assert_eq!(
-      format!("{}", err),
-      r#"Invalid lint config: Invalid exclude: The negation of '!dist/data/**/*.ts' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data/**/*.ts' after 'dist/'."#
+      std::error::Error::source(&err).unwrap().to_string(),
+      r#"Invalid exclude: The negation of '!dist/data/**/*.ts' is never reached due to the higher priority 'dist/' exclude. Move '!dist/data/**/*.ts' after 'dist/'."#
     );
   }
 
