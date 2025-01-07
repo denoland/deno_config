@@ -26,6 +26,7 @@ use discovery::ConfigFileDiscovery;
 use discovery::ConfigFolder;
 use discovery::DenoOrPkgJson;
 use indexmap::IndexMap;
+use indexmap::IndexSet;
 use sys_traits::FsMetadata;
 use sys_traits::FsRead;
 use sys_traits::FsReadDir;
@@ -1400,9 +1401,19 @@ impl WorkspaceDirectory {
     let root_opts = root_config.options;
     let member_opts = member_config.options;
 
+    let plugins = IndexSet::<String>::from_iter(
+      root_opts
+        .plugins
+        .into_iter()
+        .chain(member_opts.plugins.into_iter()),
+    )
+    .into_iter()
+    .filter(|name| !name.starts_with('!'))
+    .collect::<Vec<_>>();
+
     Ok(LintConfig {
       options: LintOptionsConfig {
-        plugins: member_opts.plugins,
+        plugins,
         rules: {
           LintRulesConfig {
             tags: combine_option_vecs(
@@ -2711,7 +2722,7 @@ mod test {
             "include": ["rule1"],
             "exclude": ["rule2"],
           },
-          "plugins": ["jsr:@deno/test-plugin1"]
+          "plugins": ["jsr:@deno/test-plugin1", "jsr:@deno/test-plugin2"]
         }
       }),
       json!({
@@ -2722,7 +2733,7 @@ mod test {
             "tags": ["tag1"],
             "include": ["rule2"],
           },
-          "plugins": ["jsr:@deno/test-plugin2"]
+          "plugins": ["jsr:@deno/test-plugin2","!jsr:@deno/test-plugin3"]
         }
       }),
     );
@@ -2752,7 +2763,10 @@ mod test {
             include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
             exclude: Some(vec![])
           },
-          plugins: vec!["jsr:@deno/test-plugin2".to_string()],
+          plugins: vec![
+            "jsr:@deno/test-plugin1".to_string(),
+            "jsr:@deno/test-plugin2".to_string()
+          ],
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -2780,7 +2794,10 @@ mod test {
             include: Some(vec!["rule1".to_string()]),
             exclude: Some(vec!["rule2".to_string()])
           },
-          plugins: vec!["jsr:@deno/test-plugin1".to_string()]
+          plugins: vec![
+            "jsr:@deno/test-plugin1".to_string(),
+            "jsr:@deno/test-plugin2".to_string()
+          ]
         },
         files: FilePatterns {
           base: root_dir(),
