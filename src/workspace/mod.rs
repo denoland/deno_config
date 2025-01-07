@@ -2733,7 +2733,7 @@ mod test {
             "tags": ["tag1"],
             "include": ["rule2"],
           },
-          "plugins": ["jsr:@deno/test-plugin2","!jsr:@deno/test-plugin3"]
+          "plugins": ["jsr:@deno/test-plugin2", "!jsr:@deno/test-plugin3"]
         }
       }),
     );
