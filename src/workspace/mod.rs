@@ -1402,10 +1402,7 @@ impl WorkspaceDirectory {
     let member_opts = member_config.options;
 
     let plugins = IndexSet::<String>::from_iter(
-      root_opts
-        .plugins
-        .into_iter()
-        .chain(member_opts.plugins.into_iter()),
+      root_opts.plugins.into_iter().chain(member_opts.plugins),
     )
     .into_iter()
     .filter(|name| !name.starts_with('!'))
