@@ -4,7 +4,7 @@ use crate::deno_json::ConfigFileError;
 use crate::sync::new_rc;
 use crate::workspace::Workspace;
 use deno_error::JsError;
-use deno_error::JsErrorClass;
+use deno_error::JsErrorBox;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDepWorkspaceReq;
@@ -18,10 +18,11 @@ use deno_semver::RangeSetOrTag;
 use deno_semver::Version;
 use deno_semver::VersionReq;
 use import_map::specifier::SpecifierError;
+use import_map::ImportMap;
 use import_map::ImportMapDiagnostic;
 use import_map::ImportMapError;
+use import_map::ImportMapErrorKind;
 use import_map::ImportMapWithDiagnostics;
-use import_map::{ImportMap, ImportMapErrorKind};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -251,12 +252,12 @@ impl WorkspaceResolver {
   pub(crate) fn from_workspace(
     workspace: &Workspace,
     options: CreateResolverOptions,
-    read_file: impl FnOnce(&Path) -> Result<String, Box<dyn JsErrorClass>>,
+    read_file: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     fn resolve_import_map(
       workspace: &Workspace,
       specified_import_map: Option<SpecifiedImportMap>,
-      read_file: impl FnOnce(&Path) -> Result<String, Box<dyn JsErrorClass>>,
+      read_file: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
       let root_deno_json = workspace.root_deno_json();

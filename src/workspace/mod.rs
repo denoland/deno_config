@@ -1,7 +1,7 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use deno_error::JsError;
-use deno_error::JsErrorClass;
+use deno_error::JsErrorBox;
 use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
@@ -31,6 +31,8 @@ use thiserror::Error;
 use url::Url;
 
 use crate::deno_json;
+use crate::deno_json::get_ts_config_for_emit;
+use crate::deno_json::BenchConfig;
 use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileError;
 use crate::deno_json::ConfigFileRc;
@@ -49,11 +51,11 @@ use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
+use crate::deno_json::ToInvalidConfigError;
+use crate::deno_json::ToLockConfigError;
 use crate::deno_json::TsConfigForEmit;
 use crate::deno_json::TsConfigType;
 use crate::deno_json::WorkspaceConfigParseError;
-use crate::deno_json::{get_ts_config_for_emit, ToInvalidConfigError};
-use crate::deno_json::{BenchConfig, ToLockConfigError};
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPattern;
 use crate::glob::PathOrPatternParseError;
@@ -559,7 +561,7 @@ impl Workspace {
   pub fn create_resolver(
     &self,
     options: CreateResolverOptions,
-    read_text: impl FnOnce(&Path) -> Result<String, Box<dyn JsErrorClass>>,
+    read_text: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
     WorkspaceResolver::from_workspace(self, options, read_text)
   }

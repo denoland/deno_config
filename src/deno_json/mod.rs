@@ -2,7 +2,7 @@
 
 use boxed_error::Boxed;
 use deno_error::JsError;
-use deno_error::JsErrorClass;
+use deno_error::JsErrorBox;
 use deno_path_util::url_from_file_path;
 use deno_path_util::url_parent;
 use deno_path_util::url_to_file_path;
@@ -725,8 +725,8 @@ pub enum ConfigFileError {
   #[error(transparent)]
   ImportMap(#[from] import_map::ImportMapError),
   #[class(inherit)]
-  #[error("{0}")]
-  Other(Box<dyn JsErrorClass>),
+  #[error(transparent)]
+  Other(JsErrorBox),
 }
 
 #[derive(Debug, Error, JsError)]
@@ -1072,7 +1072,7 @@ impl ConfigFile {
   /// at the "importMap" entry.
   pub fn to_import_map(
     &self,
-    fetch_text: impl FnOnce(&Path) -> Result<String, Box<dyn JsErrorClass>>,
+    fetch_text: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
   ) -> Result<Option<ImportMapWithDiagnostics>, ConfigFileError> {
     let maybe_result = self.to_import_map_value(fetch_text)?;
     match maybe_result {
@@ -1089,7 +1089,7 @@ impl ConfigFile {
   /// file specified at the "importMap" entry.
   pub fn to_import_map_value(
     &self,
-    read_file: impl FnOnce(&Path) -> Result<String, Box<dyn JsErrorClass>>,
+    read_file: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
   ) -> Result<Option<(Cow<Url>, serde_json::Value)>, ConfigFileError> {
     // has higher precedence over the path
     if self.json.imports.is_some() || self.json.scopes.is_some() {
