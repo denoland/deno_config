@@ -2736,12 +2736,9 @@ mod tests {
       },
     }"#;
 
-    let config = ConfigFile::new(
-      config_text,
-      root_url().join("deno.jsonc").unwrap(),
-      &Default::default(),
-    )
-    .unwrap();
+    let config =
+      ConfigFile::new(config_text, root_url().join("deno.jsonc").unwrap())
+        .unwrap();
     assert_eq!(
       config.resolve_tasks_config().unwrap(),
       IndexMap::from([

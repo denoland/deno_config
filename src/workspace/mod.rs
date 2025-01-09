@@ -5243,7 +5243,6 @@ mod test {
     let new_config_file = ConfigFile::new(
       r#"{ "nodeModulesDir": false }"#,
       Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      &Default::default(),
     )
     .unwrap();
     cache
