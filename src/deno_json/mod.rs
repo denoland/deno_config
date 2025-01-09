@@ -706,9 +706,6 @@ pub trait DenoJsonCache {
   fn set(&self, path: PathBuf, deno_json: ConfigFileRc);
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct ConfigParseOptions {}
-
 #[derive(Debug, Error, JsError)]
 pub enum ConfigFileError {
   #[class(type)]
@@ -910,7 +907,6 @@ impl ConfigFile {
     maybe_cache: Option<&dyn DenoJsonCache>,
     folder: &Path,
     config_file_names: &[&str],
-    parse_options: &ConfigParseOptions,
   ) -> Result<Option<ConfigFileRc>, ConfigFileReadError> {
     fn is_skippable_err(e: &ConfigFileReadError) -> bool {
       if let ConfigFileReadError::FailedReading { source: ioerr, .. } = e {
@@ -925,7 +921,7 @@ impl ConfigFile {
       if let Some(item) = maybe_cache.and_then(|c| c.get(&file_path)) {
         return Ok(Some(item));
       }
-      match ConfigFile::read(sys, &file_path, parse_options) {
+      match ConfigFile::read(sys, &file_path) {
         Ok(cf) => {
           let cf = crate::sync::new_rc(cf);
           log::debug!("Config file found at '{}'", file_path.display());
@@ -948,28 +944,25 @@ impl ConfigFile {
   pub fn read(
     sys: &impl FsRead,
     config_path: &Path,
-    parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
     debug_assert!(config_path.is_absolute());
     let specifier = url_from_file_path(config_path)
       .map_err(|_| ConfigFileReadError::PathToUrl(config_path.to_path_buf()))?;
-    Self::from_specifier_and_path(sys, specifier, config_path, parse_options)
+    Self::from_specifier_and_path(sys, specifier, config_path)
   }
 
   pub fn from_specifier(
     sys: &impl FsRead,
     specifier: Url,
-    parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
     let config_path = url_to_file_path(&specifier)?;
-    Self::from_specifier_and_path(sys, specifier, &config_path, parse_options)
+    Self::from_specifier_and_path(sys, specifier, &config_path)
   }
 
   fn from_specifier_and_path(
     sys: &impl FsRead,
     specifier: Url,
     config_path: &Path,
-    parse_options: &ConfigParseOptions,
   ) -> Result<Self, ConfigFileReadError> {
     let text = sys.fs_read_to_string_lossy(config_path).map_err(|err| {
       ConfigFileReadError::FailedReading {
@@ -977,14 +970,10 @@ impl ConfigFile {
         source: err,
       }
     })?;
-    Self::new(&text, specifier, parse_options)
+    Self::new(&text, specifier)
   }
 
-  pub fn new(
-    text: &str,
-    specifier: Url,
-    _parse_options: &ConfigParseOptions,
-  ) -> Result<Self, ConfigFileReadError> {
+  pub fn new(text: &str, specifier: Url) -> Result<Self, ConfigFileReadError> {
     let jsonc = match jsonc_parser::parse_to_ast(
       text,
       &Default::default(),
@@ -1876,25 +1865,14 @@ mod tests {
   #[test]
   fn read_config_file_absolute() {
     let path = testdata_path().join("module_graph/tsconfig.json");
-    let config_file = ConfigFile::read(
-      &RealSys,
-      path.as_path(),
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::read(&RealSys, path.as_path()).unwrap();
     assert!(config_file.json.compiler_options.is_some());
   }
 
   #[test]
   fn include_config_path_on_error() {
     let path = testdata_path().join("404.json");
-    let error = ConfigFile::read(
-      &RealSys,
-      path.as_path(),
-      &ConfigParseOptions::default(),
-    )
-    .err()
-    .unwrap();
+    let error = ConfigFile::read(&RealSys, path.as_path()).err().unwrap();
     assert!(error.to_string().contains("404.json"));
   }
 
@@ -1936,12 +1914,8 @@ mod tests {
     }"#;
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier.clone(),
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file =
+      ConfigFile::new(config_text, config_specifier.clone()).unwrap();
     let ParsedTsConfigOptions {
       options,
       maybe_ignored,
@@ -2034,12 +2008,7 @@ mod tests {
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
     let err = config_file.to_fmt_config().err().unwrap();
     assert_eq!(err.to_string(), "Invalid fmt config");
@@ -2057,12 +2026,7 @@ mod tests {
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
     let err = config_file.to_lint_config().err().unwrap();
     assert_eq!(err.to_string(), "Invalid lint config");
@@ -2090,18 +2054,10 @@ mod tests {
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file_both = ConfigFile::new(
-      config_text_both,
-      config_specifier.clone(),
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
-    let config_file_deprecated = ConfigFile::new(
-      config_text_deprecated,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file_both =
+      ConfigFile::new(config_text_both, config_specifier.clone()).unwrap();
+    let config_file_deprecated =
+      ConfigFile::new(config_text_deprecated, config_specifier).unwrap();
 
     fn unpack_options(config_file: ConfigFile) -> FmtOptionsConfig {
       unpack_object(config_file.to_fmt_config(), "fmt").options
@@ -2118,12 +2074,7 @@ mod tests {
   fn test_parse_config_with_empty_file() {
     let config_text = "";
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     config_file.to_compiler_options().unwrap(); // no panic
   }
 
@@ -2131,12 +2082,7 @@ mod tests {
   fn test_parse_config_with_commented_file() {
     let config_text = r#"//{"foo":"bar"}"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     config_file.to_compiler_options().unwrap(); // no panic
   }
 
@@ -2150,12 +2096,7 @@ mod tests {
       "bench": {}
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
     config_file.to_compiler_options().unwrap(); // no panic
 
@@ -2187,12 +2128,7 @@ mod tests {
       }
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
     config_file.to_compiler_options().unwrap(); // no panic
 
@@ -2214,12 +2150,7 @@ mod tests {
       "exclude": ["npm/"]
     }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
 
     config_file.to_compiler_options().unwrap(); // no panic
 
@@ -2278,12 +2209,7 @@ mod tests {
   fn test_jsx_invalid_setting() {
     let config_text = r#"{ "compilerOptions": { "jsx": "preserve" } }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    let config = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config = ConfigFile::new(config_text, config_specifier).unwrap();
     assert_eq!(
       config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
       concat!(
@@ -2299,12 +2225,8 @@ mod tests {
     {
       let config_text =
         r#"{ "compilerOptions": { "jsxImportSource": "test" } }"#;
-      let config = ConfigFile::new(
-        config_text,
-        config_specifier.clone(),
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config =
+        ConfigFile::new(config_text, config_specifier.clone()).unwrap();
       assert_eq!(
         config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
         concat!(
@@ -2315,12 +2237,7 @@ mod tests {
     }
     {
       let config_text = r#"{ "compilerOptions": { "jsx": "react", "jsxImportSource": "test" } }"#;
-      let config = ConfigFile::new(
-        config_text,
-        config_specifier,
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config = ConfigFile::new(config_text, config_specifier).unwrap();
       assert_eq!(
         config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
         concat!(
@@ -2337,12 +2254,8 @@ mod tests {
     {
       let config_text =
         r#"{ "compilerOptions": { "jsxImportSourceTypes": "test" } }"#;
-      let config = ConfigFile::new(
-        config_text,
-        config_specifier.clone(),
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config =
+        ConfigFile::new(config_text, config_specifier.clone()).unwrap();
       assert_eq!(
         config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
         concat!(
@@ -2353,12 +2266,7 @@ mod tests {
     }
     {
       let config_text = r#"{ "compilerOptions": { "jsx": "react", "jsxImportSourceTypes": "test" } }"#;
-      let config = ConfigFile::new(
-        config_text,
-        config_specifier,
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config = ConfigFile::new(config_text, config_specifier).unwrap();
       assert_eq!(
         config.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
         concat!(
@@ -2442,12 +2350,7 @@ mod tests {
   fn run_task_error_test(config_text: &str, expected_error: &str) {
     let config_dir = Url::parse("file:///deno/").unwrap();
     let config_specifier = config_dir.join("tsconfig.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     assert_eq!(
       config_file.resolve_tasks_config().unwrap_err().to_string(),
       expected_error,
@@ -2462,12 +2365,9 @@ mod tests {
 
   #[test]
   fn resolve_lockfile_path_from_unix_path() {
-    let config_file = ConfigFile::new(
-      "{}",
-      Url::parse("file:///root/deno.json").unwrap(),
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file =
+      ConfigFile::new("{}", Url::parse("file:///root/deno.json").unwrap())
+        .unwrap();
     let lockfile_path = config_file.resolve_lockfile_path().unwrap();
     let lockfile_path = lockfile_path.unwrap();
     assert_eq!(lockfile_path, PathBuf::from("/root/deno.lock"));
@@ -2478,12 +2378,7 @@ mod tests {
     fn get_exports(config_text: &str) -> ExportsConfig {
       let config_dir = Url::parse("file:///deno/").unwrap();
       let config_specifier = config_dir.join("tsconfig.json").unwrap();
-      let config_file = ConfigFile::new(
-        config_text,
-        config_specifier,
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
       config_file.to_exports_config().unwrap()
     }
 
@@ -2521,12 +2416,7 @@ mod tests {
     fn run_test(config_text: &str, expected_error: &str) {
       let config_dir = Url::parse("file:///deno/").unwrap();
       let config_specifier = config_dir.join("tsconfig.json").unwrap();
-      let config_file = ConfigFile::new(
-        config_text,
-        config_specifier,
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
       assert_eq!(
         config_file.to_exports_config().unwrap_err().to_string(),
         expected_error,
@@ -2626,12 +2516,7 @@ mod tests {
     fn get_exports(config_text: &str) -> Vec<String> {
       let config_dir = Url::parse("file:///deno/").unwrap();
       let config_specifier = config_dir.join("tsconfig.json").unwrap();
-      let config_file = ConfigFile::new(
-        config_text,
-        config_specifier,
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
       config_file
         .resolve_export_value_urls()
         .unwrap()
@@ -2668,12 +2553,7 @@ mod tests {
   fn test_is_package() {
     fn get_for_config(config_text: &str) -> bool {
       let config_specifier = root_url().join("tsconfig.json").unwrap();
-      let config_file = ConfigFile::new(
-        config_text,
-        config_specifier,
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
       config_file.is_package()
     }
 
@@ -2718,12 +2598,7 @@ mod tests {
       }
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     let result = config_file.to_import_map_from_imports().unwrap();
 
     assert_eq!(
@@ -2744,12 +2619,7 @@ mod tests {
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     let result = config_file
       .to_import_map(|_url| unreachable!())
       .unwrap()
@@ -2777,12 +2647,7 @@ mod tests {
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     let result = config_file
       .to_import_map(|_url| unreachable!())
       .unwrap()
@@ -2813,12 +2678,7 @@ mod tests {
       "importMap": "import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     let result = config_file
       .to_import_map(|path| {
         assert_eq!(
@@ -2852,12 +2712,7 @@ mod tests {
       "importMap": "https://deno.land/import_map.json",
     }"#;
     let config_specifier = root_url().join("deno.json").unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     let err = config_file
       .to_import_map(|_url| unreachable!())
       .unwrap_err();
@@ -2928,12 +2783,7 @@ mod tests {
       .to_file_path()
       .unwrap();
     let config_specifier = Url::from_file_path(&file_path).unwrap();
-    let config_file = ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default(),
-    )
-    .unwrap();
+    let config_file = ConfigFile::new(config_text, config_specifier).unwrap();
     assert_eq!(
       config_file.to_import_map_path().unwrap().unwrap(),
       file_path
@@ -2966,12 +2816,9 @@ mod tests {
       (r#"{ "lock": {} }"#, (false, root_joined("deno.lock"))),
     ];
     for (config_text, (frozen, resolved_path)) in cases {
-      let config_file = ConfigFile::new(
-        config_text,
-        root_url().join("deno.json").unwrap(),
-        &ConfigParseOptions::default(),
-      )
-      .unwrap();
+      let config_file =
+        ConfigFile::new(config_text, root_url().join("deno.json").unwrap())
+          .unwrap();
       let lock_config = config_file.to_lock_config().unwrap().unwrap();
       assert_eq!(
         config_file.resolve_lockfile_path().unwrap().unwrap(),
