@@ -2184,12 +2184,7 @@ mod tests {
     let config_text = "{foo:bar}";
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
     // Emit error: Unable to parse config file JSON "<config_path>" because of Unexpected token on line 1 column 6.
-    assert!(ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default()
-    )
-    .is_err());
+    assert!(ConfigFile::new(config_text, config_specifier,).is_err());
   }
 
   #[test]
@@ -2197,12 +2192,7 @@ mod tests {
     let config_text = "[]";
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
     // Emit error: config file JSON "<config_path>" should be an object
-    assert!(ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default()
-    )
-    .is_err());
+    assert!(ConfigFile::new(config_text, config_specifier,).is_err());
   }
 
   #[test]
@@ -2281,24 +2271,14 @@ mod tests {
   fn test_jsx_import_source_valid() {
     let config_text = r#"{ "compilerOptions": { "jsx": "react" } }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    assert!(ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default()
-    )
-    .is_ok());
+    assert!(ConfigFile::new(config_text, config_specifier,).is_ok());
   }
 
   #[test]
   fn test_jsx_precompile_skip_setting() {
     let config_text = r#"{ "compilerOptions": { "jsx": "precompile", "jsxPrecompileSkipElements": ["a", "p"] } }"#;
     let config_specifier = Url::parse("file:///deno/tsconfig.json").unwrap();
-    assert!(ConfigFile::new(
-      config_text,
-      config_specifier,
-      &ConfigParseOptions::default()
-    )
-    .is_ok());
+    assert!(ConfigFile::new(config_text, config_specifier,).is_ok());
   }
 
   #[test]
