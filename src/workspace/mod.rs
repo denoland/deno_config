@@ -18,6 +18,7 @@ use discovery::ConfigFileDiscovery;
 use discovery::ConfigFolder;
 use discovery::DenoOrPkgJson;
 use indexmap::IndexMap;
+use indexmap::IndexSet;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -1442,11 +1443,38 @@ impl WorkspaceDirectory {
       None => return Ok(member_config),
     };
     // combine the configs
+    let root_opts = root_config.options;
+    let member_opts = member_config.options;
+
+    // 1. Merge workspace root + member plugins
+    // 2. Workspace member can filter out plugins by negating
+    //    like this: `!my-plugin`
+    // 3. Remove duplicates in case a plugin was defined in both
+    //    workspace root and member.
+    let excluded_plugins: HashSet<String> = HashSet::from_iter(
+      member_opts
+        .plugins
+        .iter()
+        .filter(|plugin| plugin.starts_with('!'))
+        .map(|plugin| plugin[1..].to_string()),
+    );
+
+    let filtered_plugins = IndexSet::<String>::from_iter(
+      root_opts
+        .plugins
+        .into_iter()
+        .chain(member_opts.plugins)
+        .filter(|plugin| {
+          !plugin.starts_with('!') && !excluded_plugins.contains(plugin)
+        }),
+    )
+    .into_iter()
+    .collect::<Vec<_>>();
+
     Ok(LintConfig {
       options: LintOptionsConfig {
+        plugins: filtered_plugins,
         rules: {
-          let root_opts = root_config.options;
-          let member_opts = member_config.options;
           LintRulesConfig {
             tags: combine_option_vecs(
               root_opts.rules.tags,
@@ -2761,6 +2789,7 @@ mod test {
             "include": ["rule1"],
             "exclude": ["rule2"],
           },
+          "plugins": ["jsr:@deno/test-plugin1", "jsr:@deno/test-plugin3"]
         }
       }),
       json!({
@@ -2770,7 +2799,12 @@ mod test {
           "rules": {
             "tags": ["tag1"],
             "include": ["rule2"],
-          }
+          },
+          "plugins": [
+            "jsr:@deno/test-plugin1",
+            "jsr:@deno/test-plugin2",
+            "!jsr:@deno/test-plugin3"
+          ]
         }
       }),
     );
@@ -2800,6 +2834,10 @@ mod test {
             include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
             exclude: Some(vec![])
           },
+          plugins: vec![
+            "jsr:@deno/test-plugin1".to_string(),
+            "jsr:@deno/test-plugin2".to_string()
+          ],
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -2827,6 +2865,10 @@ mod test {
             include: Some(vec!["rule1".to_string()]),
             exclude: Some(vec!["rule2".to_string()])
           },
+          plugins: vec![
+            "jsr:@deno/test-plugin1".to_string(),
+            "jsr:@deno/test-plugin3".to_string()
+          ]
         },
         files: FilePatterns {
           base: root_dir(),
