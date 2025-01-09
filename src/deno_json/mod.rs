@@ -2,7 +2,6 @@
 
 use boxed_error::Boxed;
 use deno_error::JsError;
-use deno_error::JsErrorBox;
 use deno_path_util::url_from_file_path;
 use deno_path_util::url_parent;
 use deno_path_util::url_to_file_path;
@@ -731,7 +730,7 @@ pub enum ConfigFileError {
   ImportMap(#[from] import_map::ImportMapError),
   #[class(inherit)]
   #[error(transparent)]
-  Other(JsErrorBox),
+  Io(std::io::Error),
 }
 
 #[derive(Debug, Error, JsError)]
@@ -1052,7 +1051,9 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, ConfigFileError> {
+  pub fn to_import_map_specifier(
+    &self,
+  ) -> Result<Option<Url>, ConfigFileError> {
     let Some(value) = self.json.import_map.as_ref() else {
       return Ok(None);
     };
@@ -1061,12 +1062,18 @@ impl ConfigFile {
       if specifier.scheme() != "file" {
         return Err(ConfigFileError::OnlyFileSpecifiersSupported);
       }
-      return Ok(Some(url_to_file_path(&specifier)?));
+      return Ok(Some(specifier));
     }
     // now as a relative file path
-    Ok(Some(url_to_file_path(
-      &url_parent(&self.specifier).join(value)?,
-    )?))
+    Ok(Some(url_parent(&self.specifier).join(value)?))
+  }
+
+  pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, ConfigFileError> {
+    let maybe_specifier = self.to_import_map_specifier()?;
+    match maybe_specifier {
+      Some(specifier) => Ok(Some(url_to_file_path(&specifier)?)),
+      None => Ok(None),
+    }
   }
 
   pub fn vendor(&self) -> Option<bool> {
@@ -1077,9 +1084,9 @@ impl ConfigFile {
   /// at the "importMap" entry.
   pub fn to_import_map(
     &self,
-    fetch_text: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
+    sys: &impl FsRead,
   ) -> Result<Option<ImportMapWithDiagnostics>, ConfigFileError> {
-    let maybe_result = self.to_import_map_value(fetch_text)?;
+    let maybe_result = self.to_import_map_value(sys)?;
     match maybe_result {
       Some((specifier, value)) => {
         let import_map =
@@ -1094,7 +1101,7 @@ impl ConfigFile {
   /// file specified at the "importMap" entry.
   pub fn to_import_map_value(
     &self,
-    read_file: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
+    sys: &impl FsRead,
   ) -> Result<Option<(Cow<Url>, serde_json::Value)>, ConfigFileError> {
     // has higher precedence over the path
     if self.json.imports.is_some() || self.json.scopes.is_some() {
@@ -1103,19 +1110,18 @@ impl ConfigFile {
         self.to_import_map_value_from_imports(),
       )))
     } else {
-      match self.to_import_map_path()? {
-        Some(import_map_path) => {
-          let text =
-            read_file(&import_map_path).map_err(ConfigFileError::Other)?;
-          let value = serde_json::from_str(&text)?;
-          // does not expand the imports because this one will use the import map standard
-          Ok(Some((
-            Cow::Owned(url_from_file_path(&import_map_path).unwrap()),
-            value,
-          )))
-        }
-        None => Ok(None),
-      }
+      let Some(specifier) = self.to_import_map_specifier()? else {
+        return Ok(None);
+      };
+      let Ok(import_map_path) = url_to_file_path(&specifier) else {
+        return Ok(None);
+      };
+      let text = sys
+        .fs_read_to_string_lossy(&import_map_path)
+        .map_err(ConfigFileError::Io)?;
+      let value = serde_json::from_str(&text)?;
+      // does not expand the imports because this one will use the import map standard
+      Ok(Some((Cow::Owned(specifier), value)))
     }
   }
 
@@ -1858,6 +1864,17 @@ mod tests {
       if !($(string.contains($test))||+) {
         panic!("{:?} does not contain any of {:?}", string, [$($test),+]);
       }
+    }
+  }
+
+  struct UnreachableSys;
+
+  impl sys_traits::BaseFsRead for UnreachableSys {
+    fn base_fs_read(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Cow<'static, [u8]>> {
+      unreachable!()
     }
   }
 
@@ -2750,10 +2767,7 @@ mod tests {
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let result = config_file
-      .to_import_map(|_url| unreachable!())
-      .unwrap()
-      .unwrap();
+    let result = config_file.to_import_map(&UnreachableSys).unwrap().unwrap();
 
     assert_eq!(
       result.import_map.base_url(),
@@ -2783,10 +2797,7 @@ mod tests {
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let result = config_file
-      .to_import_map(|_url| unreachable!())
-      .unwrap()
-      .unwrap();
+    let result = config_file.to_import_map(&UnreachableSys).unwrap().unwrap();
 
     assert_eq!(
       result.import_map.base_url(),
@@ -2809,6 +2820,23 @@ mod tests {
 
   #[test]
   fn test_to_import_map_import_map_entry() {
+    struct MockFs;
+
+    impl sys_traits::BaseFsRead for MockFs {
+      fn base_fs_read(
+        &self,
+        path: &Path,
+      ) -> std::io::Result<Cow<'static, [u8]>> {
+        assert_eq!(
+          path,
+          root_url().to_file_path().unwrap().join("import_map.json")
+        );
+        Ok(Cow::Borrowed(
+          r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#.as_bytes(),
+        ))
+      }
+    }
+
     let config_text = r#"{
       "importMap": "import_map.json",
     }"#;
@@ -2819,19 +2847,7 @@ mod tests {
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let result = config_file
-      .to_import_map(|path| {
-        assert_eq!(
-          path,
-          root_url().to_file_path().unwrap().join("import_map.json")
-        );
-        Ok(
-          r#"{ "imports": { "@std/test": "jsr:@std/test@0.2.0" } }"#
-            .to_string(),
-        )
-      })
-      .unwrap()
-      .unwrap();
+    let result = config_file.to_import_map(&MockFs).unwrap().unwrap();
 
     assert_eq!(
       result.import_map.base_url(),
@@ -2858,9 +2874,7 @@ mod tests {
       &ConfigParseOptions::default(),
     )
     .unwrap();
-    let err = config_file
-      .to_import_map(|_url| unreachable!())
-      .unwrap_err();
+    let err = config_file.to_import_map(&UnreachableSys).unwrap_err();
     assert_eq!(
       err.to_string(),
       concat!(
