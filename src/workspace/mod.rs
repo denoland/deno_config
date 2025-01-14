@@ -1,7 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use deno_error::JsError;
-use deno_error::JsErrorBox;
 use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
@@ -559,10 +558,10 @@ impl Workspace {
 
   pub fn create_resolver(
     &self,
+    sys: &impl FsRead,
     options: CreateResolverOptions,
-    read_text: impl FnOnce(&Path) -> Result<String, JsErrorBox>,
   ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(self, options, read_text)
+    WorkspaceResolver::from_workspace(self, sys, options)
   }
 
   /// Resolves a workspace directory, which can be used for deriving
@@ -2096,6 +2095,17 @@ mod test {
 
   use super::*;
 
+  struct UnreachableSys;
+
+  impl sys_traits::BaseFsRead for UnreachableSys {
+    fn base_fs_read(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Cow<'static, [u8]>> {
+      unreachable!()
+    }
+  }
+
   fn root_dir() -> PathBuf {
     if cfg!(windows) {
       PathBuf::from("C:\\Users\\user")
@@ -2677,7 +2687,7 @@ mod test {
     );
     let resolver = workspace_dir
       .workspace
-      .create_resolver(Default::default(), |_| unreachable!())
+      .create_resolver(&UnreachableSys, Default::default())
       .unwrap();
     assert_eq!(
       serde_json::from_str::<serde_json::Value>(
