@@ -1,10 +1,9 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use std::borrow::Cow;
-use std::collections::BTreeMap;
-use std::path::Path;
-
-use anyhow::Error as AnyError;
+use crate::deno_json::ConfigFileError;
+use crate::sync::new_rc;
+use crate::workspace::Workspace;
+use deno_error::JsError;
 use deno_package_json::PackageJsonDepValue;
 use deno_package_json::PackageJsonDepValueParseError;
 use deno_package_json::PackageJsonDepWorkspaceReq;
@@ -21,15 +20,17 @@ use import_map::specifier::SpecifierError;
 use import_map::ImportMap;
 use import_map::ImportMapDiagnostic;
 use import_map::ImportMapError;
+use import_map::ImportMapErrorKind;
 use import_map::ImportMapWithDiagnostics;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::Serialize;
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::path::Path;
+use sys_traits::FsRead;
 use thiserror::Error;
 use url::Url;
-
-use crate::sync::new_rc;
-use crate::workspace::Workspace;
 
 use super::UrlRc;
 
@@ -48,16 +49,23 @@ struct PkgJsonResolverFolderConfig {
   pkg_json: PackageJsonRc,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum WorkspaceResolverCreateError {
+  #[class(inherit)]
   #[error("Failed loading import map specified in '{referrer}'")]
   ImportMapFetch {
     referrer: Url,
     #[source]
-    source: AnyError,
+    #[inherit]
+    source: Box<ConfigFileError>,
   },
+  #[class(inherit)]
   #[error(transparent)]
-  ImportMap(#[from] import_map::ImportMapError),
+  ImportMap(
+    #[from]
+    #[inherit]
+    ImportMapError,
+  ),
 }
 
 /// Whether to resolve dependencies by reading the dependencies list
@@ -149,7 +157,8 @@ pub enum MappedResolution<'a> {
   },
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, JsError)]
+#[class(type)]
 pub enum WorkspaceResolveError {
   #[error("Failed joining '{}' to '{}'. {:#}", .sub_path, .base, .error)]
   InvalidExportPath {
@@ -165,12 +174,15 @@ pub enum WorkspaceResolveError {
   },
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum MappedResolutionError {
+  #[class(inherit)]
   #[error(transparent)]
   Specifier(#[from] SpecifierError),
+  #[class(inherit)]
   #[error(transparent)]
   ImportMap(#[from] ImportMapError),
+  #[class(inherit)]
   #[error(transparent)]
   Workspace(#[from] WorkspaceResolveError),
 }
@@ -182,16 +194,16 @@ impl MappedResolutionError {
         SpecifierError::InvalidUrl(_) => false,
         SpecifierError::ImportPrefixMissing { .. } => true,
       },
-      MappedResolutionError::ImportMap(err) => match err {
-        ImportMapError::UnmappedBareSpecifier(_, _) => true,
-        ImportMapError::Other(_) => false,
-      },
+      MappedResolutionError::ImportMap(err) => {
+        matches!(**err, ImportMapErrorKind::UnmappedBareSpecifier(_, _))
+      }
       MappedResolutionError::Workspace(_) => false,
     }
   }
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, JsError)]
+#[class(inherit)]
 #[error(transparent)]
 pub struct WorkspaceResolvePkgJsonFolderError(
   Box<WorkspaceResolvePkgJsonFolderErrorKind>,
@@ -218,7 +230,8 @@ where
   }
 }
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, JsError, Clone, PartialEq, Eq)]
+#[class(type)]
 pub enum WorkspaceResolvePkgJsonFolderErrorKind {
   #[error("Could not find package.json with name '{0}' in workspace.")]
   NotFound(String),
@@ -238,13 +251,13 @@ pub struct WorkspaceResolver {
 impl WorkspaceResolver {
   pub(crate) fn from_workspace(
     workspace: &Workspace,
+    sys: &impl FsRead,
     options: CreateResolverOptions,
-    read_file: impl FnOnce(&Path) -> Result<String, AnyError>,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     fn resolve_import_map(
+      sys: &impl FsRead,
       workspace: &Workspace,
       specified_import_map: Option<SpecifiedImportMap>,
-      read_file: impl FnOnce(&Path) -> Result<String, AnyError>,
     ) -> Result<Option<ImportMapWithDiagnostics>, WorkspaceResolverCreateError>
     {
       let root_deno_json = workspace.root_deno_json();
@@ -269,10 +282,10 @@ impl WorkspaceResolver {
 
           let config_specified_import_map = match root_deno_json.as_ref() {
             Some(deno_json) => deno_json
-              .to_import_map_value(read_file)
+              .to_import_map_value(sys)
               .map_err(|source| WorkspaceResolverCreateError::ImportMapFetch {
                 referrer: deno_json.specifier.clone(),
-                source,
+                source: Box::new(source),
               })?
               .unwrap_or_else(|| {
                 (
@@ -327,7 +340,7 @@ impl WorkspaceResolver {
     }
 
     let maybe_import_map =
-      resolve_import_map(workspace, options.specified_import_map, read_file)?;
+      resolve_import_map(sys, workspace, options.specified_import_map)?;
     let jsr_pkgs = workspace.resolver_jsr_pkgs().collect::<Vec<_>>();
     let pkg_jsons = workspace
       .resolver_pkg_jsons()
@@ -443,7 +456,7 @@ impl WorkspaceResolver {
   pub fn try_from_serializable(
     root_dir_url: Url,
     serializable_workspace_resolver: SerializableWorkspaceResolver,
-  ) -> anyhow::Result<Self> {
+  ) -> Result<Self, ImportMapError> {
     let import_map = match serializable_workspace_resolver.import_map {
       Some(import_map) => Some(
         import_map::parse_from_json_with_options(
@@ -869,6 +882,17 @@ mod test {
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
 
+  struct UnreachableSys;
+
+  impl sys_traits::BaseFsRead for UnreachableSys {
+    fn base_fs_read(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Cow<'static, [u8]>> {
+      unreachable!()
+    }
+  }
+
   fn root_dir() -> PathBuf {
     if cfg!(windows) {
       PathBuf::from("C:\\Users\\user")
@@ -1187,6 +1211,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
+        &UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: Some(SpecifiedImportMap {
@@ -1198,7 +1223,6 @@ mod test {
             }),
           }),
         },
-        |_| unreachable!(),
       )
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
@@ -1227,6 +1251,7 @@ mod test {
     workspace_dir
       .workspace
       .create_resolver(
+        &UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: Some(SpecifiedImportMap {
@@ -1238,7 +1263,6 @@ mod test {
             }),
           }),
         },
-        |_| unreachable!(),
       )
       .unwrap();
   }
@@ -1264,11 +1288,11 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
+        &UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| unreachable!(),
       )
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
@@ -1337,11 +1361,11 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
+        &UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| unreachable!(),
       )
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
@@ -1387,11 +1411,11 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
+        &UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| unreachable!(),
       )
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
@@ -1475,11 +1499,11 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
+        &UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| unreachable!(),
       )
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
@@ -1554,11 +1578,11 @@ mod test {
     workspace_dir
       .workspace
       .create_resolver(
+        &UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
         },
-        |_| unreachable!(),
       )
       .unwrap()
   }

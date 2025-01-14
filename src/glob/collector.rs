@@ -72,7 +72,7 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
     &self,
     sys: &TSys,
     file_patterns: FilePatterns,
-  ) -> Result<Vec<PathBuf>, anyhow::Error> {
+  ) -> Vec<PathBuf> {
     fn is_pattern_matched(
       maybe_git_ignore: Option<&DirGitIgnores>,
       path: &Path,
@@ -185,7 +185,7 @@ impl<TFilter: Fn(WalkEntry) -> bool> FileCollector<TFilter> {
         }
       }
     }
-    Ok(target_files)
+    target_files
   }
 
   fn is_ignored_dir(&self, path: &Path) -> bool {
@@ -297,9 +297,8 @@ mod test {
         .unwrap_or(false)
     });
 
-    let result = file_collector
-      .collect_file_patterns(&RealSys, file_patterns.clone())
-      .unwrap();
+    let result =
+      file_collector.collect_file_patterns(&RealSys, file_patterns.clone());
     let expected = [
       "README.md",
       "a.ts",
@@ -324,9 +323,8 @@ mod test {
       .ignore_git_folder()
       .ignore_node_modules()
       .set_vendor_folder(Some(child_dir_path.join("vendor").to_path_buf()));
-    let result = file_collector
-      .collect_file_patterns(&RealSys, file_patterns.clone())
-      .unwrap();
+    let result =
+      file_collector.collect_file_patterns(&RealSys, file_patterns.clone());
     let expected = [
       "README.md",
       "a.ts",
@@ -356,9 +354,7 @@ mod test {
         ignore_dir_path.to_path_buf(),
       )]),
     };
-    let result = file_collector
-      .collect_file_patterns(&RealSys, file_patterns)
-      .unwrap();
+    let result = file_collector.collect_file_patterns(&RealSys, file_patterns);
     let expected = [
       "README.md",
       "a.ts",

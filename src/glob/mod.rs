@@ -1,13 +1,12 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use std::borrow::Cow;
-use std::path::Path;
-use std::path::PathBuf;
-
-use anyhow::bail;
+use deno_error::JsError;
 use deno_path_util::normalize_path;
 use deno_path_util::url_to_file_path;
 use indexmap::IndexMap;
+use std::borrow::Cow;
+use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
 use url::Url;
 
@@ -308,6 +307,19 @@ pub enum PathOrPatternsMatch {
   Excluded,
 }
 
+#[derive(Debug, Error, JsError)]
+pub enum FromExcludeRelativePathOrPatternsError {
+  #[class(type)]
+  #[error("The negation of '{negated_entry}' is never reached due to the higher priority '{entry}' exclude. Move '{negated_entry}' after '{entry}'.")]
+  HigherPriorityExclude {
+    negated_entry: String,
+    entry: String,
+  },
+  #[class(inherit)]
+  #[error("{0}")]
+  PathOrPatternParse(#[from] PathOrPatternParseError),
+}
+
 #[derive(Clone, Default, Debug, Hash, Eq, PartialEq)]
 pub struct PathOrPatternSet(Vec<PathOrPattern>);
 
@@ -316,7 +328,9 @@ impl PathOrPatternSet {
     Self(elements)
   }
 
-  pub fn from_absolute_paths(paths: &[String]) -> Result<Self, anyhow::Error> {
+  pub fn from_absolute_paths(
+    paths: &[String],
+  ) -> Result<Self, PathOrPatternParseError> {
     Ok(Self(
       paths
         .iter()
@@ -343,23 +357,21 @@ impl PathOrPatternSet {
   pub fn from_exclude_relative_path_or_patterns(
     base: &Path,
     entries: &[String],
-  ) -> Result<Self, anyhow::Error> {
+  ) -> Result<Self, FromExcludeRelativePathOrPatternsError> {
     // error when someone does something like:
     // exclude: ["!./a/b", "./a"] as it should be the opposite
     fn validate_entry(
       found_negated_paths: &Vec<(&str, PathBuf)>,
       entry: &str,
       entry_path: &Path,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), FromExcludeRelativePathOrPatternsError> {
       for (negated_entry, negated_path) in found_negated_paths {
         if negated_path.starts_with(entry_path) {
-          bail!(
-            concat!(
-              "The negation of '{0}' is never reached due to the higher ",
-              "priority '{1}' exclude. Move '{0}' after '{1}'.",
-            ),
-            negated_entry,
-            entry,
+          return Err(
+            FromExcludeRelativePathOrPatternsError::HigherPriorityExclude {
+              negated_entry: negated_entry.to_string(),
+              entry: entry.to_string(),
+            },
           );
         }
       }
@@ -449,20 +461,25 @@ impl PathOrPatternSet {
   }
 }
 
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, JsError, Clone)]
+#[class(inherit)]
 #[error("Invalid URL '{}'", url)]
 pub struct UrlParseError {
   url: String,
   #[source]
+  #[inherit]
   source: url::ParseError,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
 pub enum PathOrPatternParseError {
+  #[class(inherit)]
   #[error(transparent)]
   UrlParse(#[from] UrlParseError),
+  #[class(inherit)]
   #[error(transparent)]
   UrlToFilePathError(#[from] UrlToFilePathError),
+  #[class(inherit)]
   #[error(transparent)]
   GlobParse(#[from] GlobPatternParseError),
 }
@@ -564,7 +581,8 @@ pub enum PathGlobMatch {
   NotMatched,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, JsError)]
+#[class(type)]
 #[error("Failed to expand glob: \"{pattern}\"")]
 pub struct GlobPatternParseError {
   pattern: String,
@@ -613,17 +631,20 @@ impl GlobPattern {
       Some(p) => (true, p),
       None => (false, p),
     };
+    let base_str = base.to_string_lossy().replace('\\', "/");
     let p = p.strip_prefix("./").unwrap_or(p);
-    let mut pattern = String::new();
-    if is_negated {
-      pattern.push('!');
-    }
-    pattern.push_str(&base.to_string_lossy().replace('\\', "/"));
-    if !pattern.ends_with('/') {
-      pattern.push('/');
-    }
     let p = p.strip_suffix('/').unwrap_or(p);
-    pattern.push_str(p);
+    let pattern = capacity_builder::StringBuilder::<String>::build(|builder| {
+      if is_negated {
+        builder.append('!');
+      }
+      builder.append(&base_str);
+      if !base_str.ends_with('/') {
+        builder.append('/');
+      }
+      builder.append(p);
+    })
+    .unwrap();
     GlobPattern::new(&pattern)
   }
 

@@ -296,7 +296,6 @@ fn discover_workspace_config_files_for_single_dir<
       opts.deno_json_cache,
       folder_path,
       &config_file_names,
-      &opts.config_parse_options,
     )?;
     let maybe_pkg_json = load_pkg_json_in_folder(folder_path)?;
     Ok(ConfigFolder::from_maybe_both(
@@ -311,12 +310,8 @@ fn discover_workspace_config_files_for_single_dir<
     DirOrConfigFile::ConfigFile(file) => {
       let specifier = url_from_file_path(file).unwrap();
       let config_file = new_rc(
-        ConfigFile::from_specifier(
-          sys,
-          specifier.clone(),
-          &opts.config_parse_options,
-        )
-        .map_err(ConfigReadError::DenoJsonRead)?,
+        ConfigFile::from_specifier(sys, specifier.clone())
+          .map_err(ConfigReadError::DenoJsonRead)?,
       );
 
       // see what config would be loaded if we just specified the parent directory
@@ -625,7 +620,7 @@ fn handle_workspace_with_members<TSys: FsRead + FsMetadata + FsReadDir>(
       if !root_workspace.config_folders.contains_key(key) {
         return Err(
           WorkspaceDiscoverErrorKind::ConfigNotWorkspaceMember {
-            workspace_url: root_workspace.root_dir().clone(),
+            workspace_url: (**root_workspace.root_dir()).clone(),
             config_url: config_folder_config_specifier(config_folder)
               .into_owned(),
           }
@@ -735,7 +730,6 @@ fn resolve_workspace_for_config_folder<
   let collect_member_config_folders =
     |kind: &'static str,
      pattern_members: Vec<&String>,
-     file_specifier: &Url,
      dir_path: &Path,
      config_file_names: &'static [&'static str]|
      -> Result<Vec<PathBuf>, WorkspaceDiscoverErrorKind> {
@@ -778,13 +772,6 @@ fn resolve_workspace_for_config_folder<
               exclude: PathOrPatternSet::new(Vec::new()),
             },
           )
-          .map_err(|err| {
-            WorkspaceDiscoverErrorKind::FailedCollectingMembers {
-              kind,
-              config_url: file_specifier.clone(),
-              source: err,
-            }
-          })?
       };
 
       Ok(paths)
@@ -803,7 +790,6 @@ fn resolve_workspace_for_config_folder<
       let deno_json_paths = collect_member_config_folders(
         "Deno",
         pattern_members,
-        &deno_json.specifier,
         &deno_json.dir_path(),
         &["deno.json", "deno.jsonc", "package.json"],
       )?;
@@ -862,7 +848,6 @@ fn resolve_workspace_for_config_folder<
       let pkg_json_paths = collect_member_config_folders(
         "npm",
         pattern_members,
-        &pkg_json.specifier(),
         pkg_json.dir_path(),
         &["package.json"],
       )?;
