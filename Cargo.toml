@@ -21,6 +21,7 @@ sync = ["deno_package_json/sync"]
 workspace = ["deno_json", "deno_semver", "package_json"]
 
 [dependencies]
+capacity_builder = { version = "0.5.0" }
 indexmap = { version = "2", features = ["serde"] }
 jsonc-parser = { version = "0.26.0", features = ["serde"], optional = true }
 log = "0.4.20"
