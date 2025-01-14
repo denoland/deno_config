@@ -634,7 +634,7 @@ impl GlobPattern {
     let base_str = base.to_string_lossy().replace('\\', "/");
     let p = p.strip_prefix("./").unwrap_or(p);
     let p = p.strip_suffix('/').unwrap_or(p);
-    let pattern = StringBuilder::build(|builder| {
+    let pattern = capacity_builder::StringBuilder::<String>::build(|builder| {
       if is_negated {
         builder.append('!');
       }
