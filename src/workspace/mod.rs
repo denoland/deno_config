@@ -37,7 +37,6 @@ use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileError;
 use crate::deno_json::ConfigFileRc;
 use crate::deno_json::ConfigFileReadError;
-use crate::deno_json::ConfigParseOptions;
 use crate::deno_json::FmtConfig;
 use crate::deno_json::FmtOptionsConfig;
 use crate::deno_json::JsxImportSourceConfig;
@@ -346,7 +345,6 @@ pub struct WorkspaceDiscoverOptions<'a> {
   /// A cache for workspaces. This is mostly only useful in the LSP where
   /// workspace discovery may occur multiple times.
   pub workspace_cache: Option<&'a dyn WorkspaceCache>,
-  pub config_parse_options: ConfigParseOptions,
   pub additional_config_file_names: &'a [&'a str],
   pub discover_pkg_json: bool,
   pub maybe_vendor_override: Option<VendorEnablement<'a>>,
@@ -5255,7 +5253,6 @@ mod test {
     let new_config_file = ConfigFile::new(
       r#"{ "nodeModulesDir": false }"#,
       Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      &Default::default(),
     )
     .unwrap();
     cache

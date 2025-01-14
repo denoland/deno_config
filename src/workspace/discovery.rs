@@ -296,7 +296,6 @@ fn discover_workspace_config_files_for_single_dir<
       opts.deno_json_cache,
       folder_path,
       &config_file_names,
-      &opts.config_parse_options,
     )?;
     let maybe_pkg_json = load_pkg_json_in_folder(folder_path)?;
     Ok(ConfigFolder::from_maybe_both(
@@ -311,12 +310,8 @@ fn discover_workspace_config_files_for_single_dir<
     DirOrConfigFile::ConfigFile(file) => {
       let specifier = url_from_file_path(file).unwrap();
       let config_file = new_rc(
-        ConfigFile::from_specifier(
-          sys,
-          specifier.clone(),
-          &opts.config_parse_options,
-        )
-        .map_err(ConfigReadError::DenoJsonRead)?,
+        ConfigFile::from_specifier(sys, specifier.clone())
+          .map_err(ConfigReadError::DenoJsonRead)?,
       );
 
       // see what config would be loaded if we just specified the parent directory
