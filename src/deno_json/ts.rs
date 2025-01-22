@@ -4,9 +4,7 @@ use crate::deno_json::ConfigFileError;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
-use serde_json::json;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::fmt;
 use url::Url;
 
