@@ -254,6 +254,8 @@ fn json_merge(a: &mut Value, b: Value) {
 
 #[cfg(test)]
 mod tests {
+  use serde_json::json;
+
   use super::*;
 
   #[test]
