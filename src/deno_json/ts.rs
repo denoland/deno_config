@@ -177,20 +177,13 @@ pub fn parse_compiler_options(
 }
 
 /// A structure for managing the configuration of TypeScript
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TsConfig(pub Value);
 
 impl TsConfig {
   /// Create a new `TsConfig` with the base being the `value` supplied.
   pub fn new(value: Value) -> Self {
     TsConfig(value)
-  }
-
-  pub fn as_bytes(&self) -> Vec<u8> {
-    let map = self.0.as_object().expect("invalid tsconfig");
-    let ordered: BTreeMap<_, _> = map.iter().collect();
-    let value = json!(ordered);
-    value.to_string().as_bytes().to_owned()
   }
 
   /// Return the value of the `checkJs` compiler option, defaulting to `false`
@@ -264,27 +257,6 @@ fn json_merge(a: &mut Value, b: Value) {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn test_tsconfig_as_bytes() {
-    let mut tsconfig1 = TsConfig::new(json!({
-      "strict": true,
-      "target": "esnext",
-    }));
-    tsconfig1.merge(json!({
-      "target": "es5",
-      "module": "amd",
-    }));
-    let mut tsconfig2 = TsConfig::new(json!({
-      "target": "esnext",
-      "strict": true,
-    }));
-    tsconfig2.merge(json!({
-      "module": "amd",
-      "target": "es5",
-    }));
-    assert_eq!(tsconfig1.as_bytes(), tsconfig2.as_bytes());
-  }
 
   #[test]
   fn test_json_merge() {
