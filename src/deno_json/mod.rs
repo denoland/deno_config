@@ -64,6 +64,15 @@ pub enum IntoResolvedErrorKind {
   InvalidExclude(crate::glob::FromExcludeRelativePathOrPatternsError),
 }
 
+#[derive(Debug, Error, JsError)]
+#[class(generic)]
+#[error("Failed deserilaizing \"compilerOptions\".\"types\" in {}", self.specifier)]
+pub struct CompilerOptionTypesDeserializeError {
+  specifier: Url,
+  #[source]
+  source: serde_json::Error,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 struct SerializedFilesConfig {
@@ -1580,7 +1589,7 @@ impl ConfigFile {
 
   pub fn to_compiler_option_types(
     &self,
-  ) -> Result<Vec<(Url, Vec<String>)>, serde_json::Error> {
+  ) -> Result<Vec<(Url, Vec<String>)>, CompilerOptionTypesDeserializeError> {
     let Some(compiler_options_value) = self.json.compiler_options.as_ref()
     else {
       return Ok(Vec::new());
@@ -1588,7 +1597,13 @@ impl ConfigFile {
     let Some(types) = compiler_options_value.get("types") else {
       return Ok(Vec::new());
     };
-    let imports: Vec<String> = serde_json::from_value(types.clone())?;
+    let imports: Vec<String> =
+      serde_json::from_value(types.clone()).map_err(|source| {
+        CompilerOptionTypesDeserializeError {
+          specifier: self.specifier.clone(),
+          source,
+        }
+      })?;
     if !imports.is_empty() {
       let referrer = self.specifier.clone();
       Ok(vec![(referrer, imports)])

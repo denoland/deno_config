@@ -33,6 +33,7 @@ use url::Url;
 use crate::deno_json;
 use crate::deno_json::get_ts_config_for_emit;
 use crate::deno_json::BenchConfig;
+use crate::deno_json::CompilerOptionTypesDeserializeError;
 use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileError;
 use crate::deno_json::ConfigFileRc;
@@ -1384,7 +1385,7 @@ impl WorkspaceDirectory {
 
   pub fn to_compiler_option_types(
     &self,
-  ) -> Result<Vec<(Url, Vec<String>)>, serde_json::Error> {
+  ) -> Result<Vec<(Url, Vec<String>)>, CompilerOptionTypesDeserializeError> {
     self
       .deno_json_for_compiler_options()
       .map(|c| c.to_compiler_option_types())
