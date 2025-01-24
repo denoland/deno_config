@@ -31,7 +31,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::deno_json;
-use crate::deno_json::get_ts_config_for_emit;
+use crate::deno_json::get_base_ts_config_for_emit;
 use crate::deno_json::BenchConfig;
 use crate::deno_json::CompilerOptionTypesDeserializeError;
 use crate::deno_json::CompilerOptionsParseError;
@@ -1361,18 +1361,16 @@ impl WorkspaceDirectory {
     })
   }
 
-  pub fn deno_json_for_compiler_options(&self) -> Option<&ConfigFileRc> {
-    self
-      .maybe_deno_json()
-      .filter(|c| c.json.compiler_options.is_some())
-      .or_else(|| self.workspace.root_deno_json())
-      .filter(|c| c.json.compiler_options.is_some())
-  }
-
   pub fn check_js(&self) -> bool {
     self
-      .deno_json_for_compiler_options()
-      .map(|c| c.get_check_js())
+      .deno_json
+      .as_ref()
+      .and_then(|c| {
+        // prefer member, then root
+        c.member
+          .check_js()
+          .or_else(|| c.root.as_ref().and_then(|d| d.check_js()))
+      })
       .unwrap_or(false)
   }
 
@@ -1380,17 +1378,47 @@ impl WorkspaceDirectory {
     &self,
     config_type: TsConfigType,
   ) -> Result<TsConfigForEmit, CompilerOptionsParseError> {
-    let deno_json = self.deno_json_for_compiler_options();
-    get_ts_config_for_emit(config_type, deno_json.map(|c| c.as_ref()))
+    let mut ts_config = get_base_ts_config_for_emit(config_type);
+    let mut ignored_options = Vec::new();
+    if let Some(config) = &self.deno_json {
+      // root first
+      if let Some(root) = &config.root {
+        let root_options = root.to_compiler_options()?;
+        if let Some(options) = root_options.maybe_ignored {
+          ignored_options.push(options);
+        }
+        ts_config.merge_mut(root_options.options);
+      }
+
+      // then member overwrites
+      let member_options = config.member.to_compiler_options()?;
+      if let Some(options) = member_options.maybe_ignored {
+        ignored_options.push(options);
+      }
+      ts_config.merge_mut(member_options.options);
+    }
+    Ok(TsConfigForEmit {
+      ts_config,
+      ignored_options,
+    })
   }
 
   pub fn to_compiler_option_types(
     &self,
   ) -> Result<Vec<(Url, Vec<String>)>, CompilerOptionTypesDeserializeError> {
-    self
-      .deno_json_for_compiler_options()
-      .map(|c| c.to_compiler_option_types())
-      .unwrap_or(Ok(Vec::new()))
+    let Some(config) = &self.deno_json else {
+      return Ok(Vec::new());
+    };
+    let mut result = Vec::with_capacity(2);
+    if let Some(root) = &config.root {
+      if let Some(types) = root.to_compiler_option_types()? {
+        result.push(types);
+      }
+    }
+    if let Some(types) = config.member.to_compiler_option_types()? {
+      result.push(types);
+    }
+    Ok(result)
   }
 
   pub fn to_maybe_jsx_import_source_config(
@@ -1399,10 +1427,20 @@ impl WorkspaceDirectory {
     Option<JsxImportSourceConfig>,
     deno_json::ToMaybeJsxImportSourceConfigError,
   > {
-    self
-      .deno_json_for_compiler_options()
-      .map(|c| c.to_maybe_jsx_import_source_config())
-      .unwrap_or(Ok(None))
+    let Some(config) = &self.deno_json else {
+      return Ok(None);
+    };
+    if let Some(jsx_config) =
+      config.member.to_maybe_jsx_import_source_config()?
+    {
+      return Ok(Some(jsx_config));
+    }
+    if let Some(root) = &config.root {
+      if let Some(jsx_config) = root.to_maybe_jsx_import_source_config()? {
+        return Ok(Some(jsx_config));
+      }
+    }
+    Ok(None)
   }
 
   pub fn to_lint_config(
@@ -2442,7 +2480,7 @@ mod test {
           "resolveJsonModule": true,
           "jsxImportSource": "npm:react"
         })),
-        maybe_ignored_options: None,
+        ignored_options: Vec::new(),
       }
     );
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);

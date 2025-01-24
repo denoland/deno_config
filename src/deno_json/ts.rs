@@ -7,8 +7,6 @@ use serde_json::Value;
 use std::fmt;
 use url::Url;
 
-use super::CompilerOptionsParseError;
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct JsxImportSourceConfig {
   pub default_specifier: Option<String>,
@@ -52,17 +50,6 @@ pub struct EmitConfigOptions {
   pub jsx_fragment_factory: String,
   pub jsx_import_source: Option<String>,
   pub jsx_precompile_skip_elements: Option<Vec<String>>,
-}
-
-/// There are certain compiler options that can impact what modules are part of
-/// a module graph, which need to be deserialized into a structure for analysis.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompilerOptions {
-  pub jsx: Option<String>,
-  pub jsx_import_source: Option<String>,
-  pub jsx_import_source_types: Option<String>,
-  pub types: Option<Vec<String>>,
 }
 
 /// A structure that represents a set of options that were ignored and the
@@ -204,28 +191,11 @@ impl TsConfig {
   }
 
   /// Merge a serde_json value into the configuration.
-  pub fn merge(&mut self, value: serde_json::Value) {
-    json_merge(&mut self.0, value);
-  }
-
-  /// Take an optional user provided config file
-  /// which was passed in via the `--config` flag and merge `compilerOptions` with
-  /// the configuration.  Returning the result which optionally contains any
-  /// compiler options that were ignored.
-  pub fn merge_tsconfig_from_config_file(
+  pub fn merge_mut(
     &mut self,
-    maybe_config_file: Option<&super::ConfigFile>,
-  ) -> Result<Option<IgnoredCompilerOptions>, CompilerOptionsParseError> {
-    if let Some(config_file) = maybe_config_file {
-      let ParsedTsConfigOptions {
-        options,
-        maybe_ignored,
-      } = config_file.to_compiler_options()?;
-      self.merge(serde_json::Value::Object(options));
-      Ok(maybe_ignored)
-    } else {
-      Ok(None)
-    }
+    value: serde_json::Map<String, serde_json::Value>,
+  ) {
+    json_merge(&mut self.0, serde_json::Value::Object(value));
   }
 }
 

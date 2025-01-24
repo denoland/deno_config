@@ -33,7 +33,6 @@ use crate::UrlToFilePathError;
 
 mod ts;
 
-pub use ts::CompilerOptions;
 pub use ts::EmitConfigOptions;
 pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
@@ -716,7 +715,7 @@ pub trait DenoJsonCache {
 
 #[derive(Debug, Error, JsError)]
 #[class(type)]
-#[error("compilerOptions should be an object in '{specifier}'")]
+#[error("compilerOptions should be an object at '{specifier}'")]
 pub struct CompilerOptionsParseError {
   pub specifier: Url,
   #[source]
@@ -1034,13 +1033,12 @@ impl ConfigFile {
 
   /// Returns true if the configuration indicates that JavaScript should be
   /// type checked, otherwise false.
-  pub fn get_check_js(&self) -> bool {
+  pub fn check_js(&self) -> Option<bool> {
     self
       .json
       .compiler_options
       .as_ref()
       .and_then(|co| co.get("checkJs").and_then(|v| v.as_bool()))
-      .unwrap_or(false)
   }
 
   /// Parse `compilerOptions` and return a serde `Value`.
@@ -1602,13 +1600,14 @@ impl ConfigFile {
 
   pub fn to_compiler_option_types(
     &self,
-  ) -> Result<Vec<(Url, Vec<String>)>, CompilerOptionTypesDeserializeError> {
+  ) -> Result<Option<(Url, Vec<String>)>, CompilerOptionTypesDeserializeError>
+  {
     let Some(compiler_options_value) = self.json.compiler_options.as_ref()
     else {
-      return Ok(Vec::new());
+      return Ok(None);
     };
     let Some(types) = compiler_options_value.get("types") else {
-      return Ok(Vec::new());
+      return Ok(None);
     };
     let imports: Vec<String> =
       serde_json::from_value(types.clone()).map_err(|source| {
@@ -1619,9 +1618,9 @@ impl ConfigFile {
       })?;
     if !imports.is_empty() {
       let referrer = self.specifier.clone();
-      Ok(vec![(referrer, imports)])
+      Ok(Some((referrer, imports)))
     } else {
-      Ok(Vec::new())
+      Ok(None)
     }
   }
 
@@ -1631,14 +1630,22 @@ impl ConfigFile {
     &self,
   ) -> Result<Option<JsxImportSourceConfig>, ToMaybeJsxImportSourceConfigError>
   {
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct JsxCompilerOptions {
+      pub jsx: Option<String>,
+      pub jsx_import_source: Option<String>,
+      pub jsx_import_source_types: Option<String>,
+    }
+
     let Some(compiler_options_value) = self.json.compiler_options.as_ref()
     else {
       return Ok(None);
     };
-    let Some(compiler_options) =
-      serde_json::from_value::<CompilerOptions>(compiler_options_value.clone())
-        .ok()
-    else {
+    let Some(compiler_options) = serde_json::from_value::<JsxCompilerOptions>(
+      compiler_options_value.clone(),
+    )
+    .ok() else {
       return Ok(None);
     };
     let module = match compiler_options.jsx.as_deref() {
@@ -1788,17 +1795,13 @@ pub enum TsConfigType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsConfigForEmit {
   pub ts_config: TsConfig,
-  pub maybe_ignored_options: Option<IgnoredCompilerOptions>,
+  pub ignored_options: Vec<IgnoredCompilerOptions>,
 }
 
-/// For a given configuration type and optionally a configuration file,
-/// return a `TsConfig` struct and optionally any user configuration
-/// options that were ignored.
-pub fn get_ts_config_for_emit(
-  config_type: TsConfigType,
-  maybe_config_file: Option<&ConfigFile>,
-) -> Result<TsConfigForEmit, CompilerOptionsParseError> {
-  let mut ts_config = match config_type {
+/// For a given configuration type get the starting point TsConfig
+/// used that can then be merged with user specified tsconfigs.
+pub fn get_base_ts_config_for_emit(config_type: TsConfigType) -> TsConfig {
+  match config_type {
     TsConfigType::Bundle => TsConfig::new(json!({
       "allowImportingTsExtensions": true,
       "checkJs": false,
@@ -1856,13 +1859,7 @@ pub fn get_ts_config_for_emit(
       "moduleResolution": "NodeNext",
       "resolveJsonModule": true,
     })),
-  };
-  let maybe_ignored_options =
-    ts_config.merge_tsconfig_from_config_file(maybe_config_file)?;
-  Ok(TsConfigForEmit {
-    ts_config,
-    maybe_ignored_options,
-  })
+  }
 }
 
 #[cfg(test)]
