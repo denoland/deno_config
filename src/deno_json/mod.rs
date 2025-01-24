@@ -1773,6 +1773,7 @@ impl Serialize for TsTypeLib {
 }
 
 /// An enum that represents the base tsc configuration to return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TsConfigType {
   /// Return a configuration for bundling, using swc to emit the bundle. This is
   /// independent of type checking.
