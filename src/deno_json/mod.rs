@@ -1793,7 +1793,7 @@ pub enum TsConfigType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TsConfigForEmit {
+pub struct TsConfigWithIgnoredOptions {
   pub ts_config: TsConfig,
   pub ignored_options: Vec<IgnoredCompilerOptions>,
 }

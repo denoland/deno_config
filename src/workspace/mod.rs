@@ -53,8 +53,9 @@ pub use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
 use crate::deno_json::ToInvalidConfigError;
 use crate::deno_json::ToLockConfigError;
-use crate::deno_json::TsConfigForEmit;
+use crate::deno_json::TsConfig;
 use crate::deno_json::TsConfigType;
+use crate::deno_json::TsConfigWithIgnoredOptions;
 use crate::deno_json::WorkspaceConfigParseError;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPattern;
@@ -1374,20 +1375,40 @@ impl WorkspaceDirectory {
       .unwrap_or(false)
   }
 
-  pub fn to_ts_config_for_emit(
+  pub fn to_resolved_ts_config(
     &self,
     config_type: TsConfigType,
-  ) -> Result<TsConfigForEmit, CompilerOptionsParseError> {
-    let mut ts_config = get_base_ts_config_for_emit(config_type);
+  ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
+    let mut base_ts_config = get_base_ts_config_for_emit(config_type);
+    let TsConfigWithIgnoredOptions {
+      ts_config,
+      ignored_options,
+    } = self.to_raw_user_provided_tsconfig()?;
+    // overwrite the base values with the user specified ones
+    base_ts_config.merge_mut(ts_config);
+    Ok(TsConfigWithIgnoredOptions {
+      ts_config: base_ts_config,
+      ignored_options,
+    })
+  }
+
+  /// Gets the combined tsconfig that the user provided, without any of
+  /// Deno's defaults. Use `to_resolved_ts_config()` to get the resolved
+  /// config instead.
+  pub fn to_raw_user_provided_tsconfig(
+    &self,
+  ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
     let mut ignored_options = Vec::new();
+    let mut ts_config = TsConfig::default();
     if let Some(config) = &self.deno_json {
+      ignored_options.reserve(2);
       // root first
       if let Some(root) = &config.root {
         let root_options = root.to_compiler_options()?;
         if let Some(options) = root_options.maybe_ignored {
           ignored_options.push(options);
         }
-        ts_config.merge_mut(root_options.options);
+        ts_config.merge_object_mut(root_options.options);
       }
 
       // then member overwrites
@@ -1395,11 +1416,11 @@ impl WorkspaceDirectory {
       if let Some(options) = member_options.maybe_ignored {
         ignored_options.push(options);
       }
-      ts_config.merge_mut(member_options.options);
+      ts_config.merge_object_mut(member_options.options);
     }
-    Ok(TsConfigForEmit {
-      ts_config,
+    Ok(TsConfigWithIgnoredOptions {
       ignored_options,
+      ts_config,
     })
   }
 
@@ -2460,9 +2481,9 @@ mod test {
     assert_eq!(workspace_dir.check_js(), true);
     assert_eq!(
       workspace_dir
-        .to_ts_config_for_emit(TsConfigType::Emit)
+        .to_resolved_ts_config(TsConfigType::Emit)
         .unwrap(),
-      TsConfigForEmit {
+      TsConfigWithIgnoredOptions {
         ts_config: TsConfig(json!({
           "allowImportingTsExtensions": true,
           "checkJs": true,

@@ -129,7 +129,7 @@ pub fn parse_compiler_options(
 ) -> ParsedTsConfigOptions {
   let mut allowed: serde_json::Map<String, Value> =
     serde_json::Map::with_capacity(compiler_options.len());
-  let mut ignored: Vec<String> = Vec::with_capacity(compiler_options.len());
+  let mut ignored: Vec<String> = Vec::new(); // don't pre-allocate because it's rare
 
   for (key, value) in compiler_options {
     // We don't pass "types" entries to typescript via the compiler
@@ -166,32 +166,24 @@ pub fn parse_compiler_options(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TsConfig(pub Value);
 
+impl Default for TsConfig {
+  fn default() -> Self {
+    Self(serde_json::Value::Object(Default::default()))
+  }
+}
+
 impl TsConfig {
   /// Create a new `TsConfig` with the base being the `value` supplied.
   pub fn new(value: Value) -> Self {
     TsConfig(value)
   }
 
-  /// Return the value of the `checkJs` compiler option, defaulting to `false`
-  /// if not present.
-  pub fn get_check_js(&self) -> bool {
-    if let Some(check_js) = self.0.get("checkJs") {
-      check_js.as_bool().unwrap_or(false)
-    } else {
-      false
-    }
-  }
-
-  pub fn get_declaration(&self) -> bool {
-    if let Some(declaration) = self.0.get("declaration") {
-      declaration.as_bool().unwrap_or(false)
-    } else {
-      false
-    }
+  pub fn merge_mut(&mut self, value: TsConfig) {
+    json_merge(&mut self.0, value.0);
   }
 
   /// Merge a serde_json value into the configuration.
-  pub fn merge_mut(
+  pub fn merge_object_mut(
     &mut self,
     value: serde_json::Map<String, serde_json::Value>,
   ) {
