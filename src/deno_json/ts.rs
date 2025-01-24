@@ -1,12 +1,13 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use crate::deno_json::ConfigFileError;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
 use serde_json::Value;
 use std::fmt;
 use url::Url;
+
+use super::CompilerOptionsShouldBeObjectError;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct JsxImportSourceConfig {
@@ -214,7 +215,8 @@ impl TsConfig {
   pub fn merge_tsconfig_from_config_file(
     &mut self,
     maybe_config_file: Option<&super::ConfigFile>,
-  ) -> Result<Option<IgnoredCompilerOptions>, ConfigFileError> {
+  ) -> Result<Option<IgnoredCompilerOptions>, CompilerOptionsShouldBeObjectError>
+  {
     if let Some(config_file) = maybe_config_file {
       let ParsedTsConfigOptions {
         options,
