@@ -718,9 +718,9 @@ pub trait DenoJsonCache {
 #[class(type)]
 #[error("compilerOptions should be an object in '{specifier}'")]
 pub struct CompilerOptionsParseError {
-  specifier: Url,
+  pub specifier: Url,
   #[source]
-  source: serde_json::Error,
+  pub source: serde_json::Error,
 }
 
 #[derive(Debug, Error, JsError)]
