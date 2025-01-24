@@ -716,8 +716,9 @@ pub trait DenoJsonCache {
 
 #[derive(Debug, Error, JsError)]
 #[class(type)]
-#[error("compilerOptions should be an object")]
+#[error("compilerOptions should be an object in '{specifier}'")]
 pub struct CompilerOptionsParseError {
+  specifier: Url,
   #[source]
   source: serde_json::Error,
 }
@@ -1049,8 +1050,12 @@ impl ConfigFile {
   ) -> Result<ParsedTsConfigOptions, CompilerOptionsParseError> {
     if let Some(compiler_options) = self.json.compiler_options.clone() {
       let options: serde_json::Map<String, Value> =
-        serde_json::from_value(compiler_options)
-          .map_err(|source| CompilerOptionsParseError { source })?;
+        serde_json::from_value(compiler_options).map_err(|source| {
+          CompilerOptionsParseError {
+            specifier: self.specifier.clone(),
+            source,
+          }
+        })?;
       Ok(parse_compiler_options(options, Some(&self.specifier)))
     } else {
       Ok(Default::default())
