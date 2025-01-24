@@ -34,7 +34,7 @@ use crate::deno_json;
 use crate::deno_json::get_ts_config_for_emit;
 use crate::deno_json::BenchConfig;
 use crate::deno_json::CompilerOptionTypesDeserializeError;
-use crate::deno_json::CompilerOptionsShouldBeObjectError;
+use crate::deno_json::CompilerOptionsParseError;
 use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileError;
 use crate::deno_json::ConfigFileRc;
@@ -1379,7 +1379,7 @@ impl WorkspaceDirectory {
   pub fn to_ts_config_for_emit(
     &self,
     config_type: TsConfigType,
-  ) -> Result<TsConfigForEmit, CompilerOptionsShouldBeObjectError> {
+  ) -> Result<TsConfigForEmit, CompilerOptionsParseError> {
     let deno_json = self.deno_json_for_compiler_options();
     get_ts_config_for_emit(config_type, deno_json.map(|c| c.as_ref()))
   }

@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::fmt;
 use url::Url;
 
-use super::CompilerOptionsShouldBeObjectError;
+use super::CompilerOptionsParseError;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct JsxImportSourceConfig {
@@ -215,8 +215,7 @@ impl TsConfig {
   pub fn merge_tsconfig_from_config_file(
     &mut self,
     maybe_config_file: Option<&super::ConfigFile>,
-  ) -> Result<Option<IgnoredCompilerOptions>, CompilerOptionsShouldBeObjectError>
-  {
+  ) -> Result<Option<IgnoredCompilerOptions>, CompilerOptionsParseError> {
     if let Some(config_file) = maybe_config_file {
       let ParsedTsConfigOptions {
         options,

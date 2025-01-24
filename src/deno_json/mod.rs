@@ -717,7 +717,7 @@ pub trait DenoJsonCache {
 #[derive(Debug, Error, JsError)]
 #[class(type)]
 #[error("compilerOptions should be an object")]
-pub struct CompilerOptionsShouldBeObjectError {
+pub struct CompilerOptionsParseError {
   #[source]
   source: serde_json::Error,
 }
@@ -726,7 +726,7 @@ pub struct CompilerOptionsShouldBeObjectError {
 pub enum ConfigFileError {
   #[class(inherit)]
   #[error(transparent)]
-  CompilerOptionsShouldBeObject(CompilerOptionsShouldBeObjectError),
+  CompilerOptionsParseError(CompilerOptionsParseError),
   #[class(type)]
   #[error("Only file: specifiers are supported for security reasons in import maps stored in a deno.json. To use a remote import map, use the --import-map flag and \"deno.importMap\" in the language server config")]
   OnlyFileSpecifiersSupported,
@@ -1046,11 +1046,11 @@ impl ConfigFile {
   /// The result also contains any options that were ignored.
   pub fn to_compiler_options(
     &self,
-  ) -> Result<ParsedTsConfigOptions, CompilerOptionsShouldBeObjectError> {
+  ) -> Result<ParsedTsConfigOptions, CompilerOptionsParseError> {
     if let Some(compiler_options) = self.json.compiler_options.clone() {
       let options: serde_json::Map<String, Value> =
         serde_json::from_value(compiler_options)
-          .map_err(|source| CompilerOptionsShouldBeObjectError { source })?;
+          .map_err(|source| CompilerOptionsParseError { source })?;
       Ok(parse_compiler_options(options, Some(&self.specifier)))
     } else {
       Ok(Default::default())
@@ -1791,7 +1791,7 @@ pub struct TsConfigForEmit {
 pub fn get_ts_config_for_emit(
   config_type: TsConfigType,
   maybe_config_file: Option<&ConfigFile>,
-) -> Result<TsConfigForEmit, CompilerOptionsShouldBeObjectError> {
+) -> Result<TsConfigForEmit, CompilerOptionsParseError> {
   let mut ts_config = match config_type {
     TsConfigType::Bundle => TsConfig::new(json!({
       "allowImportingTsExtensions": true,
