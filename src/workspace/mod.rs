@@ -70,6 +70,7 @@ pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionDiagnostic;
 pub use resolver::MappedResolutionError;
 pub use resolver::PackageJsonDepResolution;
+pub use resolver::ResolutionKind;
 pub use resolver::ResolverWorkspaceJsrPackage;
 pub use resolver::SpecifiedImportMap;
 pub use resolver::WorkspaceResolvePkgJsonFolderError;
