@@ -1,5 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileError;
 use crate::sync::new_rc;
 use crate::workspace::Workspace;
@@ -28,6 +29,7 @@ use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
+use sys_traits::FsMetadata;
 use sys_traits::FsRead;
 use thiserror::Error;
 use url::Url;
@@ -239,6 +241,112 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
   VersionNotSatisfied(VersionReq, Version),
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CompilerOptionsRootDirsResolver {
+  root_dirs_from_root: Vec<Url>,
+  root_dirs_by_member: BTreeMap<Url, Vec<Url>>,
+}
+
+impl CompilerOptionsRootDirsResolver {
+  fn from_workspace(workspace: &Workspace) -> Self {
+    fn get_root_dirs(config_file: &ConfigFile) -> Option<Vec<Url>> {
+      let dir_path = url_to_file_path(&config_file.specifier).ok()?;
+      let root_dirs = config_file
+        .json
+        .compiler_options
+        .as_ref()?
+        .as_object()?
+        .get("rootDirs")?
+        .as_array()?
+        .iter()
+        .filter_map(|s| {
+          Url::from_directory_path(dir_path.join(s.as_str()?)).ok()
+        })
+        .collect();
+      Some(root_dirs)
+    }
+    let root_deno_json = workspace.root_deno_json();
+    let root_dirs_from_root = root_deno_json
+      .and_then(|c| get_root_dirs(c))
+      .unwrap_or_default();
+    let root_dirs_by_member = workspace
+      .resolver_deno_jsons()
+      .filter_map(|c| {
+        if let Some(root_deno_json) = root_deno_json {
+          if c.specifier == root_deno_json.specifier {
+            return None;
+          }
+        }
+        let member = c.specifier.join(".").ok()?;
+        let root_dirs = get_root_dirs(c).unwrap_or_default();
+        Some((member, root_dirs))
+      })
+      .collect();
+    Self {
+      root_dirs_from_root,
+      root_dirs_by_member,
+    }
+  }
+
+  fn resolve_types(
+    &self,
+    specifier: &Url,
+    referrer: &Url,
+    sys: &impl FsMetadata,
+  ) -> Option<Url> {
+    if specifier.scheme() != "file" || referrer.scheme() != "file" {
+      return None;
+    }
+    let root_dirs_from_member = self
+      .root_dirs_by_member
+      .iter()
+      .rfind(|(s, _)| referrer.as_str().starts_with(s.as_str()))
+      .map(|(_, r)| r);
+    let iter_root_dirs = || {
+      self
+        .root_dirs_from_root
+        .iter()
+        .chain(root_dirs_from_member.into_iter().flatten())
+    };
+    let (matched_root_dir, suffix) = iter_root_dirs()
+      .filter_map(|r| {
+        let suffix = specifier.as_str().strip_prefix(r.as_str())?;
+        Some((r, suffix))
+      })
+      .max_by_key(|(r, _)| r.as_str().len())?;
+    for root_dir in iter_root_dirs() {
+      if root_dir == matched_root_dir {
+        continue;
+      }
+      let Ok(candidate_specifier) = root_dir.join(suffix) else {
+        continue;
+      };
+      let Ok(candidate_path) = url_to_file_path(&candidate_specifier) else {
+        continue;
+      };
+
+      if sys.fs_is_file(&candidate_path).is_ok_and(|p| p) {
+        return Some(candidate_specifier);
+      }
+    }
+    None
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResolutionKind {
+  /// Resolving for code that will be executed.
+  Execution,
+  /// Resolving for code that will be used for type information.
+  Types,
+}
+
+impl ResolutionKind {
+  pub fn is_types(&self) -> bool {
+    *self == ResolutionKind::Types
+  }
+}
+
 #[derive(Debug)]
 pub struct WorkspaceResolver {
   workspace_root: UrlRc,
@@ -246,6 +354,7 @@ pub struct WorkspaceResolver {
   maybe_import_map: Option<ImportMapWithDiagnostics>,
   pkg_jsons: BTreeMap<UrlRc, PkgJsonResolverFolderConfig>,
   pkg_json_dep_resolution: PackageJsonDepResolution,
+  compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver,
 }
 
 impl WorkspaceResolver {
@@ -274,6 +383,12 @@ impl WorkspaceResolver {
               c.json.import_map.is_some()
                 || c.json.scopes.is_some()
                 || c.json.imports.is_some()
+                || c
+                  .json
+                  .compiler_options
+                  .as_ref()
+                  .and_then(|v| v.as_object()?.get("rootDirs")?.as_array())
+                  .is_some_and(|a| a.len() > 1)
             })
           {
             // no configs have an import map and none are a package, so exit
@@ -356,12 +471,16 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
 
+    let compiler_options_root_dirs_resolver =
+      CompilerOptionsRootDirsResolver::from_workspace(workspace);
+
     Ok(Self {
       workspace_root: workspace.root_dir().clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       jsr_pkgs,
       maybe_import_map,
       pkg_jsons,
+      compiler_options_root_dirs_resolver,
     })
   }
 
@@ -374,6 +493,7 @@ impl WorkspaceResolver {
     jsr_pkgs: Vec<ResolverWorkspaceJsrPackage>,
     pkg_jsons: Vec<PackageJsonRc>,
     pkg_json_dep_resolution: PackageJsonDepResolution,
+    compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver,
   ) -> Self {
     let maybe_import_map =
       maybe_import_map.map(|import_map| ImportMapWithDiagnostics {
@@ -401,6 +521,7 @@ impl WorkspaceResolver {
       maybe_import_map,
       pkg_jsons,
       pkg_json_dep_resolution,
+      compiler_options_root_dirs_resolver,
     }
   }
 
@@ -442,6 +563,9 @@ impl WorkspaceResolver {
         })
         .collect(),
       pkg_json_resolution: self.pkg_json_dep_resolution(),
+      compiler_options_root_dirs_resolver: self
+        .compiler_options_root_dirs_resolver
+        .clone(),
     }
   }
 
@@ -500,6 +624,7 @@ impl WorkspaceResolver {
       jsr_packages,
       pkg_jsons,
       serializable_workspace_resolver.pkg_json_resolution,
+      serializable_workspace_resolver.compiler_options_root_dirs_resolver,
     ))
   }
 
@@ -529,31 +654,49 @@ impl WorkspaceResolver {
     &'a self,
     specifier: &str,
     referrer: &Url,
+    resolution_kind: ResolutionKind,
+    sys: &impl FsMetadata,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
     // 1. Attempt to resolve with the import map and normally first
     let resolve_error = match &self.maybe_import_map {
       Some(import_map) => {
         match import_map.import_map.resolve(specifier, referrer) {
-          Ok(value) => {
+          Ok(mut value) => {
+            if resolution_kind.is_types() {
+              if let Some(specifier) = self
+                .compiler_options_root_dirs_resolver
+                .resolve_types(&value, referrer, sys)
+              {
+                value = specifier
+              }
+            }
             return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
               MappedResolution::ImportMap {
                 specifier: value,
                 maybe_diagnostic: None,
               },
-            )
+            );
           }
           Err(err) => MappedResolutionError::ImportMap(err),
         }
       }
       None => {
         match import_map::specifier::resolve_import(specifier, referrer) {
-          Ok(value) => {
+          Ok(mut value) => {
+            if resolution_kind.is_types() {
+              if let Some(specifier) = self
+                .compiler_options_root_dirs_resolver
+                .resolve_types(&value, referrer, sys)
+              {
+                value = specifier
+              }
+            }
             return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
               MappedResolution::Normal {
                 specifier: value,
                 maybe_diagnostic: None,
               },
-            )
+            );
           }
           Err(err) => MappedResolutionError::Specifier(err),
         }
@@ -841,6 +984,7 @@ pub struct SerializableWorkspaceResolver<'a> {
   pub jsr_pkgs: Vec<SerializedResolverWorkspaceJsrPackage<'a>>,
   pub package_jsons: Vec<(String, serde_json::Value)>,
   pub pkg_json_resolution: PackageJsonDepResolution,
+  pub compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver,
 }
 
 #[derive(Debug, Clone, Copy)]
