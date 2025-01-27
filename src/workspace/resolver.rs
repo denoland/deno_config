@@ -244,7 +244,7 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
 #[derive(Debug)]
 struct CompilerOptionsRootDirsResolver<TSys: FsMetadata> {
   root_dirs_from_root: Vec<Url>,
-  root_dirs_by_member: BTreeMap<Url, Vec<Url>>,
+  root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
   sys: TSys,
 }
 
@@ -285,7 +285,7 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
           }
         }
         let dir_url = c.specifier.join(".").ok()?;
-        let root_dirs = get_root_dirs(c, &dir_url).unwrap_or_default();
+        let root_dirs = get_root_dirs(c, &dir_url);
         Some((dir_url, root_dirs))
       })
       .collect();
@@ -298,7 +298,7 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
 
   fn new_raw(
     root_dirs_from_root: Vec<Url>,
-    root_dirs_by_member: BTreeMap<Url, Vec<Url>>,
+    root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
     sys: TSys,
   ) -> Self {
     Self {
@@ -312,24 +312,20 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
     if specifier.scheme() != "file" || referrer.scheme() != "file" {
       return None;
     }
-    let root_dirs_from_member = self
+    let root_dirs = self
       .root_dirs_by_member
       .iter()
       .rfind(|(s, _)| referrer.as_str().starts_with(s.as_str()))
-      .map(|(_, r)| r);
-    let iter_root_dirs = || {
-      self
-        .root_dirs_from_root
-        .iter()
-        .chain(root_dirs_from_member.into_iter().flatten())
-    };
-    let (matched_root_dir, suffix) = iter_root_dirs()
+      .and_then(|(_, r)| r.as_ref())
+      .unwrap_or(&self.root_dirs_from_root);
+    let (matched_root_dir, suffix) = root_dirs
+      .iter()
       .filter_map(|r| {
         let suffix = specifier.as_str().strip_prefix(r.as_str())?;
         Some((r, suffix))
       })
       .max_by_key(|(r, _)| r.as_str().len())?;
-    for root_dir in iter_root_dirs() {
+    for root_dir in root_dirs {
       if root_dir == matched_root_dir {
         continue;
       }
@@ -509,7 +505,7 @@ impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
     pkg_jsons: Vec<PackageJsonRc>,
     pkg_json_dep_resolution: PackageJsonDepResolution,
     root_dirs_from_root: Vec<Url>,
-    root_dirs_by_member: BTreeMap<Url, Vec<Url>>,
+    root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
     sys: TSys,
   ) -> Self {
     let maybe_import_map =
@@ -599,9 +595,11 @@ impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
         .map(|(s, r)| {
           (
             root_dir_url.make_relative_if_descendant(s),
-            r.iter()
-              .map(|s| root_dir_url.make_relative_if_descendant(s))
-              .collect(),
+            r.as_ref().map(|r| {
+              r.iter()
+                .map(|s| root_dir_url.make_relative_if_descendant(s))
+                .collect()
+            }),
           )
         })
         .collect(),
@@ -669,7 +667,8 @@ impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
       .map(|(s, r)| {
         (
           root_dir_url.join(s).unwrap(),
-          r.iter().map(|s| root_dir_url.join(s).unwrap()).collect(),
+          r.as_ref()
+            .map(|r| r.iter().map(|s| root_dir_url.join(s).unwrap()).collect()),
         )
       })
       .collect();
@@ -1041,7 +1040,7 @@ pub struct SerializableWorkspaceResolver<'a> {
   pub package_jsons: Vec<(String, serde_json::Value)>,
   pub pkg_json_resolution: PackageJsonDepResolution,
   pub root_dirs_from_root: Vec<Cow<'a, str>>,
-  pub root_dirs_by_member: BTreeMap<Cow<'a, str>, Vec<Cow<'a, str>>>,
+  pub root_dirs_by_member: BTreeMap<Cow<'a, str>, Option<Vec<Cow<'a, str>>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1404,22 +1403,28 @@ mod test {
     sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
-        "workspace": ["member"],
+        "workspace": ["member", "member2"],
         "compilerOptions": {
-          "rootDirs": ["member", "member_types"],
+          "rootDirs": ["member", "member2", "member2_types"],
         },
       }),
     );
+    // Overrides `rootDirs` from workspace root.
     sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
         "compilerOptions": {
-          "rootDirs": ["foo", "bar"],
+          "rootDirs": ["foo", "foo_types"],
         },
       }),
     );
-    sys.fs_insert(root_dir().join("member/bar/import_1.ts"), "");
-    sys.fs_insert(root_dir().join("member_types/baz/import_2.ts"), "");
+    // Use `rootDirs` from workspace root.
+    sys.fs_insert_json(root_dir().join("member2/deno.json"), json!({}));
+    sys.fs_insert(root_dir().join("member/foo_types/import.ts"), "");
+    sys.fs_insert(root_dir().join("member2_types/import.ts"), "");
+    // This file should be ignored. It would be used if `member/deno.json` had
+    // no `rootDirs`.
+    sys.fs_insert(root_dir().join("member2_types/foo/import.ts"), "");
 
     let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let resolver = workspace_dir
@@ -1436,7 +1441,7 @@ mod test {
 
     let referrer = root_dir_url.join("member/foo/mod.ts").unwrap();
     let resolution = resolver
-      .resolve("./import_1.ts", &referrer, ResolutionKind::Types)
+      .resolve("./import.ts", &referrer, ResolutionKind::Types)
       .unwrap();
     let MappedResolution::ImportMap { specifier, .. } = &resolution else {
       unreachable!("{:#?}", &resolution);
@@ -1444,14 +1449,14 @@ mod test {
     assert_eq!(
       specifier.as_str(),
       root_dir_url
-        .join("member/bar/import_1.ts")
+        .join("member/foo_types/import.ts")
         .unwrap()
         .as_str()
     );
 
-    let referrer = root_dir_url.join("member/baz/mod.ts").unwrap();
+    let referrer = root_dir_url.join("member2/mod.ts").unwrap();
     let resolution = resolver
-      .resolve("./import_2.ts", &referrer, ResolutionKind::Types)
+      .resolve("./import.ts", &referrer, ResolutionKind::Types)
       .unwrap();
     let MappedResolution::ImportMap { specifier, .. } = &resolution else {
       unreachable!("{:#?}", &resolution);
@@ -1459,7 +1464,7 @@ mod test {
     assert_eq!(
       specifier.as_str(),
       root_dir_url
-        .join("member_types/baz/import_2.ts")
+        .join("member2_types/import.ts")
         .unwrap()
         .as_str()
     );
@@ -1467,33 +1472,27 @@ mod test {
     // Ignore rootDirs for `ResolutionKind::Execution`.
     let referrer = root_dir_url.join("member/foo/mod.ts").unwrap();
     let resolution = resolver
-      .resolve("./import_1.ts", &referrer, ResolutionKind::Execution)
+      .resolve("./import.ts", &referrer, ResolutionKind::Execution)
       .unwrap();
     let MappedResolution::ImportMap { specifier, .. } = &resolution else {
       unreachable!("{:#?}", &resolution);
     };
     assert_eq!(
       specifier.as_str(),
-      root_dir_url
-        .join("member/foo/import_1.ts")
-        .unwrap()
-        .as_str()
+      root_dir_url.join("member/foo/import.ts").unwrap().as_str()
     );
 
     // Ignore rootDirs for `ResolutionKind::Execution`.
-    let referrer = root_dir_url.join("member/baz/mod.ts").unwrap();
+    let referrer = root_dir_url.join("member2/mod.ts").unwrap();
     let resolution = resolver
-      .resolve("./import_2.ts", &referrer, ResolutionKind::Execution)
+      .resolve("./import.ts", &referrer, ResolutionKind::Execution)
       .unwrap();
     let MappedResolution::ImportMap { specifier, .. } = &resolution else {
       unreachable!("{:#?}", &resolution);
     };
     assert_eq!(
       specifier.as_str(),
-      root_dir_url
-        .join("member/baz/import_2.ts")
-        .unwrap()
-        .as_str()
+      root_dir_url.join("member2/import.ts").unwrap().as_str()
     );
   }
 
