@@ -250,8 +250,11 @@ struct CompilerOptionsRootDirsResolver<TSys: FsMetadata> {
 
 impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
   fn from_workspace(workspace: &Workspace, sys: TSys) -> Self {
-    fn get_root_dirs(config_file: &ConfigFile) -> Option<Vec<Url>> {
-      let dir_path = url_to_file_path(&config_file.specifier).ok()?;
+    fn get_root_dirs(
+      config_file: &ConfigFile,
+      dir_url: &Url,
+    ) -> Option<Vec<Url>> {
+      let dir_path = url_to_file_path(dir_url).ok()?;
       let root_dirs = config_file
         .json
         .compiler_options
@@ -268,7 +271,10 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
     }
     let root_deno_json = workspace.root_deno_json();
     let root_dirs_from_root = root_deno_json
-      .and_then(|c| get_root_dirs(c))
+      .and_then(|c| {
+        let root_dir_url = c.specifier.join(".").ok()?;
+        get_root_dirs(c, &root_dir_url)
+      })
       .unwrap_or_default();
     let root_dirs_by_member = workspace
       .resolver_deno_jsons()
@@ -278,9 +284,9 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
             return None;
           }
         }
-        let member = c.specifier.join(".").ok()?;
-        let root_dirs = get_root_dirs(c).unwrap_or_default();
-        Some((member, root_dirs))
+        let dir_url = c.specifier.join(".").ok()?;
+        let root_dirs = get_root_dirs(c, &dir_url).unwrap_or_default();
+        Some((dir_url, root_dirs))
       })
       .collect();
     Self {
@@ -333,8 +339,7 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
       let Ok(candidate_path) = url_to_file_path(&candidate_specifier) else {
         continue;
       };
-
-      if self.sys.fs_is_file(&candidate_path).is_ok_and(|p| p) {
+      if self.sys.fs_is_file_no_err(&candidate_path) {
         return Some(candidate_specifier);
       }
     }
@@ -1434,6 +1439,104 @@ mod test {
         _ => unreachable!(),
       }
     }
+  }
+
+  #[test]
+  fn resolve_compiler_options_root_dirs() {
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["member"],
+        "compilerOptions": {
+          "rootDirs": ["member", "member_types"],
+        },
+      }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "compilerOptions": {
+          "rootDirs": ["foo", "bar"],
+        },
+      }),
+    );
+    sys.fs_insert("member/bar/import_1.ts", "");
+    dbg!(sys.fs_read("member/bar/import_1.ts").unwrap());
+    dbg!(sys.fs_metadata("member/bar/import_1.ts").unwrap());
+    sys.fs_insert("member_types/foo/import_2.ts", "");
+
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        sys.clone(),
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+      )
+      .unwrap();
+    let root_dir_url = workspace_dir.workspace.root_dir();
+    let referrer = root_dir_url.join("member/foo/mod.ts").unwrap();
+
+    let resolution = resolver
+      .resolve("./import_1.ts", &referrer, ResolutionKind::Types)
+      .unwrap();
+    let MappedResolution::ImportMap { specifier, .. } = &resolution else {
+      unreachable!("{:#?}", &resolution);
+    };
+    assert_eq!(
+      specifier.as_str(),
+      root_dir_url
+        .join("member/bar/import_1.ts")
+        .unwrap()
+        .as_str()
+    );
+
+    let resolution = resolver
+      .resolve("./import_2.ts", &referrer, ResolutionKind::Types)
+      .unwrap();
+    let MappedResolution::ImportMap { specifier, .. } = &resolution else {
+      unreachable!("{:#?}", &resolution);
+    };
+    assert_eq!(
+      specifier.as_str(),
+      root_dir_url
+        .join("member_types/foo/import_2.ts")
+        .unwrap()
+        .as_str()
+    );
+
+    // Ignore rootDirs for `ResolutionKind::Execution`.
+    let resolution = resolver
+      .resolve("./import_1.ts", &referrer, ResolutionKind::Execution)
+      .unwrap();
+    let MappedResolution::ImportMap { specifier, .. } = &resolution else {
+      unreachable!("{:#?}", &resolution);
+    };
+    assert_eq!(
+      specifier.as_str(),
+      root_dir_url
+        .join("member/foo/import_1.ts")
+        .unwrap()
+        .as_str()
+    );
+
+    // Ignore rootDirs for `ResolutionKind::Execution`.
+    let resolution = resolver
+      .resolve("./import_2.ts", &referrer, ResolutionKind::Execution)
+      .unwrap();
+    let MappedResolution::ImportMap { specifier, .. } = &resolution else {
+      unreachable!("{:#?}", &resolution);
+    };
+    assert_eq!(
+      specifier.as_str(),
+      root_dir_url
+        .join("member/foo/import_2.ts")
+        .unwrap()
+        .as_str()
+    );
   }
 
   #[test]
