@@ -2074,7 +2074,7 @@ fn is_valid_jsr_pkg_name(name: &str) -> bool {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
   use std::cell::RefCell;
   use std::collections::HashMap;
 
@@ -2096,19 +2096,72 @@ mod test {
   use super::*;
 
   #[derive(Debug)]
-  struct UnreachableMetadata;
+  pub struct UnreachableMetadata;
 
   impl sys_traits::FsMetadataValue for UnreachableMetadata {
     fn file_type(&self) -> sys_traits::FileType {
       unreachable!()
     }
-
+    fn len(&self) -> u64 {
+      unreachable!()
+    }
+    fn accessed(&self) -> std::io::Result<std::time::SystemTime> {
+      unreachable!()
+    }
+    fn created(&self) -> std::io::Result<std::time::SystemTime> {
+      unreachable!()
+    }
+    fn changed(&self) -> std::io::Result<std::time::SystemTime> {
+      unreachable!()
+    }
     fn modified(&self) -> std::io::Result<std::time::SystemTime> {
+      unreachable!()
+    }
+    fn dev(&self) -> std::io::Result<u64> {
+      unreachable!()
+    }
+    fn ino(&self) -> std::io::Result<u64> {
+      unreachable!()
+    }
+    fn mode(&self) -> std::io::Result<u32> {
+      unreachable!()
+    }
+    fn nlink(&self) -> std::io::Result<u64> {
+      unreachable!()
+    }
+    fn uid(&self) -> std::io::Result<u32> {
+      unreachable!()
+    }
+    fn gid(&self) -> std::io::Result<u32> {
+      unreachable!()
+    }
+    fn rdev(&self) -> std::io::Result<u64> {
+      unreachable!()
+    }
+    fn blksize(&self) -> std::io::Result<u64> {
+      unreachable!()
+    }
+    fn blocks(&self) -> std::io::Result<u64> {
+      unreachable!()
+    }
+    fn is_block_device(&self) -> std::io::Result<bool> {
+      unreachable!()
+    }
+    fn is_char_device(&self) -> std::io::Result<bool> {
+      unreachable!()
+    }
+    fn is_fifo(&self) -> std::io::Result<bool> {
+      unreachable!()
+    }
+    fn is_socket(&self) -> std::io::Result<bool> {
+      unreachable!()
+    }
+    fn file_attributes(&self) -> std::io::Result<u32> {
       unreachable!()
     }
   }
 
-  struct UnreachableSys;
+  pub struct UnreachableSys;
 
   impl sys_traits::BaseFsMetadata for UnreachableSys {
     type Metadata = UnreachableMetadata;

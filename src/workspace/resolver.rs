@@ -1079,53 +1079,10 @@ mod test {
   use url::Url;
 
   use super::*;
+  use crate::workspace::test::UnreachableSys;
   use crate::workspace::WorkspaceDirectory;
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
-
-  #[derive(Debug)]
-  struct UnreachableMetadata;
-
-  impl sys_traits::FsMetadataValue for UnreachableMetadata {
-    fn file_type(&self) -> sys_traits::FileType {
-      unreachable!()
-    }
-
-    fn modified(&self) -> std::io::Result<std::time::SystemTime> {
-      unreachable!()
-    }
-  }
-
-  struct UnreachableSys;
-
-  impl sys_traits::BaseFsMetadata for UnreachableSys {
-    type Metadata = UnreachableMetadata;
-
-    #[doc(hidden)]
-    fn base_fs_metadata(
-      &self,
-      _path: &Path,
-    ) -> std::io::Result<Self::Metadata> {
-      unreachable!()
-    }
-
-    #[doc(hidden)]
-    fn base_fs_symlink_metadata(
-      &self,
-      _path: &Path,
-    ) -> std::io::Result<Self::Metadata> {
-      unreachable!()
-    }
-  }
-
-  impl sys_traits::BaseFsRead for UnreachableSys {
-    fn base_fs_read(
-      &self,
-      _path: &Path,
-    ) -> std::io::Result<Cow<'static, [u8]>> {
-      unreachable!()
-    }
-  }
 
   fn root_dir() -> PathBuf {
     if cfg!(windows) {
@@ -1461,10 +1418,8 @@ mod test {
         },
       }),
     );
-    sys.fs_insert("member/bar/import_1.ts", "");
-    dbg!(sys.fs_read("member/bar/import_1.ts").unwrap());
-    dbg!(sys.fs_metadata("member/bar/import_1.ts").unwrap());
-    sys.fs_insert("member_types/foo/import_2.ts", "");
+    sys.fs_insert(root_dir().join("member/bar/import_1.ts"), "");
+    sys.fs_insert(root_dir().join("member_types/baz/import_2.ts"), "");
 
     let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     let resolver = workspace_dir
@@ -1478,8 +1433,8 @@ mod test {
       )
       .unwrap();
     let root_dir_url = workspace_dir.workspace.root_dir();
-    let referrer = root_dir_url.join("member/foo/mod.ts").unwrap();
 
+    let referrer = root_dir_url.join("member/foo/mod.ts").unwrap();
     let resolution = resolver
       .resolve("./import_1.ts", &referrer, ResolutionKind::Types)
       .unwrap();
@@ -1494,6 +1449,7 @@ mod test {
         .as_str()
     );
 
+    let referrer = root_dir_url.join("member/baz/mod.ts").unwrap();
     let resolution = resolver
       .resolve("./import_2.ts", &referrer, ResolutionKind::Types)
       .unwrap();
@@ -1503,12 +1459,13 @@ mod test {
     assert_eq!(
       specifier.as_str(),
       root_dir_url
-        .join("member_types/foo/import_2.ts")
+        .join("member_types/baz/import_2.ts")
         .unwrap()
         .as_str()
     );
 
     // Ignore rootDirs for `ResolutionKind::Execution`.
+    let referrer = root_dir_url.join("member/foo/mod.ts").unwrap();
     let resolution = resolver
       .resolve("./import_1.ts", &referrer, ResolutionKind::Execution)
       .unwrap();
@@ -1524,6 +1481,7 @@ mod test {
     );
 
     // Ignore rootDirs for `ResolutionKind::Execution`.
+    let referrer = root_dir_url.join("member/baz/mod.ts").unwrap();
     let resolution = resolver
       .resolve("./import_2.ts", &referrer, ResolutionKind::Execution)
       .unwrap();
@@ -1533,7 +1491,7 @@ mod test {
     assert_eq!(
       specifier.as_str(),
       root_dir_url
-        .join("member/foo/import_2.ts")
+        .join("member/baz/import_2.ts")
         .unwrap()
         .as_str()
     );
