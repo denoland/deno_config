@@ -1,12 +1,9 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use crate::deno_json::ConfigFileError;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
-use serde_json::json;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::fmt;
 use url::Url;
 
@@ -53,17 +50,6 @@ pub struct EmitConfigOptions {
   pub jsx_fragment_factory: String,
   pub jsx_import_source: Option<String>,
   pub jsx_precompile_skip_elements: Option<Vec<String>>,
-}
-
-/// There are certain compiler options that can impact what modules are part of
-/// a module graph, which need to be deserialized into a structure for analysis.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompilerOptions {
-  pub jsx: Option<String>,
-  pub jsx_import_source: Option<String>,
-  pub jsx_import_source_types: Option<String>,
-  pub types: Option<Vec<String>>,
 }
 
 /// A structure that represents a set of options that were ignored and the
@@ -143,7 +129,7 @@ pub fn parse_compiler_options(
 ) -> ParsedTsConfigOptions {
   let mut allowed: serde_json::Map<String, Value> =
     serde_json::Map::with_capacity(compiler_options.len());
-  let mut ignored: Vec<String> = Vec::with_capacity(compiler_options.len());
+  let mut ignored: Vec<String> = Vec::new(); // don't pre-allocate because it's rare
 
   for (key, value) in compiler_options {
     // We don't pass "types" entries to typescript via the compiler
@@ -177,8 +163,14 @@ pub fn parse_compiler_options(
 }
 
 /// A structure for managing the configuration of TypeScript
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TsConfig(pub Value);
+
+impl Default for TsConfig {
+  fn default() -> Self {
+    Self(serde_json::Value::Object(Default::default()))
+  }
+}
 
 impl TsConfig {
   /// Create a new `TsConfig` with the base being the `value` supplied.
@@ -186,54 +178,16 @@ impl TsConfig {
     TsConfig(value)
   }
 
-  pub fn as_bytes(&self) -> Vec<u8> {
-    let map = self.0.as_object().expect("invalid tsconfig");
-    let ordered: BTreeMap<_, _> = map.iter().collect();
-    let value = json!(ordered);
-    value.to_string().as_bytes().to_owned()
-  }
-
-  /// Return the value of the `checkJs` compiler option, defaulting to `false`
-  /// if not present.
-  pub fn get_check_js(&self) -> bool {
-    if let Some(check_js) = self.0.get("checkJs") {
-      check_js.as_bool().unwrap_or(false)
-    } else {
-      false
-    }
-  }
-
-  pub fn get_declaration(&self) -> bool {
-    if let Some(declaration) = self.0.get("declaration") {
-      declaration.as_bool().unwrap_or(false)
-    } else {
-      false
-    }
+  pub fn merge_mut(&mut self, value: TsConfig) {
+    json_merge(&mut self.0, value.0);
   }
 
   /// Merge a serde_json value into the configuration.
-  pub fn merge(&mut self, value: serde_json::Value) {
-    json_merge(&mut self.0, value);
-  }
-
-  /// Take an optional user provided config file
-  /// which was passed in via the `--config` flag and merge `compilerOptions` with
-  /// the configuration.  Returning the result which optionally contains any
-  /// compiler options that were ignored.
-  pub fn merge_tsconfig_from_config_file(
+  pub fn merge_object_mut(
     &mut self,
-    maybe_config_file: Option<&super::ConfigFile>,
-  ) -> Result<Option<IgnoredCompilerOptions>, ConfigFileError> {
-    if let Some(config_file) = maybe_config_file {
-      let ParsedTsConfigOptions {
-        options,
-        maybe_ignored,
-      } = config_file.to_compiler_options()?;
-      self.merge(serde_json::Value::Object(options));
-      Ok(maybe_ignored)
-    } else {
-      Ok(None)
-    }
+    value: serde_json::Map<String, serde_json::Value>,
+  ) {
+    json_merge(&mut self.0, serde_json::Value::Object(value));
   }
 }
 
@@ -263,28 +217,9 @@ fn json_merge(a: &mut Value, b: Value) {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+  use serde_json::json;
 
-  #[test]
-  fn test_tsconfig_as_bytes() {
-    let mut tsconfig1 = TsConfig::new(json!({
-      "strict": true,
-      "target": "esnext",
-    }));
-    tsconfig1.merge(json!({
-      "target": "es5",
-      "module": "amd",
-    }));
-    let mut tsconfig2 = TsConfig::new(json!({
-      "target": "esnext",
-      "strict": true,
-    }));
-    tsconfig2.merge(json!({
-      "module": "amd",
-      "target": "es5",
-    }));
-    assert_eq!(tsconfig1.as_bytes(), tsconfig2.as_bytes());
-  }
+  use super::*;
 
   #[test]
   fn test_json_merge() {

@@ -31,8 +31,10 @@ use thiserror::Error;
 use url::Url;
 
 use crate::deno_json;
-use crate::deno_json::get_ts_config_for_emit;
+use crate::deno_json::get_base_ts_config_for_emit;
 use crate::deno_json::BenchConfig;
+use crate::deno_json::CompilerOptionTypesDeserializeError;
+use crate::deno_json::CompilerOptionsParseError;
 use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileError;
 use crate::deno_json::ConfigFileRc;
@@ -45,15 +47,15 @@ use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
-use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
 use crate::deno_json::ToInvalidConfigError;
 use crate::deno_json::ToLockConfigError;
-use crate::deno_json::TsConfigForEmit;
+use crate::deno_json::TsConfig;
 use crate::deno_json::TsConfigType;
+use crate::deno_json::TsConfigWithIgnoredOptions;
 use crate::deno_json::WorkspaceConfigParseError;
 use crate::glob::FilePatterns;
 use crate::glob::PathOrPattern;
@@ -643,12 +645,6 @@ impl Workspace {
       member_config: &ConfigFile,
       diagnostics: &mut Vec<WorkspaceDiagnostic>,
     ) {
-      if member_config.json.compiler_options.is_some() {
-        diagnostics.push(WorkspaceDiagnostic {
-          config_url: member_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
-        });
-      }
       if member_config.json.import_map.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
@@ -796,23 +792,8 @@ impl Workspace {
     diagnostics
   }
 
-  pub fn check_js(&self) -> bool {
-    self
-      .with_root_config_only(|root_config| root_config.get_check_js())
-      .unwrap_or(false)
-  }
-
   pub fn vendor_dir_path(&self) -> Option<&PathBuf> {
     self.vendor_dir.as_ref()
-  }
-
-  pub fn to_compiler_options(
-    &self,
-  ) -> Result<Option<ParsedTsConfigOptions>, ConfigFileError> {
-    self
-      .with_root_config_only(|root_config| root_config.to_compiler_options())
-      .map(|o| o.map(Some))
-      .unwrap_or(Ok(None))
   }
 
   pub fn to_lint_config(&self) -> Result<WorkspaceLintConfig, LintConfigError> {
@@ -842,16 +823,6 @@ impl Workspace {
       .unwrap_or(Ok(Default::default()))
   }
 
-  pub fn resolve_ts_config_for_emit(
-    &self,
-    config_type: TsConfigType,
-  ) -> Result<TsConfigForEmit, ConfigFileError> {
-    get_ts_config_for_emit(
-      config_type,
-      self.root_deno_json().map(|c| c.as_ref()),
-    )
-  }
-
   pub fn to_import_map_path(&self) -> Result<Option<PathBuf>, ConfigFileError> {
     self
       .with_root_config_only(|root_config| root_config.to_import_map_path())
@@ -868,29 +839,6 @@ impl Workspace {
     } else {
       Ok(None)
     }
-  }
-
-  pub fn to_compiler_option_types(
-    self: &WorkspaceRc,
-  ) -> Result<Vec<(Url, Vec<String>)>, serde_json::Error> {
-    self
-      .with_root_config_only(|root_config| {
-        root_config.to_compiler_option_types()
-      })
-      .unwrap_or(Ok(Vec::new()))
-  }
-
-  pub fn to_maybe_jsx_import_source_config(
-    self: &WorkspaceRc,
-  ) -> Result<
-    Option<JsxImportSourceConfig>,
-    deno_json::ToMaybeJsxImportSourceConfigError,
-  > {
-    self
-      .with_root_config_only(|root_config| {
-        root_config.to_maybe_jsx_import_source_config()
-      })
-      .unwrap_or(Ok(None))
   }
 
   pub fn resolve_bench_config_for_members(
@@ -1413,6 +1361,108 @@ impl WorkspaceDirectory {
       member_dir: self.clone(),
       license: deno_json.to_license(),
     })
+  }
+
+  pub fn check_js(&self) -> bool {
+    self
+      .deno_json
+      .as_ref()
+      .and_then(|c| {
+        // prefer member, then root
+        c.member
+          .check_js()
+          .or_else(|| c.root.as_ref().and_then(|d| d.check_js()))
+      })
+      .unwrap_or(false)
+  }
+
+  pub fn to_resolved_ts_config(
+    &self,
+    config_type: TsConfigType,
+  ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
+    let mut base_ts_config = get_base_ts_config_for_emit(config_type);
+    let TsConfigWithIgnoredOptions {
+      ts_config,
+      ignored_options,
+    } = self.to_raw_user_provided_tsconfig()?;
+    // overwrite the base values with the user specified ones
+    base_ts_config.merge_mut(ts_config);
+    Ok(TsConfigWithIgnoredOptions {
+      ts_config: base_ts_config,
+      ignored_options,
+    })
+  }
+
+  /// Gets the combined tsconfig that the user provided, without any of
+  /// Deno's defaults. Use `to_resolved_ts_config()` to get the resolved
+  /// config instead.
+  pub fn to_raw_user_provided_tsconfig(
+    &self,
+  ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
+    let mut ignored_options = Vec::new();
+    let mut ts_config = TsConfig::default();
+    if let Some(config) = &self.deno_json {
+      ignored_options.reserve(2);
+      // root first
+      if let Some(root) = &config.root {
+        let root_options = root.to_compiler_options()?;
+        if let Some(options) = root_options.maybe_ignored {
+          ignored_options.push(options);
+        }
+        ts_config.merge_object_mut(root_options.options);
+      }
+
+      // then member overwrites
+      let member_options = config.member.to_compiler_options()?;
+      if let Some(options) = member_options.maybe_ignored {
+        ignored_options.push(options);
+      }
+      ts_config.merge_object_mut(member_options.options);
+    }
+    Ok(TsConfigWithIgnoredOptions {
+      ignored_options,
+      ts_config,
+    })
+  }
+
+  pub fn to_compiler_option_types(
+    &self,
+  ) -> Result<Vec<(Url, Vec<String>)>, CompilerOptionTypesDeserializeError> {
+    let Some(config) = &self.deno_json else {
+      return Ok(Vec::new());
+    };
+    let mut result = Vec::with_capacity(2);
+    if let Some(root) = &config.root {
+      if let Some(types) = root.to_compiler_option_types()? {
+        result.push(types);
+      }
+    }
+    if let Some(types) = config.member.to_compiler_option_types()? {
+      result.push(types);
+    }
+    Ok(result)
+  }
+
+  pub fn to_maybe_jsx_import_source_config(
+    &self,
+  ) -> Result<
+    Option<JsxImportSourceConfig>,
+    deno_json::ToMaybeJsxImportSourceConfigError,
+  > {
+    let Some(config) = &self.deno_json else {
+      return Ok(None);
+    };
+    if let Some(jsx_config) =
+      config.member.to_maybe_jsx_import_source_config()?
+    {
+      return Ok(Some(jsx_config));
+    }
+    if let Some(root) = &config.root {
+      if let Some(jsx_config) = root.to_maybe_jsx_import_source_config()? {
+        return Ok(Some(jsx_config));
+      }
+    }
+    Ok(None)
   }
 
   pub fn to_lint_config(
@@ -2482,45 +2532,28 @@ pub mod test {
     let workspace_dir = workspace_for_root_and_member(
       json!({
         "compilerOptions": {
+          "checkJs": false
+        },
+      }),
+      json!({
+        "compilerOptions": {
           "checkJs": true,
           "types": ["./types.d.ts"],
           "jsx": "react-jsx",
           "jsxImportSource": "npm:react",
           "jsxImportSourceTypes": "npm:@types/react",
-        }
-      }),
-      json!({
-        "compilerOptions": {
-          "checkJs": false
-        }
+        },
       }),
     );
     assert_eq!(
-      workspace_dir
-        .workspace
-        .to_compiler_options()
-        .unwrap()
-        .unwrap()
-        .options,
-      *json!({
-        // ignores member config
-        "checkJs": true,
-        "jsx": "react-jsx",
-        "jsxImportSource": "npm:react",
-      })
-      .as_object()
-      .unwrap()
-    );
-    assert_eq!(
-      workspace_dir.workspace.to_compiler_option_types().unwrap(),
+      workspace_dir.to_compiler_option_types().unwrap(),
       vec![(
-        Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+        Url::from_file_path(root_dir().join("member/deno.json")).unwrap(),
         vec!["./types.d.ts".to_string()]
-      )]
+      )],
     );
     assert_eq!(
       workspace_dir
-        .workspace
         .to_maybe_jsx_import_source_config()
         .unwrap()
         .unwrap(),
@@ -2528,16 +2561,16 @@ pub mod test {
         default_specifier: Some("npm:react".to_string()),
         default_types_specifier: Some("npm:@types/react".to_string()),
         module: "jsx-runtime".to_string(),
-        base_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      }
+        base_url: Url::from_file_path(root_dir().join("member/deno.json"))
+          .unwrap(),
+      },
     );
-    assert_eq!(workspace_dir.workspace.check_js(), true);
+    assert_eq!(workspace_dir.check_js(), true);
     assert_eq!(
       workspace_dir
-        .workspace
-        .resolve_ts_config_for_emit(TsConfigType::Emit)
+        .to_resolved_ts_config(TsConfigType::Emit)
         .unwrap(),
-      TsConfigForEmit {
+      TsConfigWithIgnoredOptions {
         ts_config: TsConfig(json!({
           "allowImportingTsExtensions": true,
           "checkJs": true,
@@ -2555,17 +2588,10 @@ pub mod test {
           "resolveJsonModule": true,
           "jsxImportSource": "npm:react"
         })),
-        maybe_ignored_options: None,
+        ignored_options: Vec::new(),
       }
     );
-    assert_eq!(
-      workspace_dir.workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::RootOnlyOption("compilerOptions"),
-        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
-          .unwrap(),
-      }]
-    );
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
   }
 
   #[test]
