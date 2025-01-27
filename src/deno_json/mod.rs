@@ -33,7 +33,6 @@ use crate::UrlToFilePathError;
 
 mod ts;
 
-pub use ts::CompilerOptions;
 pub use ts::EmitConfigOptions;
 pub use ts::IgnoredCompilerOptions;
 pub use ts::JsxImportSourceConfig;
@@ -62,6 +61,15 @@ pub enum IntoResolvedErrorKind {
   #[class(inherit)]
   #[error("Invalid exclude: {0}")]
   InvalidExclude(crate::glob::FromExcludeRelativePathOrPatternsError),
+}
+
+#[derive(Debug, Error, JsError)]
+#[class(generic)]
+#[error("Failed deserilaizing \"compilerOptions\".\"types\" in {}", self.specifier)]
+pub struct CompilerOptionTypesDeserializeError {
+  specifier: Url,
+  #[source]
+  source: serde_json::Error,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -706,10 +714,19 @@ pub trait DenoJsonCache {
 }
 
 #[derive(Debug, Error, JsError)]
+#[class(type)]
+#[error("compilerOptions should be an object at '{specifier}'")]
+pub struct CompilerOptionsParseError {
+  pub specifier: Url,
+  #[source]
+  pub source: serde_json::Error,
+}
+
+#[derive(Debug, Error, JsError)]
 pub enum ConfigFileError {
-  #[class(type)]
-  #[error("compilerOptions should be an object: {0}")]
-  CompilerOptionsShouldBeObject(serde_json::Error),
+  #[class(inherit)]
+  #[error(transparent)]
+  CompilerOptionsParseError(CompilerOptionsParseError),
   #[class(type)]
   #[error("Only file: specifiers are supported for security reasons in import maps stored in a deno.json. To use a remote import map, use the --import-map flag and \"deno.importMap\" in the language server config")]
   OnlyFileSpecifiersSupported,
@@ -1014,26 +1031,29 @@ impl ConfigFile {
       .to_path_buf()
   }
 
-  /// Returns true if the configuration indicates that JavaScript should be
-  /// type checked, otherwise false.
-  pub fn get_check_js(&self) -> bool {
+  /// Returns if the configuration indicates that JavaScript should be
+  /// type checked, otherwise None if not set.
+  pub fn check_js(&self) -> Option<bool> {
     self
       .json
       .compiler_options
       .as_ref()
       .and_then(|co| co.get("checkJs").and_then(|v| v.as_bool()))
-      .unwrap_or(false)
   }
 
   /// Parse `compilerOptions` and return a serde `Value`.
   /// The result also contains any options that were ignored.
   pub fn to_compiler_options(
     &self,
-  ) -> Result<ParsedTsConfigOptions, ConfigFileError> {
+  ) -> Result<ParsedTsConfigOptions, CompilerOptionsParseError> {
     if let Some(compiler_options) = self.json.compiler_options.clone() {
       let options: serde_json::Map<String, Value> =
-        serde_json::from_value(compiler_options)
-          .map_err(ConfigFileError::CompilerOptionsShouldBeObject)?;
+        serde_json::from_value(compiler_options).map_err(|source| {
+          CompilerOptionsParseError {
+            specifier: self.specifier.clone(),
+            source,
+          }
+        })?;
       Ok(parse_compiler_options(options, Some(&self.specifier)))
     } else {
       Ok(Default::default())
@@ -1580,20 +1600,27 @@ impl ConfigFile {
 
   pub fn to_compiler_option_types(
     &self,
-  ) -> Result<Vec<(Url, Vec<String>)>, serde_json::Error> {
+  ) -> Result<Option<(Url, Vec<String>)>, CompilerOptionTypesDeserializeError>
+  {
     let Some(compiler_options_value) = self.json.compiler_options.as_ref()
     else {
-      return Ok(Vec::new());
+      return Ok(None);
     };
     let Some(types) = compiler_options_value.get("types") else {
-      return Ok(Vec::new());
+      return Ok(None);
     };
-    let imports: Vec<String> = serde_json::from_value(types.clone())?;
+    let imports: Vec<String> =
+      serde_json::from_value(types.clone()).map_err(|source| {
+        CompilerOptionTypesDeserializeError {
+          specifier: self.specifier.clone(),
+          source,
+        }
+      })?;
     if !imports.is_empty() {
       let referrer = self.specifier.clone();
-      Ok(vec![(referrer, imports)])
+      Ok(Some((referrer, imports)))
     } else {
-      Ok(Vec::new())
+      Ok(None)
     }
   }
 
@@ -1603,14 +1630,22 @@ impl ConfigFile {
     &self,
   ) -> Result<Option<JsxImportSourceConfig>, ToMaybeJsxImportSourceConfigError>
   {
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct JsxCompilerOptions {
+      pub jsx: Option<String>,
+      pub jsx_import_source: Option<String>,
+      pub jsx_import_source_types: Option<String>,
+    }
+
     let Some(compiler_options_value) = self.json.compiler_options.as_ref()
     else {
       return Ok(None);
     };
-    let Some(compiler_options) =
-      serde_json::from_value::<CompilerOptions>(compiler_options_value.clone())
-        .ok()
-    else {
+    let Some(compiler_options) = serde_json::from_value::<JsxCompilerOptions>(
+      compiler_options_value.clone(),
+    )
+    .ok() else {
       return Ok(None);
     };
     let module = match compiler_options.jsx.as_deref() {
@@ -1745,6 +1780,7 @@ impl Serialize for TsTypeLib {
 }
 
 /// An enum that represents the base tsc configuration to return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TsConfigType {
   /// Return a configuration for bundling, using swc to emit the bundle. This is
   /// independent of type checking.
@@ -1757,19 +1793,15 @@ pub enum TsConfigType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TsConfigForEmit {
+pub struct TsConfigWithIgnoredOptions {
   pub ts_config: TsConfig,
-  pub maybe_ignored_options: Option<IgnoredCompilerOptions>,
+  pub ignored_options: Vec<IgnoredCompilerOptions>,
 }
 
-/// For a given configuration type and optionally a configuration file,
-/// return a `TsConfig` struct and optionally any user configuration
-/// options that were ignored.
-pub fn get_ts_config_for_emit(
-  config_type: TsConfigType,
-  maybe_config_file: Option<&ConfigFile>,
-) -> Result<TsConfigForEmit, ConfigFileError> {
-  let mut ts_config = match config_type {
+/// For a given configuration type get the starting point TsConfig
+/// used that can then be merged with user specified tsconfigs.
+pub fn get_base_ts_config_for_emit(config_type: TsConfigType) -> TsConfig {
+  match config_type {
     TsConfigType::Bundle => TsConfig::new(json!({
       "allowImportingTsExtensions": true,
       "checkJs": false,
@@ -1827,13 +1859,7 @@ pub fn get_ts_config_for_emit(
       "moduleResolution": "NodeNext",
       "resolveJsonModule": true,
     })),
-  };
-  let maybe_ignored_options =
-    ts_config.merge_tsconfig_from_config_file(maybe_config_file)?;
-  Ok(TsConfigForEmit {
-    ts_config,
-    maybe_ignored_options,
-  })
+  }
 }
 
 #[cfg(test)]
