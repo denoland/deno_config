@@ -1031,8 +1031,8 @@ impl ConfigFile {
       .to_path_buf()
   }
 
-  /// Returns true if the configuration indicates that JavaScript should be
-  /// type checked, otherwise false.
+  /// Returns if the configuration indicates that JavaScript should be
+  /// type checked, otherwise None if not set.
   pub fn check_js(&self) -> Option<bool> {
     self
       .json
