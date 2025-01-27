@@ -260,7 +260,7 @@ impl CompilerOptionsRootDirsResolver {
         .as_array()?
         .iter()
         .filter_map(|s| {
-          Url::from_directory_path(dir_path.join(s.as_str()?)).ok()
+          url_from_directory_path(&dir_path.join(s.as_str()?)).ok()
         })
         .collect();
       Some(root_dirs)
