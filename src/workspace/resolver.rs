@@ -1091,6 +1091,8 @@ mod test {
           root_dir().join(referrer),
         ))
         .unwrap(),
+        ResolutionKind::Execution,
+        &sys,
       )
     };
     match resolve("pkg", "b/index.js").unwrap() {
@@ -1169,6 +1171,8 @@ mod test {
       .resolve(
         "@scope/pkg",
         &url_from_file_path(&root_dir().join("file.ts")).unwrap(),
+        ResolutionKind::Execution,
+        &sys,
       )
       .unwrap();
     match result {
@@ -1311,6 +1315,8 @@ mod test {
         .resolve(
           "@scope/jsr-pkg",
           &url_from_file_path(&root_dir().join("b.ts")).unwrap(),
+          ResolutionKind::Execution,
+          &sys,
         )
         .unwrap();
       match resolution {
@@ -1328,6 +1334,8 @@ mod test {
         .resolve(
           "@scope/jsr-pkg/not-found-export",
           &url_from_file_path(&root_dir().join("b.ts")).unwrap(),
+          ResolutionKind::Execution,
+          &sys,
         )
         .unwrap_err();
       match resolution_err {
@@ -1371,7 +1379,12 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("b", &root.join("main.ts").unwrap())
+      .resolve(
+        "b",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap { specifier, .. } => {
@@ -1441,7 +1454,12 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .resolve(
+        "@scope/patch",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1451,7 +1469,12 @@ mod test {
     }
     // matching version
     match resolver
-      .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/patch@1",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1461,7 +1484,12 @@ mod test {
     }
     // not matching version
     match resolver
-      .resolve("jsr:@scope/patch@2", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/patch@2",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap {
@@ -1514,7 +1542,12 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .resolve(
+        "@scope/patch",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1524,7 +1557,12 @@ mod test {
     }
     // always resolves, no matter what version
     match resolver
-      .resolve("jsr:@scope/patch@12", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/patch@12",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1564,7 +1602,12 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("@scope/member", &root.join("main.ts").unwrap())
+      .resolve(
+        "@scope/member",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1574,7 +1617,12 @@ mod test {
     }
     // matching version
     match resolver
-      .resolve("jsr:@scope/member@1", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/member@1",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1584,7 +1632,12 @@ mod test {
     }
     // not matching version
     match resolver
-      .resolve("jsr:@scope/member@2", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/member@2",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap {
@@ -1652,7 +1705,12 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/patch@1",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1662,7 +1720,12 @@ mod test {
     }
     // resolving @std/fs from root
     match resolver
-      .resolve("@std/fs", &root.join("main.ts").unwrap())
+      .resolve(
+        "@std/fs",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap { specifier, .. } => {
@@ -1672,7 +1735,12 @@ mod test {
     }
     // resolving @std/fs in patched package
     match resolver
-      .resolve("@std/fs", &root.join("../patch/member/mod.ts").unwrap())
+      .resolve(
+        "@std/fs",
+        &root.join("../patch/member/mod.ts").unwrap(),
+        ResolutionKind::Execution,
+        &sys,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap { specifier, .. } => {
@@ -1704,6 +1772,8 @@ mod test {
     let result = resolver.resolve(
       "@deno-test/libs/math",
       &url_from_file_path(&root_dir().join("main.ts")).unwrap(),
+      ResolutionKind::Execution,
+      &sys,
     );
     // Resolve shouldn't panic and tt should result in unmapped
     // bare specifier error as the package name is invalid.
