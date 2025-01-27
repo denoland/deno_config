@@ -556,11 +556,11 @@ impl Workspace {
       })
   }
 
-  pub fn create_resolver(
+  pub fn create_resolver<TSys: FsMetadata + FsRead>(
     &self,
-    sys: &impl FsRead,
+    sys: TSys,
     options: CreateResolverOptions,
-  ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
+  ) -> Result<WorkspaceResolver<TSys>, WorkspaceResolverCreateError> {
     WorkspaceResolver::from_workspace(self, sys, options)
   }
 
@@ -2095,7 +2095,40 @@ mod test {
 
   use super::*;
 
+  #[derive(Debug)]
+  struct UnreachableMetadata;
+
+  impl sys_traits::FsMetadataValue for UnreachableMetadata {
+    fn file_type(&self) -> sys_traits::FileType {
+      unreachable!()
+    }
+
+    fn modified(&self) -> std::io::Result<std::time::SystemTime> {
+      unreachable!()
+    }
+  }
+
   struct UnreachableSys;
+
+  impl sys_traits::BaseFsMetadata for UnreachableSys {
+    type Metadata = UnreachableMetadata;
+
+    #[doc(hidden)]
+    fn base_fs_metadata(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Self::Metadata> {
+      unreachable!()
+    }
+
+    #[doc(hidden)]
+    fn base_fs_symlink_metadata(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Self::Metadata> {
+      unreachable!()
+    }
+  }
 
   impl sys_traits::BaseFsRead for UnreachableSys {
     fn base_fs_read(
@@ -2687,7 +2720,7 @@ mod test {
     );
     let resolver = workspace_dir
       .workspace
-      .create_resolver(&UnreachableSys, Default::default())
+      .create_resolver(UnreachableSys, Default::default())
       .unwrap();
     assert_eq!(
       serde_json::from_str::<serde_json::Value>(

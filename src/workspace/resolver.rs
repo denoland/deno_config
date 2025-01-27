@@ -241,14 +241,15 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
   VersionNotSatisfied(VersionReq, Version),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct CompilerOptionsRootDirsResolver {
+#[derive(Debug)]
+struct CompilerOptionsRootDirsResolver<TSys: FsMetadata> {
   root_dirs_from_root: Vec<Url>,
   root_dirs_by_member: BTreeMap<Url, Vec<Url>>,
+  sys: TSys,
 }
 
-impl CompilerOptionsRootDirsResolver {
-  fn from_workspace(workspace: &Workspace) -> Self {
+impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
+  fn from_workspace(workspace: &Workspace, sys: TSys) -> Self {
     fn get_root_dirs(config_file: &ConfigFile) -> Option<Vec<Url>> {
       let dir_path = url_to_file_path(&config_file.specifier).ok()?;
       let root_dirs = config_file
@@ -285,15 +286,23 @@ impl CompilerOptionsRootDirsResolver {
     Self {
       root_dirs_from_root,
       root_dirs_by_member,
+      sys,
     }
   }
 
-  fn resolve_types(
-    &self,
-    specifier: &Url,
-    referrer: &Url,
-    sys: &impl FsMetadata,
-  ) -> Option<Url> {
+  fn new_raw(
+    root_dirs_from_root: Vec<Url>,
+    root_dirs_by_member: BTreeMap<Url, Vec<Url>>,
+    sys: TSys,
+  ) -> Self {
+    Self {
+      root_dirs_from_root,
+      root_dirs_by_member,
+      sys,
+    }
+  }
+
+  fn resolve_types(&self, specifier: &Url, referrer: &Url) -> Option<Url> {
     if specifier.scheme() != "file" || referrer.scheme() != "file" {
       return None;
     }
@@ -325,7 +334,7 @@ impl CompilerOptionsRootDirsResolver {
         continue;
       };
 
-      if sys.fs_is_file(&candidate_path).is_ok_and(|p| p) {
+      if self.sys.fs_is_file(&candidate_path).is_ok_and(|p| p) {
         return Some(candidate_specifier);
       }
     }
@@ -348,19 +357,19 @@ impl ResolutionKind {
 }
 
 #[derive(Debug)]
-pub struct WorkspaceResolver {
+pub struct WorkspaceResolver<TSys: FsMetadata + FsRead> {
   workspace_root: UrlRc,
   jsr_pkgs: Vec<ResolverWorkspaceJsrPackage>,
   maybe_import_map: Option<ImportMapWithDiagnostics>,
   pkg_jsons: BTreeMap<UrlRc, PkgJsonResolverFolderConfig>,
   pkg_json_dep_resolution: PackageJsonDepResolution,
-  compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver,
+  compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver<TSys>,
 }
 
-impl WorkspaceResolver {
+impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
   pub(crate) fn from_workspace(
     workspace: &Workspace,
-    sys: &impl FsRead,
+    sys: TSys,
     options: CreateResolverOptions,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     fn resolve_import_map(
@@ -455,7 +464,7 @@ impl WorkspaceResolver {
     }
 
     let maybe_import_map =
-      resolve_import_map(sys, workspace, options.specified_import_map)?;
+      resolve_import_map(&sys, workspace, options.specified_import_map)?;
     let jsr_pkgs = workspace.resolver_jsr_pkgs().collect::<Vec<_>>();
     let pkg_jsons = workspace
       .resolver_pkg_jsons()
@@ -472,7 +481,7 @@ impl WorkspaceResolver {
       .collect::<BTreeMap<_, _>>();
 
     let compiler_options_root_dirs_resolver =
-      CompilerOptionsRootDirsResolver::from_workspace(workspace);
+      CompilerOptionsRootDirsResolver::from_workspace(workspace, sys);
 
     Ok(Self {
       workspace_root: workspace.root_dir().clone(),
@@ -487,13 +496,16 @@ impl WorkspaceResolver {
   /// Creates a new WorkspaceResolver from the specified import map and package.jsons.
   ///
   /// Generally, create this from a Workspace instead.
+  #[allow(clippy::too_many_arguments)]
   pub fn new_raw(
     workspace_root: UrlRc,
     maybe_import_map: Option<ImportMap>,
     jsr_pkgs: Vec<ResolverWorkspaceJsrPackage>,
     pkg_jsons: Vec<PackageJsonRc>,
     pkg_json_dep_resolution: PackageJsonDepResolution,
-    compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver,
+    root_dirs_from_root: Vec<Url>,
+    root_dirs_by_member: BTreeMap<Url, Vec<Url>>,
+    sys: TSys,
   ) -> Self {
     let maybe_import_map =
       maybe_import_map.map(|import_map| ImportMapWithDiagnostics {
@@ -515,6 +527,12 @@ impl WorkspaceResolver {
         )
       })
       .collect::<BTreeMap<_, _>>();
+    let compiler_options_root_dirs_resolver =
+      CompilerOptionsRootDirsResolver::new_raw(
+        root_dirs_from_root,
+        root_dirs_by_member,
+        sys,
+      );
     Self {
       workspace_root,
       jsr_pkgs,
@@ -563,9 +581,25 @@ impl WorkspaceResolver {
         })
         .collect(),
       pkg_json_resolution: self.pkg_json_dep_resolution(),
-      compiler_options_root_dirs_resolver: self
+      root_dirs_from_root: self
         .compiler_options_root_dirs_resolver
-        .clone(),
+        .root_dirs_from_root
+        .iter()
+        .map(|s| root_dir_url.make_relative_if_descendant(s))
+        .collect(),
+      root_dirs_by_member: self
+        .compiler_options_root_dirs_resolver
+        .root_dirs_by_member
+        .iter()
+        .map(|(s, r)| {
+          (
+            root_dir_url.make_relative_if_descendant(s),
+            r.iter()
+              .map(|s| root_dir_url.make_relative_if_descendant(s))
+              .collect(),
+          )
+        })
+        .collect(),
     }
   }
 
@@ -580,6 +614,7 @@ impl WorkspaceResolver {
   pub fn try_from_serializable(
     root_dir_url: Url,
     serializable_workspace_resolver: SerializableWorkspaceResolver,
+    sys: TSys,
   ) -> Result<Self, ImportMapError> {
     let import_map = match serializable_workspace_resolver.import_map {
       Some(import_map) => Some(
@@ -618,13 +653,30 @@ impl WorkspaceResolver {
         exports: pkg.exports.into_owned(),
       })
       .collect();
+    let root_dirs_from_root = serializable_workspace_resolver
+      .root_dirs_from_root
+      .iter()
+      .map(|s| root_dir_url.join(s).unwrap())
+      .collect();
+    let root_dirs_by_member = serializable_workspace_resolver
+      .root_dirs_by_member
+      .iter()
+      .map(|(s, r)| {
+        (
+          root_dir_url.join(s).unwrap(),
+          r.iter().map(|s| root_dir_url.join(s).unwrap()).collect(),
+        )
+      })
+      .collect();
     Ok(Self::new_raw(
       UrlRc::new(root_dir_url),
       import_map,
       jsr_packages,
       pkg_jsons,
       serializable_workspace_resolver.pkg_json_resolution,
-      serializable_workspace_resolver.compiler_options_root_dirs_resolver,
+      root_dirs_from_root,
+      root_dirs_by_member,
+      sys,
     ))
   }
 
@@ -655,7 +707,6 @@ impl WorkspaceResolver {
     specifier: &str,
     referrer: &Url,
     resolution_kind: ResolutionKind,
-    sys: &impl FsMetadata,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
     // 1. Attempt to resolve with the import map and normally first
     let resolve_error = match &self.maybe_import_map {
@@ -665,7 +716,7 @@ impl WorkspaceResolver {
             if resolution_kind.is_types() {
               if let Some(specifier) = self
                 .compiler_options_root_dirs_resolver
-                .resolve_types(&value, referrer, sys)
+                .resolve_types(&value, referrer)
               {
                 value = specifier
               }
@@ -686,7 +737,7 @@ impl WorkspaceResolver {
             if resolution_kind.is_types() {
               if let Some(specifier) = self
                 .compiler_options_root_dirs_resolver
-                .resolve_types(&value, referrer, sys)
+                .resolve_types(&value, referrer)
               {
                 value = specifier
               }
@@ -984,7 +1035,8 @@ pub struct SerializableWorkspaceResolver<'a> {
   pub jsr_pkgs: Vec<SerializedResolverWorkspaceJsrPackage<'a>>,
   pub package_jsons: Vec<(String, serde_json::Value)>,
   pub pkg_json_resolution: PackageJsonDepResolution,
-  pub compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver,
+  pub root_dirs_from_root: Vec<Cow<'a, str>>,
+  pub root_dirs_by_member: BTreeMap<Cow<'a, str>, Vec<Cow<'a, str>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1026,7 +1078,40 @@ mod test {
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
 
+  #[derive(Debug)]
+  struct UnreachableMetadata;
+
+  impl sys_traits::FsMetadataValue for UnreachableMetadata {
+    fn file_type(&self) -> sys_traits::FileType {
+      unreachable!()
+    }
+
+    fn modified(&self) -> std::io::Result<std::time::SystemTime> {
+      unreachable!()
+    }
+  }
+
   struct UnreachableSys;
+
+  impl sys_traits::BaseFsMetadata for UnreachableSys {
+    type Metadata = UnreachableMetadata;
+
+    #[doc(hidden)]
+    fn base_fs_metadata(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Self::Metadata> {
+      unreachable!()
+    }
+
+    #[doc(hidden)]
+    fn base_fs_symlink_metadata(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Self::Metadata> {
+      unreachable!()
+    }
+  }
 
   impl sys_traits::BaseFsRead for UnreachableSys {
     fn base_fs_read(
@@ -1092,7 +1177,6 @@ mod test {
         ))
         .unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
     };
     match resolve("pkg", "b/index.js").unwrap() {
@@ -1172,7 +1256,6 @@ mod test {
         "@scope/pkg",
         &url_from_file_path(&root_dir().join("file.ts")).unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap();
     match result {
@@ -1316,7 +1399,6 @@ mod test {
           "@scope/jsr-pkg",
           &url_from_file_path(&root_dir().join("b.ts")).unwrap(),
           ResolutionKind::Execution,
-          &sys,
         )
         .unwrap();
       match resolution {
@@ -1335,7 +1417,6 @@ mod test {
           "@scope/jsr-pkg/not-found-export",
           &url_from_file_path(&root_dir().join("b.ts")).unwrap(),
           ResolutionKind::Execution,
-          &sys,
         )
         .unwrap_err();
       match resolution_err {
@@ -1363,7 +1444,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: Some(SpecifiedImportMap {
@@ -1383,7 +1464,6 @@ mod test {
         "b",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1408,7 +1488,7 @@ mod test {
     workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: Some(SpecifiedImportMap {
@@ -1445,7 +1525,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
@@ -1458,7 +1538,6 @@ mod test {
         "@scope/patch",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1473,7 +1552,6 @@ mod test {
         "jsr:@scope/patch@1",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1488,7 +1566,6 @@ mod test {
         "jsr:@scope/patch@2",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1533,7 +1610,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
@@ -1546,7 +1623,6 @@ mod test {
         "@scope/patch",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1561,7 +1637,6 @@ mod test {
         "jsr:@scope/patch@12",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1593,7 +1668,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
@@ -1606,7 +1681,6 @@ mod test {
         "@scope/member",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1621,7 +1695,6 @@ mod test {
         "jsr:@scope/member@1",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1636,7 +1709,6 @@ mod test {
         "jsr:@scope/member@2",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1696,7 +1768,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
@@ -1709,7 +1781,6 @@ mod test {
         "jsr:@scope/patch@1",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1724,7 +1795,6 @@ mod test {
         "@std/fs",
         &root.join("main.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1739,7 +1809,6 @@ mod test {
         "@std/fs",
         &root.join("../patch/member/mod.ts").unwrap(),
         ResolutionKind::Execution,
-        &sys,
       )
       .unwrap()
     {
@@ -1773,7 +1842,6 @@ mod test {
       "@deno-test/libs/math",
       &url_from_file_path(&root_dir().join("main.ts")).unwrap(),
       ResolutionKind::Execution,
-      &sys,
     );
     // Resolve shouldn't panic and tt should result in unmapped
     // bare specifier error as the package name is invalid.
@@ -1788,11 +1856,13 @@ mod test {
       .starts_with(r#"Invalid workspace member name "@deno-test/libs/math"."#));
   }
 
-  fn create_resolver(workspace_dir: &WorkspaceDirectory) -> WorkspaceResolver {
+  fn create_resolver(
+    workspace_dir: &WorkspaceDirectory,
+  ) -> WorkspaceResolver<UnreachableSys> {
     workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
