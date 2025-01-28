@@ -446,7 +446,7 @@ pub enum WorkspaceResolverDiagnostic<'a> {
 impl fmt::Display for WorkspaceResolverDiagnostic<'_> {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      Self::ImportMap(d) => d.fmt(f),
+      Self::ImportMap(d) => write!(f, "Import map: {d}"),
       Self::CompilerOptionsRootDirs(d) => d.fmt(f),
     }
   }
