@@ -106,6 +106,7 @@ static ALLOWED_COMPILER_OPTIONS: phf::Set<&'static str> = phf::phf_set! {
   "noUncheckedIndexedAccess",
   "noUnusedLocals",
   "noUnusedParameters",
+  "rootDirs",
   "strict",
   "strictBindCallApply",
   "strictBuiltinIteratorReturn",
