@@ -1,5 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileError;
 use crate::sync::new_rc;
 use crate::workspace::Workspace;
@@ -27,7 +28,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
+use sys_traits::FsMetadata;
 use sys_traits::FsRead;
 use thiserror::Error;
 use url::Url;
@@ -239,19 +242,230 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
   VersionNotSatisfied(VersionReq, Version),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompilerOptionsRootDirsDiagnostic {
+  InvalidType(Url),
+  InvalidEntryType(Url, usize),
+  UnexpectedError(Url, String),
+  UnexpectedEntryError(Url, usize, String),
+}
+
+impl fmt::Display for CompilerOptionsRootDirsDiagnostic {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      Self::InvalidType(s) => write!(f, "Invalid value for \"compilerOptions.rootDirs\" (\"{s}\"). Expected a string."),
+      Self::InvalidEntryType(s, i) => write!(f, "Invalid value for \"compilerOptions.rootDirs[{i}]\" (\"{s}\"). Expected a string."),
+      Self::UnexpectedError(s, message) => write!(f, "Unexpected error while parsing \"compilerOptions.rootDirs\" (\"{s}\"): {message}"),
+      Self::UnexpectedEntryError(s, i, message) => write!(f, "Unexpected error while parsing \"compilerOptions.rootDirs[{i}]\" (\"{s}\"): {message}"),
+    }
+  }
+}
+
 #[derive(Debug)]
-pub struct WorkspaceResolver {
+struct CompilerOptionsRootDirsResolver<TSys: FsMetadata> {
+  root_dirs_from_root: Vec<Url>,
+  root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
+  diagnostics: Vec<CompilerOptionsRootDirsDiagnostic>,
+  sys: TSys,
+}
+
+impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
+  fn from_workspace(workspace: &Workspace, sys: TSys) -> Self {
+    let mut diagnostics: Vec<CompilerOptionsRootDirsDiagnostic> = Vec::new();
+    fn get_root_dirs(
+      config_file: &ConfigFile,
+      dir_url: &Url,
+      diagnostics: &mut Vec<CompilerOptionsRootDirsDiagnostic>,
+    ) -> Option<Vec<Url>> {
+      let dir_path = url_to_file_path(dir_url)
+        .inspect_err(|err| {
+          diagnostics.push(CompilerOptionsRootDirsDiagnostic::UnexpectedError(
+            config_file.specifier.clone(),
+            err.to_string(),
+          ));
+        })
+        .ok()?;
+      let root_dirs = config_file
+        .json
+        .compiler_options
+        .as_ref()?
+        .as_object()?
+        .get("rootDirs")?
+        .as_array();
+      if root_dirs.is_none() {
+        diagnostics.push(CompilerOptionsRootDirsDiagnostic::InvalidType(
+          config_file.specifier.clone(),
+        ));
+      }
+      let root_dirs = root_dirs?
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+          let s = s.as_str();
+          if s.is_none() {
+            diagnostics.push(
+              CompilerOptionsRootDirsDiagnostic::InvalidEntryType(
+                config_file.specifier.clone(),
+                i,
+              ),
+            );
+          }
+          url_from_directory_path(&dir_path.join(s?))
+            .inspect_err(|err| {
+              diagnostics.push(
+                CompilerOptionsRootDirsDiagnostic::UnexpectedEntryError(
+                  config_file.specifier.clone(),
+                  i,
+                  err.to_string(),
+                ),
+              );
+            })
+            .ok()
+        })
+        .collect();
+      Some(root_dirs)
+    }
+    let root_deno_json = workspace.root_deno_json();
+    let root_dirs_from_root = root_deno_json
+      .and_then(|c| {
+        let root_dir_url = c
+          .specifier
+          .join(".")
+          .inspect_err(|err| {
+            diagnostics.push(
+              CompilerOptionsRootDirsDiagnostic::UnexpectedError(
+                c.specifier.clone(),
+                err.to_string(),
+              ),
+            );
+          })
+          .ok()?;
+        get_root_dirs(c, &root_dir_url, &mut diagnostics)
+      })
+      .unwrap_or_default();
+    let root_dirs_by_member = workspace
+      .resolver_deno_jsons()
+      .filter_map(|c| {
+        if let Some(root_deno_json) = root_deno_json {
+          if c.specifier == root_deno_json.specifier {
+            return None;
+          }
+        }
+        let dir_url = c
+          .specifier
+          .join(".")
+          .inspect_err(|err| {
+            diagnostics.push(
+              CompilerOptionsRootDirsDiagnostic::UnexpectedError(
+                c.specifier.clone(),
+                err.to_string(),
+              ),
+            );
+          })
+          .ok()?;
+        let root_dirs = get_root_dirs(c, &dir_url, &mut diagnostics);
+        Some((dir_url, root_dirs))
+      })
+      .collect();
+    Self {
+      root_dirs_from_root,
+      root_dirs_by_member,
+      diagnostics,
+      sys,
+    }
+  }
+
+  fn new_raw(
+    root_dirs_from_root: Vec<Url>,
+    root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
+    sys: TSys,
+  ) -> Self {
+    Self {
+      root_dirs_from_root,
+      root_dirs_by_member,
+      diagnostics: Default::default(),
+      sys,
+    }
+  }
+
+  fn resolve_types(&self, specifier: &Url, referrer: &Url) -> Option<Url> {
+    if specifier.scheme() != "file" || referrer.scheme() != "file" {
+      return None;
+    }
+    let root_dirs = self
+      .root_dirs_by_member
+      .iter()
+      .rfind(|(s, _)| referrer.as_str().starts_with(s.as_str()))
+      .and_then(|(_, r)| r.as_ref())
+      .unwrap_or(&self.root_dirs_from_root);
+    let (matched_root_dir, suffix) = root_dirs
+      .iter()
+      .filter_map(|r| {
+        let suffix = specifier.as_str().strip_prefix(r.as_str())?;
+        Some((r, suffix))
+      })
+      .max_by_key(|(r, _)| r.as_str().len())?;
+    for root_dir in root_dirs {
+      if root_dir == matched_root_dir {
+        continue;
+      }
+      let Ok(candidate_specifier) = root_dir.join(suffix) else {
+        continue;
+      };
+      let Ok(candidate_path) = url_to_file_path(&candidate_specifier) else {
+        continue;
+      };
+      if self.sys.fs_is_file_no_err(&candidate_path) {
+        return Some(candidate_specifier);
+      }
+    }
+    None
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResolutionKind {
+  /// Resolving for code that will be executed.
+  Execution,
+  /// Resolving for code that will be used for type information.
+  Types,
+}
+
+impl ResolutionKind {
+  pub fn is_types(&self) -> bool {
+    *self == ResolutionKind::Types
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceResolverDiagnostic<'a> {
+  ImportMap(&'a ImportMapDiagnostic),
+  CompilerOptionsRootDirs(&'a CompilerOptionsRootDirsDiagnostic),
+}
+
+impl fmt::Display for WorkspaceResolverDiagnostic<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      Self::ImportMap(d) => d.fmt(f),
+      Self::CompilerOptionsRootDirs(d) => d.fmt(f),
+    }
+  }
+}
+
+#[derive(Debug)]
+pub struct WorkspaceResolver<TSys: FsMetadata + FsRead> {
   workspace_root: UrlRc,
   jsr_pkgs: Vec<ResolverWorkspaceJsrPackage>,
   maybe_import_map: Option<ImportMapWithDiagnostics>,
   pkg_jsons: BTreeMap<UrlRc, PkgJsonResolverFolderConfig>,
   pkg_json_dep_resolution: PackageJsonDepResolution,
+  compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver<TSys>,
 }
 
-impl WorkspaceResolver {
+impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
   pub(crate) fn from_workspace(
     workspace: &Workspace,
-    sys: &impl FsRead,
+    sys: TSys,
     options: CreateResolverOptions,
   ) -> Result<Self, WorkspaceResolverCreateError> {
     fn resolve_import_map(
@@ -274,6 +488,12 @@ impl WorkspaceResolver {
               c.json.import_map.is_some()
                 || c.json.scopes.is_some()
                 || c.json.imports.is_some()
+                || c
+                  .json
+                  .compiler_options
+                  .as_ref()
+                  .and_then(|v| v.as_object()?.get("rootDirs")?.as_array())
+                  .is_some_and(|a| a.len() > 1)
             })
           {
             // no configs have an import map and none are a package, so exit
@@ -340,7 +560,7 @@ impl WorkspaceResolver {
     }
 
     let maybe_import_map =
-      resolve_import_map(sys, workspace, options.specified_import_map)?;
+      resolve_import_map(&sys, workspace, options.specified_import_map)?;
     let jsr_pkgs = workspace.resolver_jsr_pkgs().collect::<Vec<_>>();
     let pkg_jsons = workspace
       .resolver_pkg_jsons()
@@ -356,24 +576,32 @@ impl WorkspaceResolver {
       })
       .collect::<BTreeMap<_, _>>();
 
+    let compiler_options_root_dirs_resolver =
+      CompilerOptionsRootDirsResolver::from_workspace(workspace, sys);
+
     Ok(Self {
       workspace_root: workspace.root_dir().clone(),
       pkg_json_dep_resolution: options.pkg_json_dep_resolution,
       jsr_pkgs,
       maybe_import_map,
       pkg_jsons,
+      compiler_options_root_dirs_resolver,
     })
   }
 
   /// Creates a new WorkspaceResolver from the specified import map and package.jsons.
   ///
   /// Generally, create this from a Workspace instead.
+  #[allow(clippy::too_many_arguments)]
   pub fn new_raw(
     workspace_root: UrlRc,
     maybe_import_map: Option<ImportMap>,
     jsr_pkgs: Vec<ResolverWorkspaceJsrPackage>,
     pkg_jsons: Vec<PackageJsonRc>,
     pkg_json_dep_resolution: PackageJsonDepResolution,
+    root_dirs_from_root: Vec<Url>,
+    root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
+    sys: TSys,
   ) -> Self {
     let maybe_import_map =
       maybe_import_map.map(|import_map| ImportMapWithDiagnostics {
@@ -395,12 +623,19 @@ impl WorkspaceResolver {
         )
       })
       .collect::<BTreeMap<_, _>>();
+    let compiler_options_root_dirs_resolver =
+      CompilerOptionsRootDirsResolver::new_raw(
+        root_dirs_from_root,
+        root_dirs_by_member,
+        sys,
+      );
     Self {
       workspace_root,
       jsr_pkgs,
       maybe_import_map,
       pkg_jsons,
       pkg_json_dep_resolution,
+      compiler_options_root_dirs_resolver,
     }
   }
 
@@ -442,6 +677,27 @@ impl WorkspaceResolver {
         })
         .collect(),
       pkg_json_resolution: self.pkg_json_dep_resolution(),
+      root_dirs_from_root: self
+        .compiler_options_root_dirs_resolver
+        .root_dirs_from_root
+        .iter()
+        .map(|s| root_dir_url.make_relative_if_descendant(s))
+        .collect(),
+      root_dirs_by_member: self
+        .compiler_options_root_dirs_resolver
+        .root_dirs_by_member
+        .iter()
+        .map(|(s, r)| {
+          (
+            root_dir_url.make_relative_if_descendant(s),
+            r.as_ref().map(|r| {
+              r.iter()
+                .map(|s| root_dir_url.make_relative_if_descendant(s))
+                .collect()
+            }),
+          )
+        })
+        .collect(),
     }
   }
 
@@ -456,6 +712,7 @@ impl WorkspaceResolver {
   pub fn try_from_serializable(
     root_dir_url: Url,
     serializable_workspace_resolver: SerializableWorkspaceResolver,
+    sys: TSys,
   ) -> Result<Self, ImportMapError> {
     let import_map = match serializable_workspace_resolver.import_map {
       Some(import_map) => Some(
@@ -494,12 +751,31 @@ impl WorkspaceResolver {
         exports: pkg.exports.into_owned(),
       })
       .collect();
+    let root_dirs_from_root = serializable_workspace_resolver
+      .root_dirs_from_root
+      .iter()
+      .map(|s| root_dir_url.join(s).unwrap())
+      .collect();
+    let root_dirs_by_member = serializable_workspace_resolver
+      .root_dirs_by_member
+      .iter()
+      .map(|(s, r)| {
+        (
+          root_dir_url.join(s).unwrap(),
+          r.as_ref()
+            .map(|r| r.iter().map(|s| root_dir_url.join(s).unwrap()).collect()),
+        )
+      })
+      .collect();
     Ok(Self::new_raw(
       UrlRc::new(root_dir_url),
       import_map,
       jsr_packages,
       pkg_jsons,
       serializable_workspace_resolver.pkg_json_resolution,
+      root_dirs_from_root,
+      root_dirs_by_member,
+      sys,
     ))
   }
 
@@ -517,43 +793,69 @@ impl WorkspaceResolver {
     self.jsr_pkgs.iter()
   }
 
-  pub fn diagnostics(&self) -> &[ImportMapDiagnostic] {
+  pub fn diagnostics(&self) -> Vec<WorkspaceResolverDiagnostic<'_>> {
     self
-      .maybe_import_map
-      .as_ref()
-      .map(|c| &c.diagnostics as &[ImportMapDiagnostic])
-      .unwrap_or(&[])
+      .compiler_options_root_dirs_resolver
+      .diagnostics
+      .iter()
+      .map(WorkspaceResolverDiagnostic::CompilerOptionsRootDirs)
+      .chain(
+        self
+          .maybe_import_map
+          .as_ref()
+          .iter()
+          .flat_map(|c| &c.diagnostics)
+          .map(WorkspaceResolverDiagnostic::ImportMap),
+      )
+      .collect()
   }
 
   pub fn resolve<'a>(
     &'a self,
     specifier: &str,
     referrer: &Url,
+    resolution_kind: ResolutionKind,
   ) -> Result<MappedResolution<'a>, MappedResolutionError> {
     // 1. Attempt to resolve with the import map and normally first
     let resolve_error = match &self.maybe_import_map {
       Some(import_map) => {
         match import_map.import_map.resolve(specifier, referrer) {
-          Ok(value) => {
+          Ok(mut value) => {
+            if resolution_kind.is_types() {
+              if let Some(specifier) = self
+                .compiler_options_root_dirs_resolver
+                .resolve_types(&value, referrer)
+              {
+                value = specifier
+              }
+            }
             return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
               MappedResolution::ImportMap {
                 specifier: value,
                 maybe_diagnostic: None,
               },
-            )
+            );
           }
           Err(err) => MappedResolutionError::ImportMap(err),
         }
       }
       None => {
         match import_map::specifier::resolve_import(specifier, referrer) {
-          Ok(value) => {
+          Ok(mut value) => {
+            if resolution_kind.is_types() {
+              if let Some(specifier) = self
+                .compiler_options_root_dirs_resolver
+                .resolve_types(&value, referrer)
+              {
+                value = specifier
+              }
+            }
             return self.maybe_resolve_specifier_to_workspace_jsr_pkg(
               MappedResolution::Normal {
                 specifier: value,
                 maybe_diagnostic: None,
               },
-            )
+            );
           }
           Err(err) => MappedResolutionError::Specifier(err),
         }
@@ -841,6 +1143,8 @@ pub struct SerializableWorkspaceResolver<'a> {
   pub jsr_pkgs: Vec<SerializedResolverWorkspaceJsrPackage<'a>>,
   pub package_jsons: Vec<(String, serde_json::Value)>,
   pub pkg_json_resolution: PackageJsonDepResolution,
+  pub root_dirs_from_root: Vec<Cow<'a, str>>,
+  pub root_dirs_by_member: BTreeMap<Cow<'a, str>, Option<Vec<Cow<'a, str>>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -878,20 +1182,10 @@ mod test {
   use url::Url;
 
   use super::*;
+  use crate::workspace::test::UnreachableSys;
   use crate::workspace::WorkspaceDirectory;
   use crate::workspace::WorkspaceDiscoverOptions;
   use crate::workspace::WorkspaceDiscoverStart;
-
-  struct UnreachableSys;
-
-  impl sys_traits::BaseFsRead for UnreachableSys {
-    fn base_fs_read(
-      &self,
-      _path: &Path,
-    ) -> std::io::Result<Cow<'static, [u8]>> {
-      unreachable!()
-    }
-  }
 
   fn root_dir() -> PathBuf {
     if cfg!(windows) {
@@ -947,6 +1241,7 @@ mod test {
           root_dir().join(referrer),
         ))
         .unwrap(),
+        ResolutionKind::Execution,
       )
     };
     match resolve("pkg", "b/index.js").unwrap() {
@@ -1025,6 +1320,7 @@ mod test {
       .resolve(
         "@scope/pkg",
         &url_from_file_path(&root_dir().join("file.ts")).unwrap(),
+        ResolutionKind::Execution,
       )
       .unwrap();
     match result {
@@ -1167,6 +1463,7 @@ mod test {
         .resolve(
           "@scope/jsr-pkg",
           &url_from_file_path(&root_dir().join("b.ts")).unwrap(),
+          ResolutionKind::Execution,
         )
         .unwrap();
       match resolution {
@@ -1184,6 +1481,7 @@ mod test {
         .resolve(
           "@scope/jsr-pkg/not-found-export",
           &url_from_file_path(&root_dir().join("b.ts")).unwrap(),
+          ResolutionKind::Execution,
         )
         .unwrap_err();
       match resolution_err {
@@ -1204,6 +1502,105 @@ mod test {
   }
 
   #[test]
+  fn resolve_compiler_options_root_dirs() {
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["member", "member2"],
+        "compilerOptions": {
+          "rootDirs": ["member", "member2", "member2_types"],
+        },
+      }),
+    );
+    // Overrides `rootDirs` from workspace root.
+    sys.fs_insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "compilerOptions": {
+          "rootDirs": ["foo", "foo_types"],
+        },
+      }),
+    );
+    // Use `rootDirs` from workspace root.
+    sys.fs_insert_json(root_dir().join("member2/deno.json"), json!({}));
+    sys.fs_insert(root_dir().join("member/foo_types/import.ts"), "");
+    sys.fs_insert(root_dir().join("member2_types/import.ts"), "");
+    // This file should be ignored. It would be used if `member/deno.json` had
+    // no `rootDirs`.
+    sys.fs_insert(root_dir().join("member2_types/foo/import.ts"), "");
+
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
+    let resolver = workspace_dir
+      .workspace
+      .create_resolver(
+        sys.clone(),
+        super::CreateResolverOptions {
+          pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
+          specified_import_map: None,
+        },
+      )
+      .unwrap();
+    let root_dir_url = workspace_dir.workspace.root_dir();
+
+    let referrer = root_dir_url.join("member/foo/mod.ts").unwrap();
+    let resolution = resolver
+      .resolve("./import.ts", &referrer, ResolutionKind::Types)
+      .unwrap();
+    let MappedResolution::ImportMap { specifier, .. } = &resolution else {
+      unreachable!("{:#?}", &resolution);
+    };
+    assert_eq!(
+      specifier.as_str(),
+      root_dir_url
+        .join("member/foo_types/import.ts")
+        .unwrap()
+        .as_str()
+    );
+
+    let referrer = root_dir_url.join("member2/mod.ts").unwrap();
+    let resolution = resolver
+      .resolve("./import.ts", &referrer, ResolutionKind::Types)
+      .unwrap();
+    let MappedResolution::ImportMap { specifier, .. } = &resolution else {
+      unreachable!("{:#?}", &resolution);
+    };
+    assert_eq!(
+      specifier.as_str(),
+      root_dir_url
+        .join("member2_types/import.ts")
+        .unwrap()
+        .as_str()
+    );
+
+    // Ignore rootDirs for `ResolutionKind::Execution`.
+    let referrer = root_dir_url.join("member/foo/mod.ts").unwrap();
+    let resolution = resolver
+      .resolve("./import.ts", &referrer, ResolutionKind::Execution)
+      .unwrap();
+    let MappedResolution::ImportMap { specifier, .. } = &resolution else {
+      unreachable!("{:#?}", &resolution);
+    };
+    assert_eq!(
+      specifier.as_str(),
+      root_dir_url.join("member/foo/import.ts").unwrap().as_str()
+    );
+
+    // Ignore rootDirs for `ResolutionKind::Execution`.
+    let referrer = root_dir_url.join("member2/mod.ts").unwrap();
+    let resolution = resolver
+      .resolve("./import.ts", &referrer, ResolutionKind::Execution)
+      .unwrap();
+    let MappedResolution::ImportMap { specifier, .. } = &resolution else {
+      unreachable!("{:#?}", &resolution);
+    };
+    assert_eq!(
+      specifier.as_str(),
+      root_dir_url.join("member2/import.ts").unwrap().as_str()
+    );
+  }
+
+  #[test]
   fn specified_import_map() {
     let sys = InMemorySys::default();
     sys.fs_insert_json(root_dir().join("deno.json"), json!({}));
@@ -1211,7 +1608,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: Some(SpecifiedImportMap {
@@ -1227,7 +1624,11 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("b", &root.join("main.ts").unwrap())
+      .resolve(
+        "b",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap { specifier, .. } => {
@@ -1251,7 +1652,7 @@ mod test {
     workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: Some(SpecifiedImportMap {
@@ -1288,7 +1689,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
@@ -1297,7 +1698,11 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .resolve(
+        "@scope/patch",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1307,7 +1712,11 @@ mod test {
     }
     // matching version
     match resolver
-      .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/patch@1",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1317,7 +1726,11 @@ mod test {
     }
     // not matching version
     match resolver
-      .resolve("jsr:@scope/patch@2", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/patch@2",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap {
@@ -1361,7 +1774,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
@@ -1370,7 +1783,11 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("@scope/patch", &root.join("main.ts").unwrap())
+      .resolve(
+        "@scope/patch",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1380,7 +1797,11 @@ mod test {
     }
     // always resolves, no matter what version
     match resolver
-      .resolve("jsr:@scope/patch@12", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/patch@12",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1411,7 +1832,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
@@ -1420,7 +1841,11 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("@scope/member", &root.join("main.ts").unwrap())
+      .resolve(
+        "@scope/member",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1430,7 +1855,11 @@ mod test {
     }
     // matching version
     match resolver
-      .resolve("jsr:@scope/member@1", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/member@1",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1440,7 +1869,11 @@ mod test {
     }
     // not matching version
     match resolver
-      .resolve("jsr:@scope/member@2", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/member@2",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap {
@@ -1499,7 +1932,7 @@ mod test {
     let resolver = workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,
@@ -1508,7 +1941,11 @@ mod test {
       .unwrap();
     let root = url_from_directory_path(&root_dir()).unwrap();
     match resolver
-      .resolve("jsr:@scope/patch@1", &root.join("main.ts").unwrap())
+      .resolve(
+        "jsr:@scope/patch@1",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::WorkspaceJsrPackage { specifier, .. } => {
@@ -1518,7 +1955,11 @@ mod test {
     }
     // resolving @std/fs from root
     match resolver
-      .resolve("@std/fs", &root.join("main.ts").unwrap())
+      .resolve(
+        "@std/fs",
+        &root.join("main.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap { specifier, .. } => {
@@ -1528,7 +1969,11 @@ mod test {
     }
     // resolving @std/fs in patched package
     match resolver
-      .resolve("@std/fs", &root.join("../patch/member/mod.ts").unwrap())
+      .resolve(
+        "@std/fs",
+        &root.join("../patch/member/mod.ts").unwrap(),
+        ResolutionKind::Execution,
+      )
       .unwrap()
     {
       MappedResolution::ImportMap { specifier, .. } => {
@@ -1560,6 +2005,7 @@ mod test {
     let result = resolver.resolve(
       "@deno-test/libs/math",
       &url_from_file_path(&root_dir().join("main.ts")).unwrap(),
+      ResolutionKind::Execution,
     );
     // Resolve shouldn't panic and tt should result in unmapped
     // bare specifier error as the package name is invalid.
@@ -1574,11 +2020,13 @@ mod test {
       .starts_with(r#"Invalid workspace member name "@deno-test/libs/math"."#));
   }
 
-  fn create_resolver(workspace_dir: &WorkspaceDirectory) -> WorkspaceResolver {
+  fn create_resolver(
+    workspace_dir: &WorkspaceDirectory,
+  ) -> WorkspaceResolver<UnreachableSys> {
     workspace_dir
       .workspace
       .create_resolver(
-        &UnreachableSys,
+        UnreachableSys,
         super::CreateResolverOptions {
           pkg_json_dep_resolution: PackageJsonDepResolution::Enabled,
           specified_import_map: None,

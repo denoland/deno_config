@@ -72,12 +72,14 @@ pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionDiagnostic;
 pub use resolver::MappedResolutionError;
 pub use resolver::PackageJsonDepResolution;
+pub use resolver::ResolutionKind;
 pub use resolver::ResolverWorkspaceJsrPackage;
 pub use resolver::SpecifiedImportMap;
 pub use resolver::WorkspaceResolvePkgJsonFolderError;
 pub use resolver::WorkspaceResolvePkgJsonFolderErrorKind;
 pub use resolver::WorkspaceResolver;
 pub use resolver::WorkspaceResolverCreateError;
+pub use resolver::WorkspaceResolverDiagnostic;
 
 #[allow(clippy::disallowed_types)]
 type UrlRc = crate::sync::MaybeArc<Url>;
@@ -558,11 +560,11 @@ impl Workspace {
       })
   }
 
-  pub fn create_resolver(
+  pub fn create_resolver<TSys: FsMetadata + FsRead>(
     &self,
-    sys: &impl FsRead,
+    sys: TSys,
     options: CreateResolverOptions,
-  ) -> Result<WorkspaceResolver, WorkspaceResolverCreateError> {
+  ) -> Result<WorkspaceResolver<TSys>, WorkspaceResolverCreateError> {
     WorkspaceResolver::from_workspace(self, sys, options)
   }
 
@@ -2124,7 +2126,7 @@ fn is_valid_jsr_pkg_name(name: &str) -> bool {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
   use std::cell::RefCell;
   use std::collections::HashMap;
 
@@ -2145,7 +2147,27 @@ mod test {
 
   use super::*;
 
-  struct UnreachableSys;
+  pub struct UnreachableSys;
+
+  impl sys_traits::BaseFsMetadata for UnreachableSys {
+    type Metadata = sys_traits::impls::RealFsMetadata;
+
+    #[doc(hidden)]
+    fn base_fs_metadata(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Self::Metadata> {
+      unreachable!()
+    }
+
+    #[doc(hidden)]
+    fn base_fs_symlink_metadata(
+      &self,
+      _path: &Path,
+    ) -> std::io::Result<Self::Metadata> {
+      unreachable!()
+    }
+  }
 
   impl sys_traits::BaseFsRead for UnreachableSys {
     fn base_fs_read(
@@ -2713,7 +2735,7 @@ mod test {
     );
     let resolver = workspace_dir
       .workspace
-      .create_resolver(&UnreachableSys, Default::default())
+      .create_resolver(UnreachableSys, Default::default())
       .unwrap();
     assert_eq!(
       serde_json::from_str::<serde_json::Value>(

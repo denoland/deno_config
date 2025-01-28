@@ -11,7 +11,7 @@ repository = "https://github.com/denoland/deno_config"
 members = ["."]
 
 [workspace.dependencies]
-sys_traits = "0.1.0"
+sys_traits = "0.1.8"
 
 [features]
 default = ["workspace"]
