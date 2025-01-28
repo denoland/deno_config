@@ -28,6 +28,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
 use sys_traits::FsMetadata;
 use sys_traits::FsRead;
@@ -241,30 +242,85 @@ pub enum WorkspaceResolvePkgJsonFolderErrorKind {
   VersionNotSatisfied(VersionReq, Version),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompilerOptionsRootDirsDiagnostic {
+  InvalidType(Url),
+  InvalidEntryType(Url, usize),
+  UnexpectedError(Url, String),
+  UnexpectedEntryError(Url, usize, String),
+}
+
+impl fmt::Display for CompilerOptionsRootDirsDiagnostic {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      Self::InvalidType(s) => write!(f, "Invalid value for \"compilerOptions.rootDirs\" (\"{s}\"). Expected a string."),
+      Self::InvalidEntryType(s, i) => write!(f, "Invalid value for \"compilerOptions.rootDirs[{i}]\" (\"{s}\"). Expected a string."),
+      Self::UnexpectedError(s, message) => write!(f, "Unexpected error while parsing \"compilerOptions.rootDirs\" (\"{s}\"): {message}"),
+      Self::UnexpectedEntryError(s, i, message) => write!(f, "Unexpected error while parsing \"compilerOptions.rootDirs[{i}]\" (\"{s}\"): {message}"),
+    }
+  }
+}
+
 #[derive(Debug)]
 struct CompilerOptionsRootDirsResolver<TSys: FsMetadata> {
   root_dirs_from_root: Vec<Url>,
   root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
+  diagnostics: Vec<CompilerOptionsRootDirsDiagnostic>,
   sys: TSys,
 }
 
 impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
   fn from_workspace(workspace: &Workspace, sys: TSys) -> Self {
+    let mut diagnostics: Vec<CompilerOptionsRootDirsDiagnostic> = Vec::new();
     fn get_root_dirs(
       config_file: &ConfigFile,
       dir_url: &Url,
+      diagnostics: &mut Vec<CompilerOptionsRootDirsDiagnostic>,
     ) -> Option<Vec<Url>> {
-      let dir_path = url_to_file_path(dir_url).ok()?;
+      let dir_path = url_to_file_path(dir_url)
+        .inspect_err(|err| {
+          diagnostics.push(CompilerOptionsRootDirsDiagnostic::UnexpectedError(
+            config_file.specifier.clone(),
+            err.to_string(),
+          ));
+        })
+        .ok()?;
       let root_dirs = config_file
         .json
         .compiler_options
         .as_ref()?
         .as_object()?
         .get("rootDirs")?
-        .as_array()?
+        .as_array();
+      if root_dirs.is_none() {
+        diagnostics.push(CompilerOptionsRootDirsDiagnostic::InvalidType(
+          config_file.specifier.clone(),
+        ));
+      }
+      let root_dirs = root_dirs?
         .iter()
-        .filter_map(|s| {
-          url_from_directory_path(&dir_path.join(s.as_str()?)).ok()
+        .enumerate()
+        .filter_map(|(i, s)| {
+          let s = s.as_str();
+          if s.is_none() {
+            diagnostics.push(
+              CompilerOptionsRootDirsDiagnostic::InvalidEntryType(
+                config_file.specifier.clone(),
+                i,
+              ),
+            );
+          }
+          url_from_directory_path(&dir_path.join(s?))
+            .inspect_err(|err| {
+              diagnostics.push(
+                CompilerOptionsRootDirsDiagnostic::UnexpectedEntryError(
+                  config_file.specifier.clone(),
+                  i,
+                  err.to_string(),
+                ),
+              );
+            })
+            .ok()
         })
         .collect();
       Some(root_dirs)
@@ -272,8 +328,19 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
     let root_deno_json = workspace.root_deno_json();
     let root_dirs_from_root = root_deno_json
       .and_then(|c| {
-        let root_dir_url = c.specifier.join(".").ok()?;
-        get_root_dirs(c, &root_dir_url)
+        let root_dir_url = c
+          .specifier
+          .join(".")
+          .inspect_err(|err| {
+            diagnostics.push(
+              CompilerOptionsRootDirsDiagnostic::UnexpectedError(
+                c.specifier.clone(),
+                err.to_string(),
+              ),
+            );
+          })
+          .ok()?;
+        get_root_dirs(c, &root_dir_url, &mut diagnostics)
       })
       .unwrap_or_default();
     let root_dirs_by_member = workspace
@@ -284,14 +351,26 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
             return None;
           }
         }
-        let dir_url = c.specifier.join(".").ok()?;
-        let root_dirs = get_root_dirs(c, &dir_url);
+        let dir_url = c
+          .specifier
+          .join(".")
+          .inspect_err(|err| {
+            diagnostics.push(
+              CompilerOptionsRootDirsDiagnostic::UnexpectedError(
+                c.specifier.clone(),
+                err.to_string(),
+              ),
+            );
+          })
+          .ok()?;
+        let root_dirs = get_root_dirs(c, &dir_url, &mut diagnostics);
         Some((dir_url, root_dirs))
       })
       .collect();
     Self {
       root_dirs_from_root,
       root_dirs_by_member,
+      diagnostics,
       sys,
     }
   }
@@ -304,6 +383,7 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
     Self {
       root_dirs_from_root,
       root_dirs_by_member,
+      diagnostics: Default::default(),
       sys,
     }
   }
@@ -354,6 +434,21 @@ pub enum ResolutionKind {
 impl ResolutionKind {
   pub fn is_types(&self) -> bool {
     *self == ResolutionKind::Types
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceResolverDiagnostic<'a> {
+  ImportMap(&'a ImportMapDiagnostic),
+  CompilerOptionsRootDirs(&'a CompilerOptionsRootDirsDiagnostic),
+}
+
+impl fmt::Display for WorkspaceResolverDiagnostic<'_> {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      Self::ImportMap(d) => d.fmt(f),
+      Self::CompilerOptionsRootDirs(d) => d.fmt(f),
+    }
   }
 }
 
@@ -698,12 +793,21 @@ impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
     self.jsr_pkgs.iter()
   }
 
-  pub fn diagnostics(&self) -> &[ImportMapDiagnostic] {
+  pub fn diagnostics(&self) -> Vec<WorkspaceResolverDiagnostic<'_>> {
     self
-      .maybe_import_map
-      .as_ref()
-      .map(|c| &c.diagnostics as &[ImportMapDiagnostic])
-      .unwrap_or(&[])
+      .compiler_options_root_dirs_resolver
+      .diagnostics
+      .iter()
+      .map(WorkspaceResolverDiagnostic::CompilerOptionsRootDirs)
+      .chain(
+        self
+          .maybe_import_map
+          .as_ref()
+          .iter()
+          .flat_map(|c| &c.diagnostics)
+          .map(WorkspaceResolverDiagnostic::ImportMap),
+      )
+      .collect()
   }
 
   pub fn resolve<'a>(
