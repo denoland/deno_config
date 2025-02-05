@@ -1635,6 +1635,7 @@ mod test {
   use deno_semver::VersionReq;
   use serde_json::json;
   use sys_traits::impls::InMemorySys;
+  use sys_traits::FsCanonicalize;
   use url::Url;
 
   use super::*;
@@ -1960,8 +1961,10 @@ mod test {
   #[test]
   fn resolve_sloppy_imports() {
     let sys = InMemorySys::default();
-    let root_url =
-      url_from_file_path(&std::fs::canonicalize("/").unwrap()).unwrap();
+    let root_url = url_from_file_path(
+      &sys_traits::impls::RealSys.fs_canonicalize("/").unwrap(),
+    )
+    .unwrap();
     let fs = CachedMetadataFs::new(sys.clone(), FsCacheOptions::Enabled);
     let sloppy_imports_resolver =
       SloppyImportsResolver::new(fs, SloppyImportsOptions::Enabled);
