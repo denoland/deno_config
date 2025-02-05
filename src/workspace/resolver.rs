@@ -3,7 +3,6 @@
 use crate::deno_json::ConfigFile;
 use crate::deno_json::ConfigFileError;
 use crate::sync::new_rc;
-use crate::sync::MaybeArc;
 use crate::workspace::Workspace;
 use dashmap::DashMap;
 use deno_error::JsError;
@@ -622,6 +621,10 @@ impl<TSys: FsMetadata> SloppyImportsResolver<TSys> {
   }
 }
 
+#[allow(clippy::disallowed_types)]
+type SloppyImportsResolverRc<T> =
+  crate::sync::MaybeArc<SloppyImportsResolver<T>>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompilerOptionsRootDirsDiagnostic {
   InvalidType(Url),
@@ -646,13 +649,13 @@ struct CompilerOptionsRootDirsResolver<TSys: FsMetadata> {
   root_dirs_from_root: Vec<Url>,
   root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
   diagnostics: Vec<CompilerOptionsRootDirsDiagnostic>,
-  sloppy_imports_resolver: MaybeArc<SloppyImportsResolver<TSys>>,
+  sloppy_imports_resolver: SloppyImportsResolverRc<TSys>,
 }
 
 impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
   fn from_workspace(
     workspace: &Workspace,
-    sloppy_imports_resolver: MaybeArc<SloppyImportsResolver<TSys>>,
+    sloppy_imports_resolver: SloppyImportsResolverRc<TSys>,
   ) -> Self {
     let mut diagnostics: Vec<CompilerOptionsRootDirsDiagnostic> = Vec::new();
     fn get_root_dirs(
@@ -761,7 +764,7 @@ impl<TSys: FsMetadata> CompilerOptionsRootDirsResolver<TSys> {
   fn new_raw(
     root_dirs_from_root: Vec<Url>,
     root_dirs_by_member: BTreeMap<Url, Option<Vec<Url>>>,
-    sloppy_imports_resolver: MaybeArc<SloppyImportsResolver<TSys>>,
+    sloppy_imports_resolver: SloppyImportsResolverRc<TSys>,
   ) -> Self {
     Self {
       root_dirs_from_root,
@@ -853,7 +856,7 @@ pub struct WorkspaceResolver<TSys: FsMetadata + FsRead> {
   pkg_json_dep_resolution: PackageJsonDepResolution,
   sloppy_imports_options: SloppyImportsOptions,
   fs_cache_options: FsCacheOptions,
-  sloppy_imports_resolver: MaybeArc<SloppyImportsResolver<TSys>>,
+  sloppy_imports_resolver: SloppyImportsResolverRc<TSys>,
   compiler_options_root_dirs_resolver: CompilerOptionsRootDirsResolver<TSys>,
 }
 
@@ -972,7 +975,7 @@ impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
       .collect::<BTreeMap<_, _>>();
 
     let fs = CachedMetadataFs::new(sys, options.fs_cache_options);
-    let sloppy_imports_resolver = MaybeArc::new(SloppyImportsResolver::new(
+    let sloppy_imports_resolver = new_rc(SloppyImportsResolver::new(
       fs,
       options.sloppy_imports_options,
     ));
@@ -1033,7 +1036,7 @@ impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
       .collect::<BTreeMap<_, _>>();
     let fs = CachedMetadataFs::new(sys, fs_cache_options);
     let sloppy_imports_resolver =
-      MaybeArc::new(SloppyImportsResolver::new(fs, sloppy_imports_options));
+      new_rc(SloppyImportsResolver::new(fs, sloppy_imports_options));
     let compiler_options_root_dirs_resolver =
       CompilerOptionsRootDirsResolver::new_raw(
         root_dirs_from_root,
