@@ -1960,11 +1960,8 @@ mod test {
   #[test]
   fn resolve_sloppy_imports() {
     let sys = InMemorySys::default();
-    // This includes a drive letter on windows.
-    let root_url = url_from_file_path(
-      &url_to_file_path(&Url::parse("file:///").unwrap()).unwrap(),
-    )
-    .unwrap();
+    let root_url =
+      url_from_file_path(&std::fs::canonicalize("/").unwrap()).unwrap();
     let fs = CachedMetadataFs::new(sys.clone(), FsCacheOptions::Enabled);
     let sloppy_imports_resolver =
       SloppyImportsResolver::new(fs, SloppyImportsOptions::Enabled);
