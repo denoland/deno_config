@@ -1960,6 +1960,11 @@ mod test {
   #[test]
   fn resolve_sloppy_imports() {
     let sys = InMemorySys::default();
+    // This includes a drive letter on windows.
+    let root_url = url_from_file_path(
+      &url_to_file_path(&Url::parse("file:///").unwrap()).unwrap(),
+    )
+    .unwrap();
     let fs = CachedMetadataFs::new(sys.clone(), FsCacheOptions::Enabled);
     let sloppy_imports_resolver =
       SloppyImportsResolver::new(fs, SloppyImportsOptions::Enabled);
@@ -1970,10 +1975,9 @@ mod test {
       ("file2.js", "file2.tsx"),
       ("file3.mjs", "file3.mts"),
     ] {
-      let specifier = Url::parse(&format!("file:///{file_to}")).unwrap();
+      let specifier = root_url.join(file_to).unwrap();
       sys.fs_insert(url_to_file_path(&specifier).unwrap(), "");
-      let sloppy_specifier =
-        Url::parse(&format!("file:///{file_from}")).unwrap();
+      let sloppy_specifier = root_url.join(file_from).unwrap();
       assert_eq!(
         sloppy_imports_resolver.resolve(&specifier, ResolutionKind::Execution),
         None,
@@ -1995,11 +1999,10 @@ mod test {
       "file15.mjs",
       "file16.mts",
     ] {
-      let specifier = Url::parse(&format!("file:///{file}")).unwrap();
+      let specifier = root_url.join(file).unwrap();
       sys.fs_insert(url_to_file_path(&specifier).unwrap(), "");
       let sloppy_specifier =
-        Url::parse(&format!("file:///{}", file.split_once('.').unwrap().0))
-          .unwrap();
+        root_url.join(file.split_once('.').unwrap().0).unwrap();
       assert_eq!(
         sloppy_imports_resolver.resolve(&specifier, ResolutionKind::Execution),
         None,
@@ -2013,9 +2016,9 @@ mod test {
 
     // .ts and .js exists, .js specified (goes to specified)
     {
-      let ts_specifier = Url::parse("file:///ts_and_js.ts").unwrap();
+      let ts_specifier = root_url.join("ts_and_js.ts").unwrap();
       sys.fs_insert(url_to_file_path(&ts_specifier).unwrap(), "");
-      let js_specifier = Url::parse("file:///ts_and_js.js").unwrap();
+      let js_specifier = root_url.join("ts_and_js.js").unwrap();
       sys.fs_insert(url_to_file_path(&js_specifier).unwrap(), "");
       assert_eq!(
         sloppy_imports_resolver
@@ -2026,7 +2029,7 @@ mod test {
 
     // only js exists, .js specified
     {
-      let specifier = Url::parse("file:///js_only.js").unwrap();
+      let specifier = root_url.join("js_only.js").unwrap();
       sys.fs_insert(url_to_file_path(&specifier).unwrap(), "");
       assert_eq!(
         sloppy_imports_resolver.resolve(&specifier, ResolutionKind::Execution),
@@ -2040,9 +2043,9 @@ mod test {
 
     // resolving a directory to an index file
     {
-      let specifier = Url::parse("file:///routes/index.ts").unwrap();
+      let specifier = root_url.join("routes/index.ts").unwrap();
       sys.fs_insert(url_to_file_path(&specifier).unwrap(), "");
-      let sloppy_specifier = Url::parse("file:///routes").unwrap();
+      let sloppy_specifier = root_url.join("routes").unwrap();
       assert_eq!(
         sloppy_imports_resolver
           .resolve(&sloppy_specifier, ResolutionKind::Execution),
@@ -2052,11 +2055,11 @@ mod test {
 
     // both a directory and a file with specifier is present
     {
-      let specifier = Url::parse("file:///api.ts").unwrap();
+      let specifier = root_url.join("api.ts").unwrap();
       sys.fs_insert(url_to_file_path(&specifier).unwrap(), "");
-      let bar_specifier = Url::parse("file:///api/bar.ts").unwrap();
+      let bar_specifier = root_url.join("api/bar.ts").unwrap();
       sys.fs_insert(url_to_file_path(&bar_specifier).unwrap(), "");
-      let sloppy_specifier = Url::parse("file:///api").unwrap();
+      let sloppy_specifier = root_url.join("api").unwrap();
       assert_eq!(
         sloppy_imports_resolver
           .resolve(&sloppy_specifier, ResolutionKind::Execution),
