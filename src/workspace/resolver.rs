@@ -621,6 +621,18 @@ impl<TSys: FsMetadata> SloppyImportsResolver<TSys> {
   }
 }
 
+pub fn sloppy_imports_resolve<TSys: FsMetadata>(
+  specifier: &Url,
+  resolution_kind: ResolutionKind,
+  sys: TSys,
+) -> Option<(Url, SloppyImportsResolutionReason)> {
+  SloppyImportsResolver::new(
+    CachedMetadataFs::new(sys, FsCacheOptions::Enabled),
+    SloppyImportsOptions::Enabled,
+  )
+  .resolve(specifier, resolution_kind)
+}
+
 #[allow(clippy::disallowed_types)]
 type SloppyImportsResolverRc<T> =
   crate::sync::MaybeArc<SloppyImportsResolver<T>>;
@@ -1536,6 +1548,26 @@ impl<TSys: FsMetadata + FsRead> WorkspaceResolver<TSys> {
 
   pub fn pkg_json_dep_resolution(&self) -> PackageJsonDepResolution {
     self.pkg_json_dep_resolution
+  }
+
+  pub fn sloppy_imports_enabled(&self) -> bool {
+    match self.sloppy_imports_options {
+      SloppyImportsOptions::Enabled => true,
+      SloppyImportsOptions::Disabled => false,
+    }
+  }
+
+  pub fn has_compiler_options_root_dirs(&self) -> bool {
+    !self
+      .compiler_options_root_dirs_resolver
+      .root_dirs_from_root
+      .is_empty()
+      || self
+        .compiler_options_root_dirs_resolver
+        .root_dirs_by_member
+        .values()
+        .flatten()
+        .any(|r| !r.is_empty())
   }
 }
 

@@ -67,6 +67,7 @@ use crate::UrlToFilePathError;
 mod discovery;
 mod resolver;
 
+pub use resolver::sloppy_imports_resolve;
 pub use resolver::CreateResolverOptions;
 pub use resolver::FsCacheOptions;
 pub use resolver::MappedResolution;
