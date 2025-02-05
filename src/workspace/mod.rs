@@ -68,12 +68,15 @@ mod discovery;
 mod resolver;
 
 pub use resolver::CreateResolverOptions;
+pub use resolver::FsCacheOptions;
 pub use resolver::MappedResolution;
 pub use resolver::MappedResolutionDiagnostic;
 pub use resolver::MappedResolutionError;
 pub use resolver::PackageJsonDepResolution;
 pub use resolver::ResolutionKind;
 pub use resolver::ResolverWorkspaceJsrPackage;
+pub use resolver::SloppyImportsOptions;
+pub use resolver::SloppyImportsResolutionReason;
 pub use resolver::SpecifiedImportMap;
 pub use resolver::WorkspaceResolvePkgJsonFolderError;
 pub use resolver::WorkspaceResolvePkgJsonFolderErrorKind;
