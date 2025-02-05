@@ -65,26 +65,20 @@ use crate::sync::new_rc;
 use crate::UrlToFilePathError;
 
 mod discovery;
-mod resolver;
-
-pub use resolver::CreateResolverOptions;
-pub use resolver::MappedResolution;
-pub use resolver::MappedResolutionDiagnostic;
-pub use resolver::MappedResolutionError;
-pub use resolver::PackageJsonDepResolution;
-pub use resolver::ResolutionKind;
-pub use resolver::ResolverWorkspaceJsrPackage;
-pub use resolver::SpecifiedImportMap;
-pub use resolver::WorkspaceResolvePkgJsonFolderError;
-pub use resolver::WorkspaceResolvePkgJsonFolderErrorKind;
-pub use resolver::WorkspaceResolver;
-pub use resolver::WorkspaceResolverCreateError;
-pub use resolver::WorkspaceResolverDiagnostic;
 
 #[allow(clippy::disallowed_types)]
 type UrlRc = crate::sync::MaybeArc<Url>;
 #[allow(clippy::disallowed_types)]
 type WorkspaceRc = crate::sync::MaybeArc<Workspace>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolverWorkspaceJsrPackage {
+  pub base: Url,
+  pub name: String,
+  pub version: Option<Version>,
+  pub exports: IndexMap<String, String>,
+  pub is_patch: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct JsrPackageConfig {
@@ -558,14 +552,6 @@ impl Workspace {
           exports: exports_config.into_map(),
         })
       })
-  }
-
-  pub fn create_resolver<TSys: FsMetadata + FsRead>(
-    &self,
-    sys: TSys,
-    options: CreateResolverOptions,
-  ) -> Result<WorkspaceResolver<TSys>, WorkspaceResolverCreateError> {
-    WorkspaceResolver::from_workspace(self, sys, options)
   }
 
   /// Resolves a workspace directory, which can be used for deriving
@@ -2732,32 +2718,6 @@ pub mod test {
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
           .unwrap(),
       }]
-    );
-    let resolver = workspace_dir
-      .workspace
-      .create_resolver(UnreachableSys, Default::default())
-      .unwrap();
-    assert_eq!(
-      serde_json::from_str::<serde_json::Value>(
-        &resolver.maybe_import_map().unwrap().to_json()
-      )
-      .unwrap(),
-      json!({
-        "imports": {
-          "@scope/pkg": "jsr:@scope/pkg@1",
-          "@scope/pkg/": "jsr:/@scope/pkg@1/"
-        },
-        "scopes": {
-          "https://deno.land/x/": {
-            "@scope/pkg": "jsr:@scope/pkg@2",
-            "@scope/pkg/": "jsr:/@scope/pkg@2/"
-          },
-          "./member/": {
-            "@scope/pkg": "jsr:@scope/pkg@3",
-            "@scope/pkg/": "jsr:/@scope/pkg@3/"
-          }
-        }
-      })
     );
   }
 
