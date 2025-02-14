@@ -134,6 +134,8 @@ pub enum WorkspaceDiagnosticKind {
   MissingExports,
   #[error("\"importMap\" field is ignored when \"imports\" or \"scopes\" are specified in the config file.")]
   ImportMapReferencingImportMap,
+  #[error("\"imports\" and \"scopes\" field is ignored when \"importMap\" is specified in the root config file.")]
+  MemberImportsScopesIgnored,
   #[error("Patching npm packages ({package_json_url}) is not implemented.")]
   NpmPatchNotImplemented { package_json_url: Url },
   #[error("`\"nodeModulesDir\": {previous}` is deprecated in Deno 2.0. Use `\"nodeModulesDir\": \"{suggestion}\"` instead")]
@@ -607,6 +609,7 @@ impl Workspace {
   pub fn diagnostics(&self) -> Vec<WorkspaceDiagnostic> {
     fn check_member_diagnostics(
       member_config: &ConfigFile,
+      root_config: Option<&ConfigFile>,
       diagnostics: &mut Vec<WorkspaceDiagnostic>,
     ) {
       if member_config.json.compiler_options.is_some() {
@@ -619,6 +622,19 @@ impl Workspace {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
           kind: WorkspaceDiagnosticKind::RootOnlyOption("importMap"),
+        });
+      } else if member_config.is_an_import_map()
+        && root_config
+          .map(|c| {
+            c.json.import_map.is_some()
+              && c.json.imports.is_none()
+              && c.json.scopes.is_none()
+          })
+          .unwrap_or(false)
+      {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: member_config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::MemberImportsScopesIgnored,
         });
       }
       if member_config.json.lock.is_some() {
@@ -729,7 +745,11 @@ impl Workspace {
       if let Some(config) = &folder.deno_json {
         let is_root = url == &self.root_dir;
         if !is_root {
-          check_member_diagnostics(config, &mut diagnostics);
+          check_member_diagnostics(
+            config,
+            self.root_deno_json().map(|r| r.as_ref()),
+            &mut diagnostics,
+          );
         }
 
         check_all_configs(config, &mut diagnostics);
@@ -2648,6 +2668,28 @@ mod test {
       vec![WorkspaceDiagnostic {
         kind: WorkspaceDiagnosticKind::ImportMapReferencingImportMap,
         config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }]
+    );
+  }
+
+  #[test]
+  fn test_root_import_map_with_member_imports_and_scopes() {
+    let workspace_dir = workspace_for_root_and_member(
+      json!({
+        "importMap": "./other.json"
+      }),
+      json!({
+        "imports": {
+          "@scope/pkg": "jsr:@scope/pkg@3"
+        }
+      }),
+    );
+    assert_eq!(
+      workspace_dir.workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::MemberImportsScopesIgnored,
+        config_url: Url::from_file_path(root_dir().join("member/deno.json"))
+          .unwrap(),
       }]
     );
   }
