@@ -7,30 +7,12 @@ use serde_json::Value;
 use std::fmt;
 use url::Url;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct JsxImportSourceConfig {
-  pub default_specifier: Option<String>,
-  pub default_types_specifier: Option<String>,
-  pub module: String,
-  pub base_url: Url,
-}
-
-impl JsxImportSourceConfig {
-  pub fn maybe_specifier_text(&self) -> Option<String> {
-    self
-      .default_specifier
-      .as_ref()
-      .map(|default_specifier| format!("{}/{}", default_specifier, self.module))
-  }
-
-  pub fn maybe_types_specifier_text(&self) -> Option<String> {
-    self
-      .default_types_specifier
-      .as_ref()
-      .map(|default_types_specifier| {
-        format!("{}/{}", default_types_specifier, self.module)
-      })
-  }
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawJsxCompilerOptions {
+  pub jsx: Option<String>,
+  pub jsx_import_source: Option<String>,
+  pub jsx_import_source_types: Option<String>,
 }
 
 /// The transpile options that are significant out of a user provided tsconfig

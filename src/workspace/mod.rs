@@ -41,7 +41,6 @@ use crate::deno_json::ConfigFileRc;
 use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::FmtConfig;
 use crate::deno_json::FmtOptionsConfig;
-use crate::deno_json::JsxImportSourceConfig;
 use crate::deno_json::LintConfig;
 use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
@@ -119,6 +118,46 @@ impl NpmPackageConfig {
 #[derive(Clone, Debug, Default, Hash, PartialEq)]
 pub struct WorkspaceLintConfig {
   pub report: Option<String>,
+}
+
+#[derive(Debug, Error, JsError)]
+#[class(type)]
+pub enum ToMaybeJsxImportSourceConfigError {
+  #[error("'jsxImportSource' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n  at {0}")]
+  InvalidJsxImportSourceValue(Url),
+  #[error("'jsxImportSourceTypes' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n  at {0}")]
+  InvalidJsxImportSourceTypesValue(Url),
+  #[error("Unsupported 'jsx' compiler option value '{value}'. Supported: 'react-jsx', 'react-jsxdev', 'react', 'precompile'\n  at {specifier}")]
+  InvalidJsxCompilerOption { value: String, specifier: Url },
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct JsxImportSourceSpecifierConfig {
+  pub specifier: String,
+  pub base: Url,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct JsxImportSourceConfig {
+  pub module: String,
+  pub jsx_import_source: Option<JsxImportSourceSpecifierConfig>,
+  pub jsx_import_source_types: Option<JsxImportSourceSpecifierConfig>,
+}
+
+impl JsxImportSourceConfig {
+  pub fn maybe_specifier_text(&self) -> Option<String> {
+    self
+      .jsx_import_source
+      .as_ref()
+      .map(|s| format!("{}/{}", s.specifier, self.module))
+  }
+
+  pub fn maybe_types_specifier_text(&self) -> Option<String> {
+    self
+      .jsx_import_source_types
+      .as_ref()
+      .map(|s| format!("{}/{}", s.specifier, self.module))
+  }
 }
 
 #[derive(Debug, Clone, Error, JsError, PartialEq, Eq)]
@@ -1452,24 +1491,88 @@ impl WorkspaceDirectory {
 
   pub fn to_maybe_jsx_import_source_config(
     &self,
-  ) -> Result<
-    Option<JsxImportSourceConfig>,
-    deno_json::ToMaybeJsxImportSourceConfigError,
-  > {
+  ) -> Result<Option<JsxImportSourceConfig>, ToMaybeJsxImportSourceConfigError>
+  {
     let Some(config) = &self.deno_json else {
       return Ok(None);
     };
-    if let Some(jsx_config) =
-      config.member.to_maybe_jsx_import_source_config()?
-    {
-      return Ok(Some(jsx_config));
-    }
-    if let Some(root) = &config.root {
-      if let Some(jsx_config) = root.to_maybe_jsx_import_source_config()? {
-        return Ok(Some(jsx_config));
+    let base = config
+      .root
+      .as_ref()
+      .map(|r| r.to_raw_jsx_compiler_options())
+      .unwrap_or_default();
+    let member = config.member.to_raw_jsx_compiler_options();
+    let jsx_import_source = member
+      .jsx_import_source
+      .map(|specifier| JsxImportSourceSpecifierConfig {
+        base: config.member.specifier.clone(),
+        specifier,
+      })
+      .or_else(|| {
+        base.jsx_import_source.and_then(|specifier| {
+          Some(JsxImportSourceSpecifierConfig {
+            base: config.root.as_ref().map(|r| r.specifier.clone())?,
+            specifier,
+          })
+        })
+      });
+    let jsx_import_source_types = member
+      .jsx_import_source_types
+      .map(|specifier| JsxImportSourceSpecifierConfig {
+        base: config.member.specifier.clone(),
+        specifier,
+      })
+      .or_else(|| {
+        base.jsx_import_source_types.and_then(|specifier| {
+          Some(JsxImportSourceSpecifierConfig {
+            base: config.root.as_ref().map(|r| r.specifier.clone())?,
+            specifier,
+          })
+        })
+      });
+    let module = match member.jsx.as_deref().or(base.jsx.as_deref()) {
+      Some("react-jsx") => "jsx-runtime".to_string(),
+      Some("react-jsxdev") => "jsx-dev-runtime".to_string(),
+      Some("react") | None => {
+        if let Some(jsx_import_source) = &jsx_import_source {
+          return Err(
+            ToMaybeJsxImportSourceConfigError::InvalidJsxImportSourceValue(
+              jsx_import_source.base.clone(),
+            ),
+          );
+        }
+        if let Some(jsx_import_source) = &jsx_import_source_types {
+          return Err(
+            ToMaybeJsxImportSourceConfigError::InvalidJsxImportSourceTypesValue(
+              jsx_import_source.base.clone(),
+            ),
+          );
+        }
+        return Ok(None);
       }
-    }
-    Ok(None)
+      Some("precompile") => "jsx-runtime".to_string(),
+      Some(setting) => {
+        return Err(
+          ToMaybeJsxImportSourceConfigError::InvalidJsxCompilerOption {
+            value: setting.to_string(),
+            specifier: if member.jsx.is_some() {
+              config.member.specifier.clone()
+            } else {
+              config
+                .root
+                .as_ref()
+                .map(|r| r.specifier.clone())
+                .unwrap_or_else(|| config.member.specifier.clone())
+            },
+          },
+        )
+      }
+    };
+    Ok(Some(JsxImportSourceConfig {
+      module,
+      jsx_import_source,
+      jsx_import_source_types,
+    }))
   }
 
   pub fn to_lint_config(
@@ -2499,11 +2602,17 @@ pub mod test {
         .unwrap()
         .unwrap(),
       JsxImportSourceConfig {
-        default_specifier: Some("npm:react".to_string()),
-        default_types_specifier: Some("npm:@types/react".to_string()),
         module: "jsx-runtime".to_string(),
-        base_url: Url::from_file_path(root_dir().join("member/deno.json"))
-          .unwrap(),
+        jsx_import_source: Some(JsxImportSourceSpecifierConfig {
+          specifier: "npm:react".to_string(),
+          base: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap()
+        }),
+        jsx_import_source_types: Some(JsxImportSourceSpecifierConfig {
+          specifier: "npm:@types/react".to_string(),
+          base: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap()
+        }),
       },
     );
     assert_eq!(workspace_dir.check_js(), true);
@@ -5516,6 +5625,146 @@ pub mod test {
       .unwrap();
       assert_eq!(workspace_dir.workspace.package_jsons().count(), 3);
     }
+  }
+
+  #[test]
+  fn test_jsx_invalid_setting() {
+    let member = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": { "jsx": "preserve" }
+      }),
+      json!({}),
+    );
+    let deno_json = member.workspace.root_deno_json().unwrap();
+    assert_eq!(
+      member.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
+      format!(concat!(
+        "Unsupported 'jsx' compiler option value 'preserve'. Supported: 'react-jsx', 'react-jsxdev', 'react', 'precompile'\n",
+        "  at {}",
+      ), deno_json.specifier),
+    );
+  }
+
+  #[test]
+  fn test_jsx_import_source_only() {
+    {
+      let member = workspace_for_root_and_member(
+        json!({
+          "compilerOptions": { "jsxImportSource": "test" }
+        }),
+        json!({}),
+      );
+      let deno_json = member.workspace.root_deno_json().unwrap();
+      assert_eq!(
+        member.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
+        format!(concat!(
+          "'jsxImportSource' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n",
+          "  at {}",
+        ), deno_json.specifier),
+      );
+    }
+    {
+      let member = workspace_for_root_and_member(
+        json!({
+          "compilerOptions": { "jsx": "react", "jsxImportSource": "test" }
+        }),
+        json!({}),
+      );
+      let deno_json = member.workspace.root_deno_json().unwrap();
+      assert_eq!(
+        member.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
+        format!(concat!(
+          "'jsxImportSource' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n",
+          "  at {}",
+        ), deno_json.specifier),
+      );
+    }
+  }
+
+  #[test]
+  fn test_jsx_import_source_types_only() {
+    {
+      let member = workspace_for_root_and_member(
+        json!({
+          "compilerOptions": { "jsxImportSourceTypes": "test" }
+        }),
+        json!({}),
+      );
+      let deno_json = member.workspace.root_deno_json().unwrap();
+      assert_eq!(
+        member.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
+        format!(concat!(
+          "'jsxImportSourceTypes' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n",
+          "  at {}",
+        ), deno_json.specifier),
+      );
+    }
+    {
+      let member = workspace_for_root_and_member(
+        json!({
+          "compilerOptions": { "jsx": "react", "jsxImportSourceTypes": "test" }
+        }),
+        json!({}),
+      );
+      let deno_json = member.workspace.root_deno_json().unwrap();
+      assert_eq!(
+        member.to_maybe_jsx_import_source_config().err().unwrap().to_string(),
+        format!(concat!(
+          "'jsxImportSourceTypes' is only supported when 'jsx' is set to 'react-jsx' or 'react-jsxdev'.\n",
+          "  at {}",
+        ), deno_json.specifier),
+      );
+    }
+  }
+
+  #[test]
+  fn test_jsx_import_source_valid() {
+    let member = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": { "jsx": "react" }
+      }),
+      json!({}),
+    );
+    assert!(member.to_maybe_jsx_import_source_config().is_ok());
+  }
+
+  #[test]
+  fn test_jsx_precompile_skip_setting() {
+    let member = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "npm:react", "jsxImportSourceTypes": "npm:@types/react" }
+      }),
+      json!({
+        "compilerOptions": { "jsxImportSource": "npm:preact/compat" }
+      }),
+    );
+    let config = member.to_maybe_jsx_import_source_config().unwrap().unwrap();
+    assert_eq!(
+      config,
+      JsxImportSourceConfig {
+        module: "jsx-runtime".to_string(),
+        jsx_import_source: Some(JsxImportSourceSpecifierConfig {
+          specifier: "npm:preact/compat".to_string(),
+          base: Url::from_file_path(root_dir().join("member/deno.json"))
+            .unwrap()
+        }),
+        jsx_import_source_types: Some(JsxImportSourceSpecifierConfig {
+          specifier: "npm:@types/react".to_string(),
+          base: Url::from_file_path(root_dir().join("deno.json")).unwrap()
+        }),
+      }
+    );
+  }
+
+  #[test]
+  fn test_override_member() {
+    let member = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": { "jsx": "precompile", "jsxPrecompileSkipElements": ["a", "p"] }
+      }),
+      json!({}),
+    );
+    assert!(member.to_maybe_jsx_import_source_config().is_ok());
   }
 
   fn workspace_for_root_and_member(
