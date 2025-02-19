@@ -140,8 +140,8 @@ pub struct JsxImportSourceSpecifierConfig {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct JsxImportSourceConfig {
   pub module: String,
-  pub jsx_import_source: Option<JsxImportSourceSpecifierConfig>,
-  pub jsx_import_source_types: Option<JsxImportSourceSpecifierConfig>,
+  pub import_source: Option<JsxImportSourceSpecifierConfig>,
+  pub import_source_types: Option<JsxImportSourceSpecifierConfig>,
 }
 
 #[derive(Debug, Clone, Error, JsError, PartialEq, Eq)]
@@ -1486,7 +1486,7 @@ impl WorkspaceDirectory {
       .map(|r| r.to_raw_jsx_compiler_options())
       .unwrap_or_default();
     let member = config.member.to_raw_jsx_compiler_options();
-    let jsx_import_source = member
+    let import_source = member
       .jsx_import_source
       .map(|specifier| JsxImportSourceSpecifierConfig {
         base: config.member.specifier.clone(),
@@ -1500,7 +1500,7 @@ impl WorkspaceDirectory {
           })
         })
       });
-    let jsx_import_source_types = member
+    let import_source_types = member
       .jsx_import_source_types
       .map(|specifier| JsxImportSourceSpecifierConfig {
         base: config.member.specifier.clone(),
@@ -1518,17 +1518,17 @@ impl WorkspaceDirectory {
       Some("react-jsx") => "jsx-runtime".to_string(),
       Some("react-jsxdev") => "jsx-dev-runtime".to_string(),
       Some("react") | None => {
-        if let Some(jsx_import_source) = &jsx_import_source {
+        if let Some(import_source) = &import_source {
           return Err(
             ToMaybeJsxImportSourceConfigError::InvalidJsxImportSourceValue(
-              jsx_import_source.base.clone(),
+              import_source.base.clone(),
             ),
           );
         }
-        if let Some(jsx_import_source) = &jsx_import_source_types {
+        if let Some(import_source_types) = &import_source_types {
           return Err(
             ToMaybeJsxImportSourceConfigError::InvalidJsxImportSourceTypesValue(
-              jsx_import_source.base.clone(),
+              import_source_types.base.clone(),
             ),
           );
         }
@@ -1554,8 +1554,8 @@ impl WorkspaceDirectory {
     };
     Ok(Some(JsxImportSourceConfig {
       module,
-      jsx_import_source,
-      jsx_import_source_types,
+      import_source,
+      import_source_types,
     }))
   }
 
@@ -2587,12 +2587,12 @@ pub mod test {
         .unwrap(),
       JsxImportSourceConfig {
         module: "jsx-runtime".to_string(),
-        jsx_import_source: Some(JsxImportSourceSpecifierConfig {
+        import_source: Some(JsxImportSourceSpecifierConfig {
           specifier: "npm:react".to_string(),
           base: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap()
         }),
-        jsx_import_source_types: Some(JsxImportSourceSpecifierConfig {
+        import_source_types: Some(JsxImportSourceSpecifierConfig {
           specifier: "npm:@types/react".to_string(),
           base: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap()
@@ -5727,12 +5727,12 @@ pub mod test {
       config,
       JsxImportSourceConfig {
         module: "jsx-runtime".to_string(),
-        jsx_import_source: Some(JsxImportSourceSpecifierConfig {
+        import_source: Some(JsxImportSourceSpecifierConfig {
           specifier: "npm:preact/compat".to_string(),
           base: Url::from_file_path(root_dir().join("member/deno.json"))
             .unwrap()
         }),
-        jsx_import_source_types: Some(JsxImportSourceSpecifierConfig {
+        import_source_types: Some(JsxImportSourceSpecifierConfig {
           specifier: "npm:@types/react".to_string(),
           base: Url::from_file_path(root_dir().join("deno.json")).unwrap()
         }),
