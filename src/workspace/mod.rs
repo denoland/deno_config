@@ -144,22 +144,6 @@ pub struct JsxImportSourceConfig {
   pub jsx_import_source_types: Option<JsxImportSourceSpecifierConfig>,
 }
 
-impl JsxImportSourceConfig {
-  pub fn maybe_specifier_text(&self) -> Option<String> {
-    self
-      .jsx_import_source
-      .as_ref()
-      .map(|s| format!("{}/{}", s.specifier, self.module))
-  }
-
-  pub fn maybe_types_specifier_text(&self) -> Option<String> {
-    self
-      .jsx_import_source_types
-      .as_ref()
-      .map(|s| format!("{}/{}", s.specifier, self.module))
-  }
-}
-
 #[derive(Debug, Clone, Error, JsError, PartialEq, Eq)]
 #[class(type)]
 pub enum WorkspaceDiagnosticKind {
