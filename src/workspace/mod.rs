@@ -1486,6 +1486,10 @@ impl WorkspaceDirectory {
       .map(|r| r.to_raw_jsx_compiler_options())
       .unwrap_or_default();
     let member = config.member.to_raw_jsx_compiler_options();
+    let is_jsx_automatic = matches!(
+      member.jsx.as_deref().or(base.jsx.as_deref()),
+      Some("react-jsx" | "react-jsxdev" | "precompile"),
+    );
     let import_source = member
       .jsx_import_source
       .map(|specifier| JsxImportSourceSpecifierConfig {
@@ -1498,6 +1502,12 @@ impl WorkspaceDirectory {
             base: config.root.as_ref().map(|r| r.specifier.clone())?,
             specifier,
           })
+        })
+      })
+      .or_else(|| {
+        is_jsx_automatic.then(|| JsxImportSourceSpecifierConfig {
+          base: config.member.specifier.clone(),
+          specifier: "react".to_string(),
         })
       });
     let import_source_types = member
@@ -1513,7 +1523,8 @@ impl WorkspaceDirectory {
             specifier,
           })
         })
-      });
+      })
+      .or_else(|| import_source.clone());
     let module = match member.jsx.as_deref().or(base.jsx.as_deref()) {
       Some("react-jsx") => "jsx-runtime".to_string(),
       Some("react-jsxdev") => "jsx-dev-runtime".to_string(),
@@ -5710,6 +5721,32 @@ pub mod test {
       json!({}),
     );
     assert!(member.to_maybe_jsx_import_source_config().is_ok());
+  }
+
+  #[test]
+  fn test_jsx_import_source_defaults() {
+    let member = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": { "jsx": "react-jsx" }
+      }),
+      json!({}),
+    );
+    let config = member.to_maybe_jsx_import_source_config().unwrap().unwrap();
+    assert_eq!(config.import_source.unwrap().specifier, "react");
+    assert_eq!(config.import_source_types.unwrap().specifier, "react");
+  }
+
+  #[test]
+  fn test_jsx_import_source_types_defaults_import_source() {
+    let member = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "jsx" }
+      }),
+      json!({}),
+    );
+    let config = member.to_maybe_jsx_import_source_config().unwrap().unwrap();
+    assert_eq!(config.import_source.unwrap().specifier, "jsx");
+    assert_eq!(config.import_source_types.unwrap().specifier, "jsx");
   }
 
   #[test]
