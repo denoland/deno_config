@@ -5724,6 +5724,32 @@ pub mod test {
   }
 
   #[test]
+  fn test_jsx_import_source_defaults() {
+    let member = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": { "jsx": "react-jsx" }
+      }),
+      json!({}),
+    );
+    let config = member.to_maybe_jsx_import_source_config().unwrap().unwrap();
+    assert_eq!(config.import_source.unwrap().specifier, "react");
+    assert_eq!(config.import_source_types.unwrap().specifier, "react");
+  }
+
+  #[test]
+  fn test_jsx_import_source_types_defaults_import_source() {
+    let member = workspace_for_root_and_member(
+      json!({
+        "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "jsx" }
+      }),
+      json!({}),
+    );
+    let config = member.to_maybe_jsx_import_source_config().unwrap().unwrap();
+    assert_eq!(config.import_source.unwrap().specifier, "jsx");
+    assert_eq!(config.import_source_types.unwrap().specifier, "jsx");
+  }
+
+  #[test]
   fn test_jsx_precompile_skip_setting() {
     let member = workspace_for_root_and_member(
       json!({
