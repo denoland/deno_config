@@ -1486,6 +1486,15 @@ impl WorkspaceDirectory {
       .map(|r| r.to_raw_jsx_compiler_options())
       .unwrap_or_default();
     let member = config.member.to_raw_jsx_compiler_options();
+    let is_jsx_automatic = matches!(
+      member.jsx.as_deref().or(base.jsx.as_deref()),
+      Some("react-jsx" | "react-jsxdev" | "precompile"),
+    );
+    let create_default_automatic_jsx_import_source =
+      || JsxImportSourceSpecifierConfig {
+        base: config.member.specifier.clone(),
+        specifier: "react".to_string(),
+      };
     let import_source = member
       .jsx_import_source
       .map(|specifier| JsxImportSourceSpecifierConfig {
@@ -1499,6 +1508,9 @@ impl WorkspaceDirectory {
             specifier,
           })
         })
+      })
+      .or_else(|| {
+        is_jsx_automatic.then(create_default_automatic_jsx_import_source)
       });
     let import_source_types = member
       .jsx_import_source_types
@@ -1513,6 +1525,9 @@ impl WorkspaceDirectory {
             specifier,
           })
         })
+      })
+      .or_else(|| {
+        is_jsx_automatic.then(create_default_automatic_jsx_import_source)
       });
     let module = match member.jsx.as_deref().or(base.jsx.as_deref()) {
       Some("react-jsx") => "jsx-runtime".to_string(),
