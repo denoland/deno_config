@@ -33,7 +33,9 @@ use crate::workspace::ConfigReadError;
 use crate::workspace::Workspace;
 
 use super::ResolveWorkspaceMemberError;
+use super::ResolveWorkspaceMemberErrorKind;
 use super::ResolveWorkspacePatchError;
+use super::ResolveWorkspacePatchErrorKind;
 use super::UrlRc;
 use super::VendorEnablement;
 use super::WorkspaceDiscoverError;
@@ -308,7 +310,7 @@ fn discover_workspace_config_files_for_single_dir<
       start_dir = Some(dir);
     }
     DirOrConfigFile::ConfigFile(file) => {
-      let specifier = url_from_file_path(file).unwrap();
+      let specifier = url_from_file_path(file)?;
       let config_file = new_rc(
         ConfigFile::from_specifier(sys, specifier.clone())
           .map_err(ConfigReadError::DenoJsonRead)?,
@@ -637,11 +639,12 @@ fn handle_workspace_with_members<TSys: FsRead + FsMetadata + FsReadDir>(
     if let Some(name) = deno_json.json.name.as_deref() {
       if let Some(other_member_url) = seen_names.get(name) {
         return Err(
-          ResolveWorkspaceMemberError::DuplicatePackageName {
+          ResolveWorkspaceMemberErrorKind::DuplicatePackageName {
             name: name.to_string(),
             deno_json_url: deno_json.specifier.clone(),
             other_deno_json_url: (*other_member_url).clone(),
           }
+          .into_box()
           .into(),
         );
       } else {
@@ -679,10 +682,13 @@ fn resolve_workspace_for_config_folder<
       let member = ensure_trailing_slash(raw_member);
       let member_dir_url = root_config_file_directory_url
         .join(&member)
-        .map_err(|err| ResolveWorkspaceMemberError::InvalidMember {
-          base: root_config_folder.folder_url(),
-          member: raw_member.to_owned(),
-          source: err,
+        .map_err(|err| {
+          ResolveWorkspaceMemberErrorKind::InvalidMember {
+            base: root_config_folder.folder_url(),
+            member: raw_member.to_owned(),
+            source: err,
+          }
+          .into_box()
         })?;
       Ok(member_dir_url)
     };
@@ -692,10 +698,13 @@ fn resolve_workspace_for_config_folder<
         .as_str()
         .starts_with(root_config_file_directory_url.as_str())
       {
-        return Err(ResolveWorkspaceMemberError::NonDescendant {
-          workspace_url: root_config_file_directory_url.clone(),
-          member_url: member_dir_url.clone(),
-        });
+        return Err(
+          ResolveWorkspaceMemberErrorKind::NonDescendant {
+            workspace_url: root_config_file_directory_url.clone(),
+            member_url: member_dir_url.clone(),
+          }
+          .into_box(),
+        );
       }
       Ok(())
     };
@@ -708,7 +717,7 @@ fn resolve_workspace_for_config_folder<
       }
 
       let maybe_config_folder =
-        load_config_folder(&url_to_file_path(member_dir_url).unwrap())?;
+        load_config_folder(&url_to_file_path(member_dir_url)?)?;
       maybe_config_folder.ok_or_else(|| {
         // it's fine this doesn't use all the possible config file names
         // as this is only used to enhance the error message
@@ -716,13 +725,15 @@ fn resolve_workspace_for_config_folder<
           || member_dir_url.as_str().ends_with("/deno.jsonc/")
           || member_dir_url.as_str().ends_with("/package.json/")
         {
-          ResolveWorkspaceMemberError::NotFoundMaybeSpecifiedFile {
+          ResolveWorkspaceMemberErrorKind::NotFoundMaybeSpecifiedFile {
             dir_url: member_dir_url.clone(),
           }
+          .into_box()
         } else {
-          ResolveWorkspaceMemberError::NotFound {
+          ResolveWorkspaceMemberErrorKind::NotFound {
             dir_url: member_dir_url.clone(),
           }
+          .into_box()
         }
       })
     };
@@ -746,12 +757,13 @@ fn resolve_workspace_for_config_folder<
               ),
             )
             .map_err(|err| {
-              ResolveWorkspaceMemberError::MemberToPattern {
+              ResolveWorkspaceMemberErrorKind::MemberToPattern {
                 kind,
                 base: root_config_file_directory_url.clone(),
                 member: raw_member.to_string(),
                 source: err,
               }
+              .into_box()
             })
           })
         })
@@ -816,9 +828,10 @@ fn resolve_workspace_for_config_folder<
       for (raw_member, member_dir_url) in member_dir_urls {
         if member_dir_url == root_config_file_directory_url {
           return Err(
-            ResolveWorkspaceMemberError::InvalidSelfReference {
+            ResolveWorkspaceMemberErrorKind::InvalidSelfReference {
               member: raw_member.to_string(),
             }
+            .into_box()
             .into(),
           );
         }
@@ -828,9 +841,10 @@ fn resolve_workspace_for_config_folder<
           .insert(new_rc(member_dir_url.clone()), member_config_folder);
         if previous_member.is_some() {
           return Err(
-            ResolveWorkspaceMemberError::Duplicate {
+            ResolveWorkspaceMemberErrorKind::Duplicate {
               member: raw_member.to_string(),
             }
+            .into_box()
             .into(),
           );
         }
@@ -860,7 +874,7 @@ fn resolve_workspace_for_config_folder<
       }
       for pkg_json_path in pkg_json_paths {
         let member_dir_url =
-          url_from_directory_path(pkg_json_path.parent().unwrap()).unwrap();
+          url_from_directory_path(pkg_json_path.parent().unwrap())?;
         member_dir_urls.insert(member_dir_url);
       }
 
@@ -872,20 +886,28 @@ fn resolve_workspace_for_config_folder<
         let member_config_folder =
           match find_member_config_folder(&member_dir_url) {
             Ok(config_folder) => config_folder,
-            Err(ResolveWorkspaceMemberError::NotFound { dir_url }) => {
-              // enhance the error to say we didn't find a package.json
+            Err(err) => {
               return Err(
-                ResolveWorkspaceMemberError::NotFoundPackageJson { dir_url }
-                  .into(),
+                match err.into_kind() {
+                  ResolveWorkspaceMemberErrorKind::NotFound { dir_url } => {
+                    // enhance the error to say we didn't find a package.json
+                    ResolveWorkspaceMemberErrorKind::NotFoundPackageJson {
+                      dir_url,
+                    }
+                    .into_box()
+                  }
+                  err => err.into_box(),
+                }
+                .into(),
               );
             }
-            Err(err) => return Err(err.into()),
           };
         if member_config_folder.pkg_json().is_none() {
           return Err(
-            ResolveWorkspaceMemberError::NotFoundPackageJson {
+            ResolveWorkspaceMemberErrorKind::NotFoundPackageJson {
               dir_url: member_dir_url,
             }
+            .into_box()
             .into(),
           );
         }
@@ -950,7 +972,8 @@ fn resolve_patch_config_folders<TSys: FsRead + FsMetadata + FsReadDir>(
           WorkspaceDiscoverErrorKind::ResolvePatch {
             base: root_config_file_directory_url.clone(),
             patch: raw_member.to_string(),
-            source: ResolveWorkspacePatchError::WorkspaceMemberNotAllowed,
+            source: ResolveWorkspacePatchErrorKind::WorkspaceMemberNotAllowed
+              .into_box(),
           }
           .into(),
         ));
@@ -972,12 +995,15 @@ fn resolve_patch_member_config_folders<
     &Path,
   ) -> Result<Option<ConfigFolder>, ConfigReadError>,
 ) -> Result<BTreeMap<UrlRc, ConfigFolder>, ResolveWorkspacePatchError> {
-  let patch_dir_path = url_to_file_path(patch_dir_url).unwrap();
+  let patch_dir_path = url_to_file_path(patch_dir_url)?;
   let maybe_config_folder = load_config_folder(&patch_dir_path)?;
   let Some(config_folder) = maybe_config_folder else {
-    return Err(ResolveWorkspacePatchError::NotFound {
-      dir_url: patch_dir_url.clone(),
-    });
+    return Err(
+      ResolveWorkspacePatchErrorKind::NotFound {
+        dir_url: patch_dir_url.clone(),
+      }
+      .into_box(),
+    );
   };
   if config_folder.has_workspace_members() {
     let maybe_vendor_dir =
@@ -989,7 +1015,7 @@ fn resolve_patch_member_config_folders<
       &mut HashMap::new(),
       &load_config_folder,
     )
-    .map_err(|err| ResolveWorkspacePatchError::Workspace(Box::new(err)))?;
+    .map_err(|err| ResolveWorkspacePatchErrorKind::Workspace(Box::new(err)))?;
     raw_workspace
       .members
       .insert(new_rc(raw_workspace.root.folder_url()), raw_workspace.root);

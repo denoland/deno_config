@@ -1,5 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use boxed_error::Boxed;
 use deno_error::JsError;
 use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
@@ -181,8 +182,11 @@ pub struct WorkspaceDiagnostic {
   pub config_url: Url,
 }
 
+#[derive(Debug, JsError, Boxed)]
+pub struct ResolveWorkspacePatchError(pub Box<ResolveWorkspacePatchErrorKind>);
+
 #[derive(Debug, Error, JsError)]
-pub enum ResolveWorkspacePatchError {
+pub enum ResolveWorkspacePatchErrorKind {
   #[class(inherit)]
   #[error(transparent)]
   ConfigRead(#[from] ConfigReadError),
@@ -195,6 +199,9 @@ pub enum ResolveWorkspacePatchError {
   #[class(inherit)]
   #[error(transparent)]
   InvalidPatch(#[from] url::ParseError),
+  #[class(inherit)]
+  #[error(transparent)]
+  UrlToFilePath(#[from] deno_path_util::UrlToFilePathError),
   #[class(inherit)]
   #[error(transparent)]
   Workspace(Box<WorkspaceDiscoverError>),
@@ -210,9 +217,15 @@ pub enum ConfigReadError {
   PackageJsonRead(#[from] PackageJsonLoadError),
 }
 
+#[derive(Debug, JsError, Boxed)]
+#[class(type)]
+pub struct ResolveWorkspaceMemberError(
+  pub Box<ResolveWorkspaceMemberErrorKind>,
+);
+
 #[derive(Debug, Error, JsError)]
 #[class(type)]
-pub enum ResolveWorkspaceMemberError {
+pub enum ResolveWorkspaceMemberErrorKind {
   #[class(inherit)]
   #[error(transparent)]
   ConfigRead(#[from] ConfigReadError),
@@ -258,31 +271,14 @@ pub enum ResolveWorkspaceMemberError {
     #[inherit]
     source: PathOrPatternParseError,
   },
+  #[error(transparent)]
+  #[class(inherit)]
+  UrlToFilePath(#[from] deno_path_util::UrlToFilePathError),
 }
 
-#[derive(Debug, Error, JsError)]
+#[derive(Debug, JsError, Boxed)]
 #[class(inherit)]
-#[error(transparent)]
-pub struct WorkspaceDiscoverError(Box<WorkspaceDiscoverErrorKind>);
-
-impl WorkspaceDiscoverError {
-  pub fn as_kind(&self) -> &WorkspaceDiscoverErrorKind {
-    &self.0
-  }
-
-  pub fn into_kind(self) -> WorkspaceDiscoverErrorKind {
-    *self.0
-  }
-}
-
-impl<E> From<E> for WorkspaceDiscoverError
-where
-  WorkspaceDiscoverErrorKind: From<E>,
-{
-  fn from(err: E) -> Self {
-    WorkspaceDiscoverError(Box::new(WorkspaceDiscoverErrorKind::from(err)))
-  }
-}
+pub struct WorkspaceDiscoverError(pub Box<WorkspaceDiscoverErrorKind>);
 
 #[derive(Debug, Error, JsError)]
 #[class(type)]
@@ -332,7 +328,10 @@ pub enum WorkspaceDiscoverErrorKind {
   },
   #[class(inherit)]
   #[error(transparent)]
-  UrlToFilePathError(#[from] UrlToFilePathError),
+  UrlToFilePath(#[from] UrlToFilePathError),
+  #[class(inherit)]
+  #[error(transparent)]
+  PathToUrl(#[from] deno_path_util::PathToUrlError),
   #[class(type)]
   #[error("Config file must be a member of the workspace.\n  Config: {config_url}\n  Workspace: {workspace_url}")]
   ConfigNotWorkspaceMember { workspace_url: Url, config_url: Url },
@@ -2742,8 +2741,8 @@ pub mod test {
       } => {
         assert_eq!(patch, "./member");
         assert_eq!(base, url_from_directory_path(&root_dir()).unwrap());
-        match source {
-          ResolveWorkspacePatchError::NotFound { dir_url } => {
+        match source.into_kind() {
+          ResolveWorkspacePatchErrorKind::NotFound { dir_url } => {
             assert_eq!(
               dir_url,
               url_from_directory_path(&root_dir().join("member")).unwrap()
@@ -2777,8 +2776,8 @@ pub mod test {
         assert_eq!(patch, "./member");
         assert_eq!(base, url_from_directory_path(&root_dir()).unwrap());
         assert!(matches!(
-          source,
-          ResolveWorkspacePatchError::WorkspaceMemberNotAllowed
+          source.into_kind(),
+          ResolveWorkspacePatchErrorKind::WorkspaceMemberNotAllowed
         ));
       }
       _ => unreachable!(),
@@ -3611,25 +3610,26 @@ pub mod test {
     )
     .unwrap_err();
     match err.into_kind() {
-      WorkspaceDiscoverErrorKind::ResolveMember(
-        ResolveWorkspaceMemberError::DuplicatePackageName {
+      WorkspaceDiscoverErrorKind::ResolveMember(err) => match err.into_kind() {
+        ResolveWorkspaceMemberErrorKind::DuplicatePackageName {
           name,
           deno_json_url,
           other_deno_json_url,
-        },
-      ) => {
-        assert_eq!(name, "@scope/pkg");
-        assert_eq!(
-          deno_json_url,
-          Url::from_file_path(root_dir().join("member2").join("deno.json"))
-            .unwrap()
-        );
-        assert_eq!(
-          other_deno_json_url,
-          Url::from_file_path(root_dir().join("member1").join("deno.json"))
-            .unwrap()
-        );
-      }
+        } => {
+          assert_eq!(name, "@scope/pkg");
+          assert_eq!(
+            deno_json_url,
+            Url::from_file_path(root_dir().join("member2").join("deno.json"))
+              .unwrap()
+          );
+          assert_eq!(
+            other_deno_json_url,
+            Url::from_file_path(root_dir().join("member1").join("deno.json"))
+              .unwrap()
+          );
+        }
+        _ => unreachable!(),
+      },
       _ => unreachable!(),
     }
   }
