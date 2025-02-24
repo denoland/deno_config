@@ -2235,6 +2235,7 @@ pub mod test {
 
   use deno_path_util::normalize_path;
   use deno_path_util::url_from_directory_path;
+  use deno_path_util::url_from_file_path;
   use pretty_assertions::assert_eq;
   use serde_json::json;
   use sys_traits::impls::InMemorySys;
@@ -2807,6 +2808,28 @@ pub mod test {
         config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
       }]
     );
+  }
+
+  #[test]
+  fn test_patch_absolute_path() {
+    let root_path = root_dir().join("../dir");
+    let workspace_dir = workspace_for_root_and_member_with_fs(
+      json!({
+        "patch": [root_path.to_string_lossy().to_string()],
+      }),
+      json!({}),
+      |fs| {
+        fs.fs_insert_json(root_dir().join("../dir/deno.json"), json!({}));
+      },
+    );
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let patch_folders =
+      workspace_dir.workspace.patch_folders().collect::<Vec<_>>();
+    assert_eq!(patch_folders.len(), 1);
+    assert_eq!(
+      patch_folders[0].deno_json.as_ref().unwrap().specifier,
+      url_from_file_path(&root_dir().join("../dir/deno.json")).unwrap()
+    )
   }
 
   #[test]
