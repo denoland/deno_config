@@ -943,7 +943,7 @@ fn resolve_patch_config_folders<TSys: FsRead + FsMetadata + FsReadDir>(
     |raw_patch: &str| -> Result<Url, WorkspaceDiscoverError> {
       let patch = ensure_trailing_slash(raw_patch);
       // support someone specifying an absolute path
-      if patch.starts_with('/')
+      if !cfg!(windows) && patch.starts_with('/')
         || cfg!(windows) && patch.chars().any(|c| c == '\\')
       {
         if let Ok(value) =
