@@ -942,6 +942,16 @@ fn resolve_patch_config_folders<TSys: FsRead + FsMetadata + FsReadDir>(
   let resolve_patch_dir_url =
     |raw_patch: &str| -> Result<Url, WorkspaceDiscoverError> {
       let patch = ensure_trailing_slash(raw_patch);
+      // support someone specifying an absolute path
+      if patch.starts_with('/')
+        || cfg!(windows) && patch.chars().any(|c| c == '\\')
+      {
+        if let Ok(value) =
+          deno_path_util::url_from_file_path(&PathBuf::from(patch.as_ref()))
+        {
+          return Ok(value);
+        }
+      }
       let patch_dir_url =
         root_config_file_directory_url.join(&patch).map_err(|err| {
           WorkspaceDiscoverErrorKind::ResolvePatch {
