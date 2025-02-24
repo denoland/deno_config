@@ -551,8 +551,23 @@ impl TaskDefinition {
   }
 }
 
+#[derive(Debug, JsError, Boxed)]
+pub struct ConfigFileReadError(pub Box<ConfigFileReadErrorKind>);
+
+impl ConfigFileReadError {
+  pub fn is_not_found(&self) -> bool {
+    if let ConfigFileReadErrorKind::FailedReading { source: ioerr, .. } =
+      self.as_kind()
+    {
+      matches!(ioerr.kind(), std::io::ErrorKind::NotFound)
+    } else {
+      false
+    }
+  }
+}
+
 #[derive(Debug, Error, JsError)]
-pub enum ConfigFileReadError {
+pub enum ConfigFileReadErrorKind {
   #[class(type)]
   #[error("Could not convert config file path to specifier. Path: {0}")]
   PathToUrl(PathBuf),
@@ -585,16 +600,6 @@ pub enum ConfigFileReadError {
   #[class(type)]
   #[error("Config file JSON should be an object '{specifier}'.")]
   NotObject { specifier: Url },
-}
-
-impl ConfigFileReadError {
-  pub fn is_not_found(&self) -> bool {
-    if let ConfigFileReadError::FailedReading { source: ioerr, .. } = self {
-      matches!(ioerr.kind(), std::io::ErrorKind::NotFound)
-    } else {
-      false
-    }
-  }
 }
 
 #[derive(Debug, Error, JsError)]
@@ -914,7 +919,9 @@ impl ConfigFile {
     config_file_names: &[&str],
   ) -> Result<Option<ConfigFileRc>, ConfigFileReadError> {
     fn is_skippable_err(e: &ConfigFileReadError) -> bool {
-      if let ConfigFileReadError::FailedReading { source: ioerr, .. } = e {
+      if let ConfigFileReadErrorKind::FailedReading { source: ioerr, .. } =
+        e.as_kind()
+      {
         is_skippable_io_error(ioerr)
       } else {
         false
@@ -951,8 +958,9 @@ impl ConfigFile {
     config_path: &Path,
   ) -> Result<Self, ConfigFileReadError> {
     debug_assert!(config_path.is_absolute());
-    let specifier = url_from_file_path(config_path)
-      .map_err(|_| ConfigFileReadError::PathToUrl(config_path.to_path_buf()))?;
+    let specifier = url_from_file_path(config_path).map_err(|_| {
+      ConfigFileReadErrorKind::PathToUrl(config_path.to_path_buf()).into_box()
+    })?;
     Self::from_specifier_and_path(sys, specifier, config_path)
   }
 
@@ -970,10 +978,11 @@ impl ConfigFile {
     config_path: &Path,
   ) -> Result<Self, ConfigFileReadError> {
     let text = sys.fs_read_to_string_lossy(config_path).map_err(|err| {
-      ConfigFileReadError::FailedReading {
+      ConfigFileReadErrorKind::FailedReading {
         specifier: specifier.clone(),
         source: err,
       }
+      .into_box()
     })?;
     Self::new(&text, specifier)
   }
@@ -992,21 +1001,27 @@ impl ConfigFile {
         json!({})
       }
       Err(e) => {
-        return Err(ConfigFileReadError::Parse {
-          specifier,
-          source: Box::new(e),
-        });
+        return Err(
+          ConfigFileReadErrorKind::Parse {
+            specifier,
+            source: Box::new(e),
+          }
+          .into_box(),
+        );
       }
       _ => {
-        return Err(ConfigFileReadError::NotObject { specifier });
+        return Err(
+          ConfigFileReadErrorKind::NotObject { specifier }.into_box(),
+        );
       }
     };
     let json: ConfigFileJson =
       serde_json::from_value(jsonc).map_err(|err| {
-        ConfigFileReadError::Deserialize {
+        ConfigFileReadErrorKind::Deserialize {
           specifier: specifier.clone(),
           source: err,
         }
+        .into_box()
       })?;
 
     Ok(Self { specifier, json })
