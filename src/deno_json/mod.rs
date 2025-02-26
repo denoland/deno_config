@@ -479,6 +479,14 @@ pub struct WorkspaceConfig {
 #[error("Failed to parse \"patch\" configuration.")]
 pub struct PatchConfigParseError(#[source] serde_json::Error);
 
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TaskCleanOption {
+  True,
+  False,
+  IfFileDeleted
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TaskDefinition {
   pub command: Option<String>,
@@ -486,6 +494,12 @@ pub struct TaskDefinition {
   pub dependencies: Vec<String>,
   #[serde(default)]
   pub description: Option<String>,
+  #[serde(default)]
+  pub files: Option<Vec<String>>,
+  #[serde(default)]
+  pub output: Option<Vec<String>>,
+  #[serde(default)]
+  pub clean: Option<TaskCleanOption>
 }
 
 #[cfg(test)]
@@ -495,6 +509,9 @@ impl From<&str> for TaskDefinition {
       command: Some(value.to_string()),
       dependencies: vec![],
       description: None,
+      files: None,
+      output: None,
+      clean: None,
     }
   }
 }
