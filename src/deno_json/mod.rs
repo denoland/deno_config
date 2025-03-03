@@ -173,6 +173,14 @@ pub enum ProseWrap {
   Preserve,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum QuoteProps {
+  AsNeeded,
+  Consistent,
+  Preserve,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -182,6 +190,7 @@ pub struct FmtOptionsConfig {
   pub single_quote: Option<bool>,
   pub prose_wrap: Option<ProseWrap>,
   pub semi_colons: Option<bool>,
+  pub quote_props: Option<QuoteProps>,
 }
 
 impl FmtOptionsConfig {
@@ -247,6 +256,7 @@ struct SerializedFmtConfig {
   pub single_quote: Option<bool>,
   pub prose_wrap: Option<ProseWrap>,
   pub semi_colons: Option<bool>,
+  pub quote_props: Option<QuoteProps>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -269,6 +279,7 @@ impl SerializedFmtConfig {
       single_quote: self.single_quote,
       prose_wrap: self.prose_wrap,
       semi_colons: self.semi_colons,
+      quote_props: self.quote_props,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");

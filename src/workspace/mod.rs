@@ -1705,6 +1705,10 @@ impl WorkspaceDirectory {
           .options
           .semi_colons
           .or(root_config.options.semi_colons),
+        quote_props: member_config
+          .options
+          .quote_props
+          .or(root_config.options.quote_props),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2243,7 +2247,7 @@ pub mod test {
   use crate::assert_contains;
   use crate::deno_json::DenoJsonCache;
   use crate::deno_json::ProseWrap;
-  use crate::deno_json::TsConfig;
+  use crate::deno_json::QuoteProps;
   use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
@@ -3078,6 +3082,7 @@ pub mod test {
           "proseWrap": "never",
           "singleQuote": false,
           "semiColons": false,
+          "quoteProps": "asNeeded",
         }
       }),
       json!({
@@ -3089,6 +3094,7 @@ pub mod test {
           "proseWrap": "always",
           "singleQuote": true,
           "semiColons": true,
+          "quoteProps": "consistent",
         }
       }),
     );
@@ -3106,6 +3112,7 @@ pub mod test {
           prose_wrap: Some(ProseWrap::Always),
           single_quote: Some(true),
           semi_colons: Some(true),
+          quote_props: Some(QuoteProps::Consistent),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3134,6 +3141,7 @@ pub mod test {
           prose_wrap: Some(ProseWrap::Never),
           single_quote: Some(false),
           semi_colons: Some(false),
+          quote_props: Some(QuoteProps::AsNeeded),
         },
         files: FilePatterns {
           base: root_dir(),
