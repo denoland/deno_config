@@ -181,6 +181,17 @@ pub enum QuoteProps {
   Preserve,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum NewLineKind {
+  Auto,
+  #[serde(rename = "lf")]
+  LineFeed,
+  #[serde(rename = "crlf")]
+  CarriageReturnLineFeed,
+  System,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -191,6 +202,7 @@ pub struct FmtOptionsConfig {
   pub prose_wrap: Option<ProseWrap>,
   pub semi_colons: Option<bool>,
   pub quote_props: Option<QuoteProps>,
+  pub new_line_kind: Option<NewLineKind>,
 }
 
 impl FmtOptionsConfig {
@@ -257,6 +269,7 @@ struct SerializedFmtConfig {
   pub prose_wrap: Option<ProseWrap>,
   pub semi_colons: Option<bool>,
   pub quote_props: Option<QuoteProps>,
+  pub new_line_kind: Option<NewLineKind>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -280,6 +293,7 @@ impl SerializedFmtConfig {
       prose_wrap: self.prose_wrap,
       semi_colons: self.semi_colons,
       quote_props: self.quote_props,
+      new_line_kind: self.new_line_kind,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -1915,7 +1929,10 @@ mod tests {
         "lineWidth": 80,
         "indentWidth": 4,
         "singleQuote": true,
-        "proseWrap": "preserve"
+        "proseWrap": "preserve",
+        "quoteProps": "asNeeded",
+        "newLineKind": "crlf",
+
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -1987,6 +2004,8 @@ mod tests {
           indent_width: Some(4),
           single_quote: Some(true),
           prose_wrap: Some(ProseWrap::Preserve),
+          quote_props: Some(QuoteProps::AsNeeded),
+          new_line_kind: Some(NewLineKind::CarriageReturnLineFeed),
           ..Default::default()
         },
       }

@@ -1709,6 +1709,10 @@ impl WorkspaceDirectory {
           .options
           .quote_props
           .or(root_config.options.quote_props),
+        new_line_kind: member_config
+          .options
+          .new_line_kind
+          .or(root_config.options.new_line_kind),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2246,7 +2250,8 @@ pub mod test {
 
   use crate::assert_contains;
   use crate::deno_json::DenoJsonCache;
-  use crate::deno_json::ProseWrap;
+  use crate::deno_json::NewLineKind;
+use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
   use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
@@ -3083,6 +3088,7 @@ pub mod test {
           "singleQuote": false,
           "semiColons": false,
           "quoteProps": "asNeeded",
+          "newLineKind": "auto",
         }
       }),
       json!({
@@ -3095,6 +3101,7 @@ pub mod test {
           "singleQuote": true,
           "semiColons": true,
           "quoteProps": "consistent",
+          "newLineKind": "lf",
         }
       }),
     );
@@ -3113,6 +3120,7 @@ pub mod test {
           single_quote: Some(true),
           semi_colons: Some(true),
           quote_props: Some(QuoteProps::Consistent),
+          new_line_kind: Some(NewLineKind::LineFeed),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3142,6 +3150,7 @@ pub mod test {
           single_quote: Some(false),
           semi_colons: Some(false),
           quote_props: Some(QuoteProps::AsNeeded),
+          new_line_kind: Some(NewLineKind::Auto),
         },
         files: FilePatterns {
           base: root_dir(),
