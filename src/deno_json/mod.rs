@@ -242,6 +242,14 @@ pub enum OperatorPosition {
   NextLine,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum PreferHanging {
+  Always,
+  OnlySingleItem,
+  Never,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -310,6 +318,31 @@ pub struct FmtOptionsConfig {
   pub binary_expression_operator_position: Option<OperatorPosition>,
   pub conditional_expression_operator_position: Option<OperatorPosition>,
   pub conditional_type_operator_position: Option<OperatorPosition>,
+  pub prefer_hanging: Option<bool>,
+  pub arguments_prefer_hanging: Option<PreferHanging>,
+  pub array_expression_prefer_hanging: Option<PreferHanging>,
+  pub array_pattern_prefer_hanging: Option<bool>,
+  pub do_while_statement_prefer_hanging: Option<bool>,
+  pub export_declaration_prefer_hanging: Option<bool>,
+  pub extends_clause_prefer_hanging: Option<bool>,
+  pub for_in_statement_prefer_hanging: Option<bool>,
+  pub for_of_statement_prefer_hanging: Option<bool>,
+  pub for_statement_prefer_hanging: Option<bool>,
+  pub if_statement_prefer_hanging: Option<bool>,
+  pub implements_clause_prefer_hanging: Option<bool>,
+  pub import_declaration_prefer_hanging: Option<bool>,
+  pub jsx_attributes_prefer_hanging: Option<bool>,
+  pub object_expression_prefer_hanging: Option<bool>,
+  pub object_pattern_prefer_hanging: Option<bool>,
+  pub parameters_prefer_hanging: Option<PreferHanging>,
+  pub sequence_expression_prefer_hanging: Option<bool>,
+  pub switch_statement_prefer_hanging: Option<bool>,
+  pub tuple_type_prefer_hanging: Option<PreferHanging>,
+  pub type_literal_prefer_hanging: Option<bool>,
+  pub type_parameters_prefer_hanging: Option<PreferHanging>,
+  pub union_and_intersection_type_prefer_hanging: Option<bool>,
+  pub variable_statement_prefer_hanging: Option<bool>,
+  pub while_statement_prefer_hanging: Option<bool>,
 }
 
 impl FmtOptionsConfig {
@@ -378,6 +411,31 @@ impl FmtOptionsConfig {
       && self.binary_expression_operator_position.is_none()
       && self.conditional_expression_operator_position.is_none()
       && self.conditional_type_operator_position.is_none()
+      && self.prefer_hanging.is_none()
+      && self.arguments_prefer_hanging.is_none()
+      && self.array_expression_prefer_hanging.is_none()
+      && self.array_pattern_prefer_hanging.is_none()
+      && self.do_while_statement_prefer_hanging.is_none()
+      && self.export_declaration_prefer_hanging.is_none()
+      && self.extends_clause_prefer_hanging.is_none()
+      && self.for_in_statement_prefer_hanging.is_none()
+      && self.for_of_statement_prefer_hanging.is_none()
+      && self.for_statement_prefer_hanging.is_none()
+      && self.if_statement_prefer_hanging.is_none()
+      && self.implements_clause_prefer_hanging.is_none()
+      && self.import_declaration_prefer_hanging.is_none()
+      && self.jsx_attributes_prefer_hanging.is_none()
+      && self.object_expression_prefer_hanging.is_none()
+      && self.object_pattern_prefer_hanging.is_none()
+      && self.parameters_prefer_hanging.is_none()
+      && self.sequence_expression_prefer_hanging.is_none()
+      && self.switch_statement_prefer_hanging.is_none()
+      && self.tuple_type_prefer_hanging.is_none()
+      && self.type_literal_prefer_hanging.is_none()
+      && self.type_parameters_prefer_hanging.is_none()
+      && self.union_and_intersection_type_prefer_hanging.is_none()
+      && self.variable_statement_prefer_hanging.is_none()
+      && self.while_statement_prefer_hanging.is_none()
   }
 }
 
@@ -542,6 +600,55 @@ struct SerializedFmtConfig {
   pub conditional_expression_operator_position: Option<OperatorPosition>,
   #[serde(rename = "conditionalType.operatorPosition")]
   pub conditional_type_operator_position: Option<OperatorPosition>,
+  pub prefer_hanging: Option<bool>,
+  #[serde(rename = "arguments.preferHanging")]
+  pub arguments_prefer_hanging: Option<PreferHanging>,
+  #[serde(rename = "arrayExpression.preferHanging")]
+  pub array_expression_prefer_hanging: Option<PreferHanging>,
+  #[serde(rename = "arrayPattern.preferHanging")]
+  pub array_pattern_prefer_hanging: Option<bool>,
+  #[serde(rename = "doWhileStatement.preferHanging")]
+  pub do_while_statement_prefer_hanging: Option<bool>,
+  #[serde(rename = "exportDeclaration.preferHanging")]
+  pub export_declaration_prefer_hanging: Option<bool>,
+  #[serde(rename = "extendsClause.preferHanging")]
+  pub extends_clause_prefer_hanging: Option<bool>,
+  #[serde(rename = "forInStatement.preferHanging")]
+  pub for_in_statement_prefer_hanging: Option<bool>,
+  #[serde(rename = "forOfStatement.preferHanging")]
+  pub for_of_statement_prefer_hanging: Option<bool>,
+  #[serde(rename = "forStatement.preferHanging")]
+  pub for_statement_prefer_hanging: Option<bool>,
+  #[serde(rename = "ifStatement.preferHanging")]
+  pub if_statement_prefer_hanging: Option<bool>,
+  #[serde(rename = "implementsClause.preferHanging")]
+  pub implements_clause_prefer_hanging: Option<bool>,
+  #[serde(rename = "importDeclaration.preferHanging")]
+  pub import_declaration_prefer_hanging: Option<bool>,
+  #[serde(rename = "jsxAttributes.preferHanging")]
+  pub jsx_attributes_prefer_hanging: Option<bool>,
+  #[serde(rename = "objectExpression.preferHanging")]
+  pub object_expression_prefer_hanging: Option<bool>,
+  #[serde(rename = "objectPattern.preferHanging")]
+  pub object_pattern_prefer_hanging: Option<bool>,
+  #[serde(rename = "parameters.preferHanging")]
+  pub parameters_prefer_hanging: Option<PreferHanging>,
+  #[serde(rename = "sequenceExpression.preferHanging")]
+  pub sequence_expression_prefer_hanging: Option<bool>,
+  #[serde(rename = "switchStatement.preferHanging")]
+  pub switch_statement_prefer_hanging: Option<bool>,
+  #[serde(rename = "tupleType.preferHanging")]
+  pub tuple_type_prefer_hanging: Option<PreferHanging>,
+  #[serde(rename = "typeLiteral.preferHanging")]
+  pub type_literal_prefer_hanging: Option<bool>,
+  #[serde(rename = "typeParameters.preferHanging")]
+  pub type_parameters_prefer_hanging: Option<PreferHanging>,
+  #[serde(rename = "unionAndIntersectionType.preferHanging")]
+  pub union_and_intersection_type_prefer_hanging: Option<bool>,
+  #[serde(rename = "variableStatement.preferHanging")]
+  pub variable_statement_prefer_hanging: Option<bool>,
+  #[serde(rename = "whileStatement.preferHanging")]
+  pub while_statement_prefer_hanging: Option<bool>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -637,6 +744,33 @@ impl SerializedFmtConfig {
         .conditional_expression_operator_position,
       conditional_type_operator_position: self
         .conditional_type_operator_position,
+      prefer_hanging: self.prefer_hanging,
+      arguments_prefer_hanging: self.arguments_prefer_hanging,
+      array_expression_prefer_hanging: self.array_expression_prefer_hanging,
+      array_pattern_prefer_hanging: self.array_pattern_prefer_hanging,
+      do_while_statement_prefer_hanging: self.do_while_statement_prefer_hanging,
+      export_declaration_prefer_hanging: self.export_declaration_prefer_hanging,
+      extends_clause_prefer_hanging: self.extends_clause_prefer_hanging,
+      for_in_statement_prefer_hanging: self.for_in_statement_prefer_hanging,
+      for_of_statement_prefer_hanging: self.for_of_statement_prefer_hanging,
+      for_statement_prefer_hanging: self.for_statement_prefer_hanging,
+      if_statement_prefer_hanging: self.if_statement_prefer_hanging,
+      implements_clause_prefer_hanging: self.implements_clause_prefer_hanging,
+      import_declaration_prefer_hanging: self.import_declaration_prefer_hanging,
+      jsx_attributes_prefer_hanging: self.jsx_attributes_prefer_hanging,
+      object_expression_prefer_hanging: self.object_expression_prefer_hanging,
+      object_pattern_prefer_hanging: self.object_pattern_prefer_hanging,
+      parameters_prefer_hanging: self.parameters_prefer_hanging,
+      sequence_expression_prefer_hanging: self
+        .sequence_expression_prefer_hanging,
+      switch_statement_prefer_hanging: self.switch_statement_prefer_hanging,
+      tuple_type_prefer_hanging: self.tuple_type_prefer_hanging,
+      type_literal_prefer_hanging: self.type_literal_prefer_hanging,
+      type_parameters_prefer_hanging: self.type_parameters_prefer_hanging,
+      union_and_intersection_type_prefer_hanging: self
+        .union_and_intersection_type_prefer_hanging,
+      variable_statement_prefer_hanging: self.variable_statement_prefer_hanging,
+      while_statement_prefer_hanging: self.while_statement_prefer_hanging,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2332,6 +2466,31 @@ mod tests {
         "binaryExpression.operatorPosition": "maintain",
         "conditionalExpression.operatorPosition": "maintain",
         "conditionalType.operatorPosition": "maintain",
+        "preferHanging": true,
+        "arguments.preferHanging": "always",
+        "arrayExpression.preferHanging": "always",
+        "arrayPattern.preferHanging": true,
+        "doWhileStatement.preferHanging": true,
+        "exportDeclaration.preferHanging": true,
+        "extendsClause.preferHanging": true,
+        "forInStatement.preferHanging": true,
+        "forOfStatement.preferHanging": true,
+        "forStatement.preferHanging": true,
+        "ifStatement.preferHanging": true,
+        "implementsClause.preferHanging": true,
+        "importDeclaration.preferHanging": true,
+        "jsxAttributes.preferHanging": true,
+        "objectExpression.preferHanging": true,
+        "objectPattern.preferHanging": true,
+        "parameters.preferHanging": "always",
+        "sequenceExpression.preferHanging": true,
+        "switchStatement.preferHanging": true,
+        "tupleType.preferHanging": "always",
+        "typeLiteral.preferHanging": true,
+        "typeParameters.preferHanging": "always",
+        "unionAndIntersectionType.preferHanging": true,
+        "variableStatement.preferHanging": true,
+        "whileStatement.preferHanging": true,
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2478,6 +2637,31 @@ mod tests {
             OperatorPosition::Maintain
           ),
           conditional_type_operator_position: Some(OperatorPosition::Maintain),
+          prefer_hanging: Some(true),
+          arguments_prefer_hanging: Some(PreferHanging::Always),
+          array_expression_prefer_hanging: Some(PreferHanging::Always),
+          array_pattern_prefer_hanging: Some(true),
+          do_while_statement_prefer_hanging: Some(true),
+          export_declaration_prefer_hanging: Some(true),
+          extends_clause_prefer_hanging: Some(true),
+          for_in_statement_prefer_hanging: Some(true),
+          for_of_statement_prefer_hanging: Some(true),
+          for_statement_prefer_hanging: Some(true),
+          if_statement_prefer_hanging: Some(true),
+          implements_clause_prefer_hanging: Some(true),
+          import_declaration_prefer_hanging: Some(true),
+          jsx_attributes_prefer_hanging: Some(true),
+          object_expression_prefer_hanging: Some(true),
+          object_pattern_prefer_hanging: Some(true),
+          parameters_prefer_hanging: Some(PreferHanging::Always),
+          sequence_expression_prefer_hanging: Some(true),
+          switch_statement_prefer_hanging: Some(true),
+          tuple_type_prefer_hanging: Some(PreferHanging::Always),
+          type_literal_prefer_hanging: Some(true),
+          type_parameters_prefer_hanging: Some(PreferHanging::Always),
+          union_and_intersection_type_prefer_hanging: Some(true),
+          variable_statement_prefer_hanging: Some(true),
+          while_statement_prefer_hanging: Some(true),
         },
       }
     );

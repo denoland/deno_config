@@ -1941,6 +1941,110 @@ impl WorkspaceDirectory {
           .options
           .conditional_type_operator_position
           .or(root_config.options.conditional_type_operator_position),
+        prefer_hanging: member_config
+          .options
+          .prefer_hanging
+          .or(root_config.options.prefer_hanging),
+        arguments_prefer_hanging: member_config
+          .options
+          .arguments_prefer_hanging
+          .or(root_config.options.arguments_prefer_hanging),
+        array_expression_prefer_hanging: member_config
+          .options
+          .array_expression_prefer_hanging
+          .or(root_config.options.array_expression_prefer_hanging),
+        array_pattern_prefer_hanging: member_config
+          .options
+          .array_pattern_prefer_hanging
+          .or(root_config.options.array_pattern_prefer_hanging),
+        do_while_statement_prefer_hanging: member_config
+          .options
+          .do_while_statement_prefer_hanging
+          .or(root_config.options.do_while_statement_prefer_hanging),
+        export_declaration_prefer_hanging: member_config
+          .options
+          .export_declaration_prefer_hanging
+          .or(root_config.options.export_declaration_prefer_hanging),
+        extends_clause_prefer_hanging: member_config
+          .options
+          .extends_clause_prefer_hanging
+          .or(root_config.options.extends_clause_prefer_hanging),
+        for_in_statement_prefer_hanging: member_config
+          .options
+          .for_in_statement_prefer_hanging
+          .or(root_config.options.for_in_statement_prefer_hanging),
+        for_of_statement_prefer_hanging: member_config
+          .options
+          .for_of_statement_prefer_hanging
+          .or(root_config.options.for_of_statement_prefer_hanging),
+        for_statement_prefer_hanging: member_config
+          .options
+          .for_statement_prefer_hanging
+          .or(root_config.options.for_statement_prefer_hanging),
+        if_statement_prefer_hanging: member_config
+          .options
+          .if_statement_prefer_hanging
+          .or(root_config.options.if_statement_prefer_hanging),
+        implements_clause_prefer_hanging: member_config
+          .options
+          .implements_clause_prefer_hanging
+          .or(root_config.options.implements_clause_prefer_hanging),
+        import_declaration_prefer_hanging: member_config
+          .options
+          .import_declaration_prefer_hanging
+          .or(root_config.options.import_declaration_prefer_hanging),
+        jsx_attributes_prefer_hanging: member_config
+          .options
+          .jsx_attributes_prefer_hanging
+          .or(root_config.options.jsx_attributes_prefer_hanging),
+        object_expression_prefer_hanging: member_config
+          .options
+          .object_expression_prefer_hanging
+          .or(root_config.options.object_expression_prefer_hanging),
+        object_pattern_prefer_hanging: member_config
+          .options
+          .object_pattern_prefer_hanging
+          .or(root_config.options.object_pattern_prefer_hanging),
+        parameters_prefer_hanging: member_config
+          .options
+          .parameters_prefer_hanging
+          .or(root_config.options.parameters_prefer_hanging),
+        sequence_expression_prefer_hanging: member_config
+          .options
+          .sequence_expression_prefer_hanging
+          .or(root_config.options.sequence_expression_prefer_hanging),
+        switch_statement_prefer_hanging: member_config
+          .options
+          .switch_statement_prefer_hanging
+          .or(root_config.options.switch_statement_prefer_hanging),
+        tuple_type_prefer_hanging: member_config
+          .options
+          .tuple_type_prefer_hanging
+          .or(root_config.options.tuple_type_prefer_hanging),
+        type_literal_prefer_hanging: member_config
+          .options
+          .type_literal_prefer_hanging
+          .or(root_config.options.type_literal_prefer_hanging),
+        type_parameters_prefer_hanging: member_config
+          .options
+          .type_parameters_prefer_hanging
+          .or(root_config.options.type_parameters_prefer_hanging),
+        union_and_intersection_type_prefer_hanging: member_config
+          .options
+          .union_and_intersection_type_prefer_hanging
+          .or(
+            root_config
+              .options
+              .union_and_intersection_type_prefer_hanging,
+          ),
+        variable_statement_prefer_hanging: member_config
+          .options
+          .variable_statement_prefer_hanging
+          .or(root_config.options.variable_statement_prefer_hanging),
+        while_statement_prefer_hanging: member_config
+          .options
+          .while_statement_prefer_hanging
+          .or(root_config.options.while_statement_prefer_hanging),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2482,7 +2586,8 @@ pub mod test {
   use crate::deno_json::NewLineKind;
   use crate::deno_json::NextControlFlowPosition;
   use crate::deno_json::OperatorPosition;
-  use crate::deno_json::ProseWrap;
+  use crate::deno_json::PreferHanging;
+use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
   use crate::deno_json::SingleBodyPosition;
   use crate::deno_json::TrailingCommas;
@@ -3379,6 +3484,31 @@ pub mod test {
           "binaryExpression.operatorPosition": "sameLine",
           "conditionalExpression.operatorPosition": "sameLine",
           "conditionalType.operatorPosition": "sameLine",
+          "preferHanging": false,
+          "arguments.preferHanging": "onlySingleItem",
+          "arrayExpression.preferHanging": "onlySingleItem",
+          "arrayPattern.preferHanging": false,
+          "doWhileStatement.preferHanging": false,
+          "exportDeclaration.preferHanging": false,
+          "extendsClause.preferHanging": false,
+          "forInStatement.preferHanging": false,
+          "forOfStatement.preferHanging": false,
+          "forStatement.preferHanging": false,
+          "ifStatement.preferHanging": false,
+          "implementsClause.preferHanging": false,
+          "importDeclaration.preferHanging": false,
+          "jsxAttributes.preferHanging": false,
+          "objectExpression.preferHanging": false,
+          "objectPattern.preferHanging": false,
+          "parameters.preferHanging": "onlySingleItem",
+          "sequenceExpression.preferHanging": false,
+          "switchStatement.preferHanging": false,
+          "tupleType.preferHanging": "onlySingleItem",
+          "typeLiteral.preferHanging": false,
+          "typeParameters.preferHanging": "onlySingleItem",
+          "unionAndIntersectionType.preferHanging": false,
+          "variableStatement.preferHanging": false,
+          "whileStatement.preferHanging": false,
         }
       }),
       json!({
@@ -3448,6 +3578,31 @@ pub mod test {
           "binaryExpression.operatorPosition": "nextLine",
           "conditionalExpression.operatorPosition": "nextLine",
           "conditionalType.operatorPosition": "nextLine",
+          "preferHanging": true,
+          "arguments.preferHanging": "never",
+          "arrayExpression.preferHanging": "never",
+          "arrayPattern.preferHanging": true,
+          "doWhileStatement.preferHanging": true,
+          "exportDeclaration.preferHanging": true,
+          "extendsClause.preferHanging": true,
+          "forInStatement.preferHanging": true,
+          "forOfStatement.preferHanging": true,
+          "forStatement.preferHanging": true,
+          "ifStatement.preferHanging": true,
+          "implementsClause.preferHanging": true,
+          "importDeclaration.preferHanging": true,
+          "jsxAttributes.preferHanging": true,
+          "objectExpression.preferHanging": true,
+          "objectPattern.preferHanging": true,
+          "parameters.preferHanging": "never",
+          "sequenceExpression.preferHanging": true,
+          "switchStatement.preferHanging": true,
+          "tupleType.preferHanging": "never",
+          "typeLiteral.preferHanging": true,
+          "typeParameters.preferHanging": "never",
+          "unionAndIntersectionType.preferHanging": true,
+          "variableStatement.preferHanging": true,
+          "whileStatement.preferHanging": true,
         }
       }),
     );
@@ -3545,6 +3700,31 @@ pub mod test {
             OperatorPosition::NextLine
           ),
           conditional_type_operator_position: Some(OperatorPosition::NextLine),
+          prefer_hanging: Some(true),
+          arguments_prefer_hanging: Some(PreferHanging::Never),
+          array_expression_prefer_hanging: Some(PreferHanging::Never),
+          array_pattern_prefer_hanging: Some(true),
+          do_while_statement_prefer_hanging: Some(true),
+          export_declaration_prefer_hanging: Some(true),
+          extends_clause_prefer_hanging: Some(true),
+          for_in_statement_prefer_hanging: Some(true),
+          for_of_statement_prefer_hanging: Some(true),
+          for_statement_prefer_hanging: Some(true),
+          if_statement_prefer_hanging: Some(true),
+          implements_clause_prefer_hanging: Some(true),
+          import_declaration_prefer_hanging: Some(true),
+          jsx_attributes_prefer_hanging: Some(true),
+          object_expression_prefer_hanging: Some(true),
+          object_pattern_prefer_hanging: Some(true),
+          parameters_prefer_hanging: Some(PreferHanging::Never),
+          sequence_expression_prefer_hanging: Some(true),
+          switch_statement_prefer_hanging: Some(true),
+          tuple_type_prefer_hanging: Some(PreferHanging::Never),
+          type_literal_prefer_hanging: Some(true),
+          type_parameters_prefer_hanging: Some(PreferHanging::Never),
+          union_and_intersection_type_prefer_hanging: Some(true),
+          variable_statement_prefer_hanging: Some(true),
+          while_statement_prefer_hanging: Some(true),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3647,6 +3827,31 @@ pub mod test {
             OperatorPosition::SameLine
           ),
           conditional_type_operator_position: Some(OperatorPosition::SameLine),
+          prefer_hanging: Some(false),
+          arguments_prefer_hanging: Some(PreferHanging::OnlySingleItem),
+          array_expression_prefer_hanging: Some(PreferHanging::OnlySingleItem),
+          array_pattern_prefer_hanging: Some(false),
+          do_while_statement_prefer_hanging: Some(false),
+          export_declaration_prefer_hanging: Some(false),
+          extends_clause_prefer_hanging: Some(false),
+          for_in_statement_prefer_hanging: Some(false),
+          for_of_statement_prefer_hanging: Some(false),
+          for_statement_prefer_hanging: Some(false),
+          if_statement_prefer_hanging: Some(false),
+          implements_clause_prefer_hanging: Some(false),
+          import_declaration_prefer_hanging: Some(false),
+          jsx_attributes_prefer_hanging: Some(false),
+          object_expression_prefer_hanging: Some(false),
+          object_pattern_prefer_hanging: Some(false),
+          parameters_prefer_hanging: Some(PreferHanging::OnlySingleItem),
+          sequence_expression_prefer_hanging: Some(false),
+          switch_statement_prefer_hanging: Some(false),
+          tuple_type_prefer_hanging: Some(PreferHanging::OnlySingleItem),
+          type_literal_prefer_hanging: Some(false),
+          type_parameters_prefer_hanging: Some(PreferHanging::OnlySingleItem),
+          union_and_intersection_type_prefer_hanging: Some(false),
+          variable_statement_prefer_hanging: Some(false),
+          while_statement_prefer_hanging: Some(false),
         },
         files: FilePatterns {
           base: root_dir(),
