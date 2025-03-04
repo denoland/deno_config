@@ -2587,7 +2587,7 @@ pub mod test {
   use crate::deno_json::NextControlFlowPosition;
   use crate::deno_json::OperatorPosition;
   use crate::deno_json::PreferHanging;
-use crate::deno_json::ProseWrap;
+  use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
   use crate::deno_json::SingleBodyPosition;
   use crate::deno_json::TrailingCommas;
