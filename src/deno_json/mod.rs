@@ -218,6 +218,14 @@ pub enum SingleBodyPosition {
   NextLine,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum NextControlFlowPosition {
+  Maintain,
+  SameLine,
+  NextLine,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -264,6 +272,10 @@ pub struct FmtOptionsConfig {
   pub for_statement_single_body_position: Option<SingleBodyPosition>,
   pub if_statement_single_body_position: Option<SingleBodyPosition>,
   pub while_statement_single_body_position: Option<SingleBodyPosition>,
+  pub next_control_flow_position: Option<NextControlFlowPosition>,
+  pub do_while_statement_next_control_flow_position: Option<NextControlFlowPosition>,
+  pub if_statement_next_control_flow_position: Option<NextControlFlowPosition>,
+  pub try_statement_next_control_flow_position: Option<NextControlFlowPosition>,
 }
 
 impl FmtOptionsConfig {
@@ -311,6 +323,10 @@ impl FmtOptionsConfig {
       && self.for_statement_single_body_position.is_none()
       && self.if_statement_single_body_position.is_none()
       && self.while_statement_single_body_position.is_none()
+      && self.next_control_flow_position.is_none()
+      && self.do_while_statement_next_control_flow_position.is_none()
+      && self.if_statement_next_control_flow_position.is_none()
+      && self.try_statement_next_control_flow_position.is_none()
 
   }
 }
@@ -436,6 +452,13 @@ struct SerializedFmtConfig {
   pub if_statement_single_body_position: Option<SingleBodyPosition>,
   #[serde(rename = "whileStatement.singleBodyPosition")]
   pub while_statement_single_body_position: Option<SingleBodyPosition>,
+  pub next_control_flow_position: Option<NextControlFlowPosition>,
+  #[serde(rename = "doWhileStatement.nextControlFlowPosition")]
+  pub do_while_statement_next_control_flow_position: Option<NextControlFlowPosition>,
+  #[serde(rename = "ifStatement.nextControlFlowPosition")]
+  pub if_statement_next_control_flow_position: Option<NextControlFlowPosition>,
+  #[serde(rename = "tryStatement.nextControlFlowPosition")]
+  pub try_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -495,6 +518,10 @@ impl SerializedFmtConfig {
       for_statement_single_body_position: self.for_statement_single_body_position,
       if_statement_single_body_position: self.if_statement_single_body_position,
       while_statement_single_body_position: self.while_statement_single_body_position,
+      next_control_flow_position: self.next_control_flow_position,
+      do_while_statement_next_control_flow_position: self.do_while_statement_next_control_flow_position,
+      if_statement_next_control_flow_position: self.if_statement_next_control_flow_position,
+      try_statement_next_control_flow_position: self.try_statement_next_control_flow_position,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2168,6 +2195,10 @@ mod tests {
         "forStatement.singleBodyPosition": "nextLine",
         "ifStatement.singleBodyPosition": "nextLine",
         "whileStatement.singleBodyPosition": "nextLine",
+        "nextControlFlowPosition": "sameLine",
+        "doWhileStatement.nextControlFlowPosition": "sameLine",
+        "ifStatement.nextControlFlowPosition": "sameLine",
+        "tryStatement.nextControlFlowPosition": "sameLine",
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2277,6 +2308,10 @@ mod tests {
           for_statement_single_body_position: Some(SingleBodyPosition::NextLine),
           if_statement_single_body_position: Some(SingleBodyPosition::NextLine),
           while_statement_single_body_position: Some(SingleBodyPosition::NextLine),
+          next_control_flow_position: Some(NextControlFlowPosition::SameLine),
+          do_while_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
+          if_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
+          try_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
         },
       }
     );

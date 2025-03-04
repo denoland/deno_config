@@ -1793,6 +1793,10 @@ impl WorkspaceDirectory {
         for_statement_single_body_position: member_config.options.for_statement_single_body_position.or(root_config.options.for_statement_single_body_position),
         if_statement_single_body_position: member_config.options.if_statement_single_body_position.or(root_config.options.if_statement_single_body_position),
         while_statement_single_body_position: member_config.options.while_statement_single_body_position.or(root_config.options.while_statement_single_body_position),
+        next_control_flow_position: member_config.options.next_control_flow_position.or(root_config.options.next_control_flow_position),
+        do_while_statement_next_control_flow_position: member_config.options.do_while_statement_next_control_flow_position.or(root_config.options.do_while_statement_next_control_flow_position),
+        if_statement_next_control_flow_position: member_config.options.if_statement_next_control_flow_position.or(root_config.options.if_statement_next_control_flow_position),
+        try_statement_next_control_flow_position: member_config.options.try_statement_next_control_flow_position.or(root_config.options.try_statement_next_control_flow_position),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2332,7 +2336,8 @@ pub mod test {
   use crate::deno_json::BracePosition;
 use crate::deno_json::DenoJsonCache;
   use crate::deno_json::NewLineKind;
-  use crate::deno_json::ProseWrap;
+  use crate::deno_json::NextControlFlowPosition;
+use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
   use crate::deno_json::SingleBodyPosition;
 use crate::deno_json::UseBraces;
@@ -3207,6 +3212,10 @@ use crate::deno_json::UseBraces;
           "forStatement.singleBodyPosition": "sameLine",
           "ifStatement.singleBodyPosition": "sameLine",
           "whileStatement.singleBodyPosition": "sameLine",
+          "nextControlFlowPosition": "nextLine",
+          "doWhileStatement.nextControlFlowPosition": "nextLine",
+          "ifStatement.nextControlFlowPosition": "nextLine",
+          "tryStatement.nextControlFlowPosition": "nextLine",
         }
       }),
       json!({
@@ -3255,6 +3264,10 @@ use crate::deno_json::UseBraces;
           "forStatement.singleBodyPosition": "maintain",
           "ifStatement.singleBodyPosition": "maintain",
           "whileStatement.singleBodyPosition": "maintain",
+          "nextControlFlowPosition": "maintain",
+          "doWhileStatement.nextControlFlowPosition": "maintain",
+          "ifStatement.nextControlFlowPosition": "maintain",
+          "tryStatement.nextControlFlowPosition": "maintain",
         }
       }),
     );
@@ -3309,6 +3322,10 @@ use crate::deno_json::UseBraces;
           for_statement_single_body_position: Some(SingleBodyPosition::Maintain),
           if_statement_single_body_position: Some(SingleBodyPosition::Maintain),
           while_statement_single_body_position: Some(SingleBodyPosition::Maintain),
+          next_control_flow_position: Some(NextControlFlowPosition::Maintain),
+          do_while_statement_next_control_flow_position: Some(NextControlFlowPosition::Maintain),
+          if_statement_next_control_flow_position: Some(NextControlFlowPosition::Maintain),
+          try_statement_next_control_flow_position: Some(NextControlFlowPosition::Maintain),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3374,6 +3391,10 @@ use crate::deno_json::UseBraces;
           for_statement_single_body_position: Some(SingleBodyPosition::SameLine),
           if_statement_single_body_position: Some(SingleBodyPosition::SameLine),
           while_statement_single_body_position: Some(SingleBodyPosition::SameLine),
+          next_control_flow_position: Some(NextControlFlowPosition::NextLine),
+          do_while_statement_next_control_flow_position: Some(NextControlFlowPosition::NextLine),
+          if_statement_next_control_flow_position: Some(NextControlFlowPosition::NextLine),
+          try_statement_next_control_flow_position: Some(NextControlFlowPosition::NextLine),
         },
         files: FilePatterns {
           base: root_dir(),
