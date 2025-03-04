@@ -226,6 +226,14 @@ pub enum NextControlFlowPosition {
   NextLine,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum TrailingCommas {
+  Always,
+  Never,
+  OnlyMultiLine,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -276,6 +284,19 @@ pub struct FmtOptionsConfig {
   pub do_while_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   pub if_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   pub try_statement_next_control_flow_position: Option<NextControlFlowPosition>,
+  pub trailing_commas: Option<TrailingCommas>,
+  pub arguments_trailing_commas: Option<TrailingCommas>,
+  pub parameters_trailing_commas: Option<TrailingCommas>,
+  pub array_expression_trailing_commas: Option<TrailingCommas>,
+  pub array_pattern_trailing_commas: Option<TrailingCommas>,
+  pub enum_declaration_trailing_commas: Option<TrailingCommas>,
+  pub export_declaration_trailing_commas: Option<TrailingCommas>,
+  pub import_declaration_trailing_commas: Option<TrailingCommas>,
+  pub object_expression_trailing_commas: Option<TrailingCommas>,
+  pub object_pattern_trailing_commas: Option<TrailingCommas>,
+  pub tuple_type_trailing_commas: Option<TrailingCommas>,
+  pub type_literal_trailing_commas: Option<TrailingCommas>,
+  pub type_parameters_trailing_commas: Option<TrailingCommas>,
 }
 
 impl FmtOptionsConfig {
@@ -327,7 +348,19 @@ impl FmtOptionsConfig {
       && self.do_while_statement_next_control_flow_position.is_none()
       && self.if_statement_next_control_flow_position.is_none()
       && self.try_statement_next_control_flow_position.is_none()
-
+      && self.trailing_commas.is_none()
+      && self.arguments_trailing_commas.is_none()
+      && self.parameters_trailing_commas.is_none()
+      && self.array_expression_trailing_commas.is_none()
+      && self.array_pattern_trailing_commas.is_none()
+      && self.enum_declaration_trailing_commas.is_none()
+      && self.export_declaration_trailing_commas.is_none()
+      && self.import_declaration_trailing_commas.is_none()
+      && self.object_expression_trailing_commas.is_none()
+      && self.object_pattern_trailing_commas.is_none()
+      && self.tuple_type_trailing_commas.is_none()
+      && self.type_literal_trailing_commas.is_none()
+      && self.type_parameters_trailing_commas.is_none()
   }
 }
 
@@ -459,6 +492,31 @@ struct SerializedFmtConfig {
   pub if_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   #[serde(rename = "tryStatement.nextControlFlowPosition")]
   pub try_statement_next_control_flow_position: Option<NextControlFlowPosition>,
+  pub trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "arguments.trailingCommas")]
+  pub arguments_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "parameters.trailingCommas")]
+  pub parameters_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "arrayExpression.trailingCommas")]
+  pub array_expression_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "arrayPattern.trailingCommas")]
+  pub array_pattern_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "enumDeclaration.trailingCommas")]
+  pub enum_declaration_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "exportDeclaration.trailingCommas")]
+  pub export_declaration_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "importDeclaration.trailingCommas")]
+  pub import_declaration_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "objectExpression.trailingCommas")]
+  pub object_expression_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "objectPattern.trailingCommas")]
+  pub object_pattern_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "tupleType.trailingCommas")]
+  pub tuple_type_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "typeLiteral.trailingCommas")]
+  pub type_literal_trailing_commas: Option<TrailingCommas>,
+  #[serde(rename = "typeParameters.trailingCommas")]
+  pub type_parameters_trailing_commas: Option<TrailingCommas>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -522,6 +580,19 @@ impl SerializedFmtConfig {
       do_while_statement_next_control_flow_position: self.do_while_statement_next_control_flow_position,
       if_statement_next_control_flow_position: self.if_statement_next_control_flow_position,
       try_statement_next_control_flow_position: self.try_statement_next_control_flow_position,
+      trailing_commas: self.trailing_commas,
+      arguments_trailing_commas: self.arguments_trailing_commas,
+      parameters_trailing_commas: self.parameters_trailing_commas,
+      array_expression_trailing_commas: self.array_expression_trailing_commas,
+      array_pattern_trailing_commas: self.array_pattern_trailing_commas,
+      enum_declaration_trailing_commas: self.enum_declaration_trailing_commas,
+      export_declaration_trailing_commas: self.export_declaration_trailing_commas,
+      import_declaration_trailing_commas: self.import_declaration_trailing_commas,
+      object_expression_trailing_commas: self.object_expression_trailing_commas,
+      object_pattern_trailing_commas: self.object_pattern_trailing_commas,
+      tuple_type_trailing_commas: self.tuple_type_trailing_commas,
+      type_literal_trailing_commas: self.type_literal_trailing_commas,
+      type_parameters_trailing_commas: self.type_parameters_trailing_commas,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -1666,6 +1737,7 @@ impl ConfigFile {
         let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedFmtConfig =
           serde_json::from_value(config).map_err(|error| {
+            // dbg!(&error); // TODO(kt3k): remove
             ToInvalidConfigError::Parse {
               config: "fmt",
               source: error,
@@ -2199,6 +2271,19 @@ mod tests {
         "doWhileStatement.nextControlFlowPosition": "sameLine",
         "ifStatement.nextControlFlowPosition": "sameLine",
         "tryStatement.nextControlFlowPosition": "sameLine",
+        "trailingCommas": "never",
+        "arguments.trailingCommas": "never",
+        "parameters.trailingCommas": "never",
+        "arrayExpression.trailingCommas": "never",
+        "arrayPattern.trailingCommas": "never",
+        "enumDeclaration.trailingCommas": "never",
+        "exportDeclaration.trailingCommas": "never",
+        "importDeclaration.trailingCommas": "never",
+        "objectExpression.trailingCommas": "never",
+        "objectPattern.trailingCommas": "never",
+        "tupleType.trailingCommas": "never",
+        "typeLiteral.trailingCommas": "never",
+        "typeParameters.trailingCommas": "never",
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2312,6 +2397,19 @@ mod tests {
           do_while_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
           if_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
           try_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
+          trailing_commas: Some(TrailingCommas::Never),
+          arguments_trailing_commas: Some(TrailingCommas::Never),
+          parameters_trailing_commas: Some(TrailingCommas::Never),
+          array_expression_trailing_commas: Some(TrailingCommas::Never),
+          array_pattern_trailing_commas: Some(TrailingCommas::Never),
+          enum_declaration_trailing_commas: Some(TrailingCommas::Never),
+          export_declaration_trailing_commas: Some(TrailingCommas::Never),
+          import_declaration_trailing_commas: Some(TrailingCommas::Never),
+          object_expression_trailing_commas: Some(TrailingCommas::Never),
+          object_pattern_trailing_commas: Some(TrailingCommas::Never),
+          tuple_type_trailing_commas: Some(TrailingCommas::Never),
+          type_literal_trailing_commas: Some(TrailingCommas::Never),
+          type_parameters_trailing_commas: Some(TrailingCommas::Never),
         },
       }
     );
