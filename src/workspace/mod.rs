@@ -1787,6 +1787,12 @@ impl WorkspaceDirectory {
         switch_statement_brace_position: member_config.options.switch_statement_brace_position.or(root_config.options.switch_statement_brace_position),
         try_statement_brace_position: member_config.options.try_statement_brace_position.or(root_config.options.try_statement_brace_position),
         while_statement_brace_position: member_config.options.while_statement_brace_position.or(root_config.options.while_statement_brace_position),
+        single_body_position: member_config.options.single_body_position.or(root_config.options.single_body_position),
+        for_in_statement_single_body_position: member_config.options.for_in_statement_single_body_position.or(root_config.options.for_in_statement_single_body_position),
+        for_of_statement_single_body_position: member_config.options.for_of_statement_single_body_position.or(root_config.options.for_of_statement_single_body_position),
+        for_statement_single_body_position: member_config.options.for_statement_single_body_position.or(root_config.options.for_statement_single_body_position),
+        if_statement_single_body_position: member_config.options.if_statement_single_body_position.or(root_config.options.if_statement_single_body_position),
+        while_statement_single_body_position: member_config.options.while_statement_single_body_position.or(root_config.options.while_statement_single_body_position),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2328,7 +2334,8 @@ use crate::deno_json::DenoJsonCache;
   use crate::deno_json::NewLineKind;
   use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
-  use crate::deno_json::UseBraces;
+  use crate::deno_json::SingleBodyPosition;
+use crate::deno_json::UseBraces;
   use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
@@ -3194,6 +3201,12 @@ use crate::deno_json::DenoJsonCache;
           "switchStatement.bracePosition": "maintain",
           "tryStatement.bracePosition": "maintain",
           "whileStatement.bracePosition": "maintain",
+          "singleBodyPosition": "sameLine",
+          "forInStatement.singleBodyPosition": "sameLine",
+          "forOfStatement.singleBodyPosition": "sameLine",
+          "forStatement.singleBodyPosition": "sameLine",
+          "ifStatement.singleBodyPosition": "sameLine",
+          "whileStatement.singleBodyPosition": "sameLine",
         }
       }),
       json!({
@@ -3236,6 +3249,12 @@ use crate::deno_json::DenoJsonCache;
           "switchStatement.bracePosition": "nextLine",
           "tryStatement.bracePosition": "nextLine",
           "whileStatement.bracePosition": "nextLine",
+          "singleBodyPosition": "maintain",
+          "forInStatement.singleBodyPosition": "maintain",
+          "forOfStatement.singleBodyPosition": "maintain",
+          "forStatement.singleBodyPosition": "maintain",
+          "ifStatement.singleBodyPosition": "maintain",
+          "whileStatement.singleBodyPosition": "maintain",
         }
       }),
     );
@@ -3284,6 +3303,12 @@ use crate::deno_json::DenoJsonCache;
           switch_statement_brace_position: Some(BracePosition::NextLine),
           try_statement_brace_position: Some(BracePosition::NextLine),
           while_statement_brace_position: Some(BracePosition::NextLine),
+          single_body_position: Some(SingleBodyPosition::Maintain),
+          for_in_statement_single_body_position: Some(SingleBodyPosition::Maintain),
+          for_of_statement_single_body_position: Some(SingleBodyPosition::Maintain),
+          for_statement_single_body_position: Some(SingleBodyPosition::Maintain),
+          if_statement_single_body_position: Some(SingleBodyPosition::Maintain),
+          while_statement_single_body_position: Some(SingleBodyPosition::Maintain),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3343,6 +3368,12 @@ use crate::deno_json::DenoJsonCache;
           switch_statement_brace_position: Some(BracePosition::Maintain),
           try_statement_brace_position: Some(BracePosition::Maintain),
           while_statement_brace_position: Some(BracePosition::Maintain),
+          single_body_position: Some(SingleBodyPosition::SameLine),
+          for_in_statement_single_body_position: Some(SingleBodyPosition::SameLine),
+          for_of_statement_single_body_position: Some(SingleBodyPosition::SameLine),
+          for_statement_single_body_position: Some(SingleBodyPosition::SameLine),
+          if_statement_single_body_position: Some(SingleBodyPosition::SameLine),
+          while_statement_single_body_position: Some(SingleBodyPosition::SameLine),
         },
         files: FilePatterns {
           base: root_dir(),

@@ -210,6 +210,14 @@ pub enum BracePosition {
   SameLineUnlessHanging,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum SingleBodyPosition {
+  Maintain,
+  SameLine,
+  NextLine,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -222,10 +230,10 @@ pub struct FmtOptionsConfig {
   pub quote_props: Option<QuoteProps>,
   pub new_line_kind: Option<NewLineKind>,
   pub use_braces: Option<UseBraces>,
-  pub if_statement_use_braces: Option<UseBraces>,
-  pub for_statement_use_braces: Option<UseBraces>,
   pub for_in_statement_use_braces: Option<UseBraces>,
   pub for_of_statement_use_braces: Option<UseBraces>,
+  pub for_statement_use_braces: Option<UseBraces>,
+  pub if_statement_use_braces: Option<UseBraces>,
   pub while_statement_use_braces: Option<UseBraces>,
   pub brace_position: Option<BracePosition>,
   pub arrow_function_brace_position: Option<BracePosition>,
@@ -250,6 +258,12 @@ pub struct FmtOptionsConfig {
   pub switch_statement_brace_position: Option<BracePosition>,
   pub try_statement_brace_position: Option<BracePosition>,
   pub while_statement_brace_position: Option<BracePosition>,
+  pub single_body_position: Option<SingleBodyPosition>,
+  pub for_in_statement_single_body_position: Option<SingleBodyPosition>,
+  pub for_of_statement_single_body_position: Option<SingleBodyPosition>,
+  pub for_statement_single_body_position: Option<SingleBodyPosition>,
+  pub if_statement_single_body_position: Option<SingleBodyPosition>,
+  pub while_statement_single_body_position: Option<SingleBodyPosition>,
 }
 
 impl FmtOptionsConfig {
@@ -263,10 +277,10 @@ impl FmtOptionsConfig {
       && self.quote_props.is_none()
       && self.new_line_kind.is_none()
       && self.use_braces.is_none()
-      && self.if_statement_use_braces.is_none()
-      && self.for_statement_use_braces.is_none()
       && self.for_in_statement_use_braces.is_none()
       && self.for_of_statement_use_braces.is_none()
+      && self.for_statement_use_braces.is_none()
+      && self.if_statement_use_braces.is_none()
       && self.while_statement_use_braces.is_none()
       && self.brace_position.is_none()
       && self.arrow_function_brace_position.is_none()
@@ -291,6 +305,12 @@ impl FmtOptionsConfig {
       && self.switch_statement_brace_position.is_none()
       && self.try_statement_brace_position.is_none()
       && self.while_statement_brace_position.is_none()
+      && self.single_body_position.is_none()
+      && self.for_in_statement_single_body_position.is_none()
+      && self.for_of_statement_single_body_position.is_none()
+      && self.for_statement_single_body_position.is_none()
+      && self.if_statement_single_body_position.is_none()
+      && self.while_statement_single_body_position.is_none()
 
   }
 }
@@ -350,14 +370,14 @@ struct SerializedFmtConfig {
   pub quote_props: Option<QuoteProps>,
   pub new_line_kind: Option<NewLineKind>,
   pub use_braces: Option<UseBraces>,
-  #[serde(rename = "ifStatement.useBraces")]
-  pub if_statement_use_braces: Option<UseBraces>,
-  #[serde(rename = "forStatement.useBraces")]
-  pub for_statement_use_braces: Option<UseBraces>,
   #[serde(rename = "forInStatement.useBraces")]
   pub for_in_statement_use_braces: Option<UseBraces>,
   #[serde(rename = "forOfStatement.useBraces")]
   pub for_of_statement_use_braces: Option<UseBraces>,
+  #[serde(rename = "forStatement.useBraces")]
+  pub for_statement_use_braces: Option<UseBraces>,
+  #[serde(rename = "ifStatement.useBraces")]
+  pub if_statement_use_braces: Option<UseBraces>,
   #[serde(rename = "whileStatement.useBraces")]
   pub while_statement_use_braces: Option<UseBraces>,
   pub brace_position: Option<BracePosition>,
@@ -405,6 +425,17 @@ struct SerializedFmtConfig {
   pub try_statement_brace_position: Option<BracePosition>,
   #[serde(rename = "whileStatement.bracePosition")]
   pub while_statement_brace_position: Option<BracePosition>,
+  pub single_body_position: Option<SingleBodyPosition>,
+  #[serde(rename = "forInStatement.singleBodyPosition")]
+  pub for_in_statement_single_body_position: Option<SingleBodyPosition>,
+  #[serde(rename = "forOfStatement.singleBodyPosition")]
+  pub for_of_statement_single_body_position: Option<SingleBodyPosition>,
+  #[serde(rename = "forStatement.singleBodyPosition")]
+  pub for_statement_single_body_position: Option<SingleBodyPosition>,
+  #[serde(rename = "ifStatement.singleBodyPosition")]
+  pub if_statement_single_body_position: Option<SingleBodyPosition>,
+  #[serde(rename = "whileStatement.singleBodyPosition")]
+  pub while_statement_single_body_position: Option<SingleBodyPosition>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -458,6 +489,12 @@ impl SerializedFmtConfig {
       switch_statement_brace_position: self.switch_statement_brace_position,
       try_statement_brace_position: self.try_statement_brace_position,
       while_statement_brace_position: self.while_statement_brace_position,
+      single_body_position: self.single_body_position,
+      for_in_statement_single_body_position: self.for_in_statement_single_body_position,
+      for_of_statement_single_body_position: self.for_of_statement_single_body_position,
+      for_statement_single_body_position: self.for_statement_single_body_position,
+      if_statement_single_body_position: self.if_statement_single_body_position,
+      while_statement_single_body_position: self.while_statement_single_body_position,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2124,7 +2161,13 @@ mod tests {
         "switchStatement.bracePosition": "sameLine",
         "switchCase.bracePosition": "sameLine",
         "tryStatement.bracePosition": "sameLine",
-        "whileStatement.bracePosition": "sameLine"
+        "whileStatement.bracePosition": "sameLine",
+        "singleBodyPosition": "nextLine",
+        "forInStatement.singleBodyPosition": "nextLine",
+        "forOfStatement.singleBodyPosition": "nextLine",
+        "forStatement.singleBodyPosition": "nextLine",
+        "ifStatement.singleBodyPosition": "nextLine",
+        "whileStatement.singleBodyPosition": "nextLine",
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2228,6 +2271,12 @@ mod tests {
           switch_case_brace_position: Some(BracePosition::SameLine),
           try_statement_brace_position: Some(BracePosition::SameLine),
           while_statement_brace_position: Some(BracePosition::SameLine),
+          single_body_position: Some(SingleBodyPosition::NextLine),
+          for_in_statement_single_body_position: Some(SingleBodyPosition::NextLine),
+          for_of_statement_single_body_position: Some(SingleBodyPosition::NextLine),
+          for_statement_single_body_position: Some(SingleBodyPosition::NextLine),
+          if_statement_single_body_position: Some(SingleBodyPosition::NextLine),
+          while_statement_single_body_position: Some(SingleBodyPosition::NextLine),
         },
       }
     );
