@@ -1717,6 +1717,26 @@ impl WorkspaceDirectory {
           .options
           .use_braces
           .or(root_config.options.use_braces),
+        if_statement_use_braces: member_config
+          .options
+          .if_statement_use_braces
+          .or(root_config.options.if_statement_use_braces),
+        for_statement_use_braces: member_config
+          .options
+          .for_statement_use_braces
+          .or(root_config.options.for_statement_use_braces),
+        for_in_statement_use_braces: member_config
+          .options
+          .for_in_statement_use_braces
+          .or(root_config.options.for_in_statement_use_braces),
+        for_of_statement_use_braces: member_config
+          .options
+          .for_of_statement_use_braces
+          .or(root_config.options.for_of_statement_use_braces),
+        while_statement_use_braces: member_config
+          .options
+          .while_statement_use_braces
+          .or(root_config.options.while_statement_use_braces),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2255,10 +2275,10 @@ pub mod test {
   use crate::assert_contains;
   use crate::deno_json::DenoJsonCache;
   use crate::deno_json::NewLineKind;
-use crate::deno_json::ProseWrap;
+  use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
   use crate::deno_json::UseBraces;
-use crate::glob::FileCollector;
+  use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
@@ -3095,6 +3115,11 @@ use crate::glob::FileCollector;
           "quoteProps": "asNeeded",
           "newLineKind": "auto",
           "useBraces": "preferNone",
+          "ifStatement.useBraces": "preferNone",
+          "forStatement.useBraces": "preferNone",
+          "forInStatement.useBraces": "preferNone",
+          "forOfStatement.useBraces": "preferNone",
+          "whileStatement.useBraces": "preferNone",
         }
       }),
       json!({
@@ -3109,6 +3134,11 @@ use crate::glob::FileCollector;
           "quoteProps": "consistent",
           "newLineKind": "lf",
           "useBraces": "always",
+          "ifStatement.useBraces": "always",
+          "forStatement.useBraces": "always",
+          "forInStatement.useBraces": "always",
+          "forOfStatement.useBraces": "always",
+          "whileStatement.useBraces": "always",
         }
       }),
     );
@@ -3129,6 +3159,11 @@ use crate::glob::FileCollector;
           quote_props: Some(QuoteProps::Consistent),
           new_line_kind: Some(NewLineKind::LineFeed),
           use_braces: Some(UseBraces::Always),
+          if_statement_use_braces: Some(UseBraces::Always),
+          for_statement_use_braces: Some(UseBraces::Always),
+          for_in_statement_use_braces: Some(UseBraces::Always),
+          for_of_statement_use_braces: Some(UseBraces::Always),
+          while_statement_use_braces: Some(UseBraces::Always),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3160,6 +3195,11 @@ use crate::glob::FileCollector;
           quote_props: Some(QuoteProps::AsNeeded),
           new_line_kind: Some(NewLineKind::Auto),
           use_braces: Some(UseBraces::PreferNone),
+          if_statement_use_braces: Some(UseBraces::PreferNone),
+          for_statement_use_braces: Some(UseBraces::PreferNone),
+          for_in_statement_use_braces: Some(UseBraces::PreferNone),
+          for_of_statement_use_braces: Some(UseBraces::PreferNone),
+          while_statement_use_braces: Some(UseBraces::PreferNone),
         },
         files: FilePatterns {
           base: root_dir(),

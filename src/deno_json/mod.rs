@@ -213,6 +213,11 @@ pub struct FmtOptionsConfig {
   pub quote_props: Option<QuoteProps>,
   pub new_line_kind: Option<NewLineKind>,
   pub use_braces: Option<UseBraces>,
+  pub if_statement_use_braces: Option<UseBraces>,
+  pub for_statement_use_braces: Option<UseBraces>,
+  pub for_in_statement_use_braces: Option<UseBraces>,
+  pub for_of_statement_use_braces: Option<UseBraces>,
+  pub while_statement_use_braces: Option<UseBraces>,
 }
 
 impl FmtOptionsConfig {
@@ -226,6 +231,11 @@ impl FmtOptionsConfig {
       && self.quote_props.is_none()
       && self.new_line_kind.is_none()
       && self.use_braces.is_none()
+      && self.if_statement_use_braces.is_none()
+      && self.for_statement_use_braces.is_none()
+      && self.for_in_statement_use_braces.is_none()
+      && self.for_of_statement_use_braces.is_none()
+      && self.while_statement_use_braces.is_none()
   }
 }
 
@@ -284,6 +294,16 @@ struct SerializedFmtConfig {
   pub quote_props: Option<QuoteProps>,
   pub new_line_kind: Option<NewLineKind>,
   pub use_braces: Option<UseBraces>,
+  #[serde(rename = "ifStatement.useBraces")]
+  pub if_statement_use_braces: Option<UseBraces>,
+  #[serde(rename = "forStatement.useBraces")]
+  pub for_statement_use_braces: Option<UseBraces>,
+  #[serde(rename = "forInStatement.useBraces")]
+  pub for_in_statement_use_braces: Option<UseBraces>,
+  #[serde(rename = "forOfStatement.useBraces")]
+  pub for_of_statement_use_braces: Option<UseBraces>,
+  #[serde(rename = "whileStatement.useBraces")]
+  pub while_statement_use_braces: Option<UseBraces>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -309,6 +329,11 @@ impl SerializedFmtConfig {
       quote_props: self.quote_props,
       new_line_kind: self.new_line_kind,
       use_braces: self.use_braces,
+      if_statement_use_braces: self.if_statement_use_braces,
+      for_statement_use_braces: self.for_statement_use_braces,
+      for_in_statement_use_braces: self.for_in_statement_use_braces,
+      for_of_statement_use_braces: self.for_of_statement_use_braces,
+      while_statement_use_braces: self.while_statement_use_braces,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -1948,7 +1973,11 @@ mod tests {
         "quoteProps": "asNeeded",
         "newLineKind": "crlf",
         "useBraces": "whenNotSingleLine",
-
+        "ifStatement.useBraces": "whenNotSingleLine",
+        "forStatement.useBraces": "whenNotSingleLine",
+        "forInStatement.useBraces": "whenNotSingleLine",
+        "forOfStatement.useBraces": "whenNotSingleLine",
+        "whileStatement.useBraces": "whenNotSingleLine"
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2024,6 +2053,11 @@ mod tests {
           quote_props: Some(QuoteProps::AsNeeded),
           new_line_kind: Some(NewLineKind::CarriageReturnLineFeed),
           use_braces: Some(UseBraces::WhenNotSingleLine),
+          if_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
+          for_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
+          for_in_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
+          for_of_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
+          while_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
         },
       }
     );
