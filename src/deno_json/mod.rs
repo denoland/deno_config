@@ -234,6 +234,14 @@ pub enum TrailingCommas {
   OnlyMultiLine,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum OperatorPosition {
+  Maintain,
+  SameLine,
+  NextLine,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -281,7 +289,8 @@ pub struct FmtOptionsConfig {
   pub if_statement_single_body_position: Option<SingleBodyPosition>,
   pub while_statement_single_body_position: Option<SingleBodyPosition>,
   pub next_control_flow_position: Option<NextControlFlowPosition>,
-  pub do_while_statement_next_control_flow_position: Option<NextControlFlowPosition>,
+  pub do_while_statement_next_control_flow_position:
+    Option<NextControlFlowPosition>,
   pub if_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   pub try_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   pub trailing_commas: Option<TrailingCommas>,
@@ -297,6 +306,10 @@ pub struct FmtOptionsConfig {
   pub tuple_type_trailing_commas: Option<TrailingCommas>,
   pub type_literal_trailing_commas: Option<TrailingCommas>,
   pub type_parameters_trailing_commas: Option<TrailingCommas>,
+  pub operator_position: Option<OperatorPosition>,
+  pub binary_expression_operator_position: Option<OperatorPosition>,
+  pub conditional_expression_operator_position: Option<OperatorPosition>,
+  pub conditional_type_operator_position: Option<OperatorPosition>,
 }
 
 impl FmtOptionsConfig {
@@ -361,6 +374,10 @@ impl FmtOptionsConfig {
       && self.tuple_type_trailing_commas.is_none()
       && self.type_literal_trailing_commas.is_none()
       && self.type_parameters_trailing_commas.is_none()
+      && self.operator_position.is_none()
+      && self.binary_expression_operator_position.is_none()
+      && self.conditional_expression_operator_position.is_none()
+      && self.conditional_type_operator_position.is_none()
   }
 }
 
@@ -487,7 +504,8 @@ struct SerializedFmtConfig {
   pub while_statement_single_body_position: Option<SingleBodyPosition>,
   pub next_control_flow_position: Option<NextControlFlowPosition>,
   #[serde(rename = "doWhileStatement.nextControlFlowPosition")]
-  pub do_while_statement_next_control_flow_position: Option<NextControlFlowPosition>,
+  pub do_while_statement_next_control_flow_position:
+    Option<NextControlFlowPosition>,
   #[serde(rename = "ifStatement.nextControlFlowPosition")]
   pub if_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   #[serde(rename = "tryStatement.nextControlFlowPosition")]
@@ -517,6 +535,13 @@ struct SerializedFmtConfig {
   pub type_literal_trailing_commas: Option<TrailingCommas>,
   #[serde(rename = "typeParameters.trailingCommas")]
   pub type_parameters_trailing_commas: Option<TrailingCommas>,
+  pub operator_position: Option<OperatorPosition>,
+  #[serde(rename = "binaryExpression.operatorPosition")]
+  pub binary_expression_operator_position: Option<OperatorPosition>,
+  #[serde(rename = "conditionalExpression.operatorPosition")]
+  pub conditional_expression_operator_position: Option<OperatorPosition>,
+  #[serde(rename = "conditionalType.operatorPosition")]
+  pub conditional_type_operator_position: Option<OperatorPosition>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -557,11 +582,14 @@ impl SerializedFmtConfig {
       for_in_statement_brace_position: self.for_in_statement_brace_position,
       for_of_statement_brace_position: self.for_of_statement_brace_position,
       for_statement_brace_position: self.for_statement_brace_position,
-      function_declaration_brace_position: self.function_declaration_brace_position,
-      function_expression_brace_position: self.function_expression_brace_position,
+      function_declaration_brace_position: self
+        .function_declaration_brace_position,
+      function_expression_brace_position: self
+        .function_expression_brace_position,
       get_accessor_brace_position: self.get_accessor_brace_position,
       if_statement_brace_position: self.if_statement_brace_position,
-      interface_declaration_brace_position: self.interface_declaration_brace_position,
+      interface_declaration_brace_position: self
+        .interface_declaration_brace_position,
       method_brace_position: self.method_brace_position,
       module_declaration_brace_position: self.module_declaration_brace_position,
       set_accessor_brace_position: self.set_accessor_brace_position,
@@ -571,28 +599,44 @@ impl SerializedFmtConfig {
       try_statement_brace_position: self.try_statement_brace_position,
       while_statement_brace_position: self.while_statement_brace_position,
       single_body_position: self.single_body_position,
-      for_in_statement_single_body_position: self.for_in_statement_single_body_position,
-      for_of_statement_single_body_position: self.for_of_statement_single_body_position,
-      for_statement_single_body_position: self.for_statement_single_body_position,
+      for_in_statement_single_body_position: self
+        .for_in_statement_single_body_position,
+      for_of_statement_single_body_position: self
+        .for_of_statement_single_body_position,
+      for_statement_single_body_position: self
+        .for_statement_single_body_position,
       if_statement_single_body_position: self.if_statement_single_body_position,
-      while_statement_single_body_position: self.while_statement_single_body_position,
+      while_statement_single_body_position: self
+        .while_statement_single_body_position,
       next_control_flow_position: self.next_control_flow_position,
-      do_while_statement_next_control_flow_position: self.do_while_statement_next_control_flow_position,
-      if_statement_next_control_flow_position: self.if_statement_next_control_flow_position,
-      try_statement_next_control_flow_position: self.try_statement_next_control_flow_position,
+      do_while_statement_next_control_flow_position: self
+        .do_while_statement_next_control_flow_position,
+      if_statement_next_control_flow_position: self
+        .if_statement_next_control_flow_position,
+      try_statement_next_control_flow_position: self
+        .try_statement_next_control_flow_position,
       trailing_commas: self.trailing_commas,
       arguments_trailing_commas: self.arguments_trailing_commas,
       parameters_trailing_commas: self.parameters_trailing_commas,
       array_expression_trailing_commas: self.array_expression_trailing_commas,
       array_pattern_trailing_commas: self.array_pattern_trailing_commas,
       enum_declaration_trailing_commas: self.enum_declaration_trailing_commas,
-      export_declaration_trailing_commas: self.export_declaration_trailing_commas,
-      import_declaration_trailing_commas: self.import_declaration_trailing_commas,
+      export_declaration_trailing_commas: self
+        .export_declaration_trailing_commas,
+      import_declaration_trailing_commas: self
+        .import_declaration_trailing_commas,
       object_expression_trailing_commas: self.object_expression_trailing_commas,
       object_pattern_trailing_commas: self.object_pattern_trailing_commas,
       tuple_type_trailing_commas: self.tuple_type_trailing_commas,
       type_literal_trailing_commas: self.type_literal_trailing_commas,
       type_parameters_trailing_commas: self.type_parameters_trailing_commas,
+      operator_position: self.operator_position,
+      binary_expression_operator_position: self
+        .binary_expression_operator_position,
+      conditional_expression_operator_position: self
+        .conditional_expression_operator_position,
+      conditional_type_operator_position: self
+        .conditional_type_operator_position,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2284,6 +2328,10 @@ mod tests {
         "tupleType.trailingCommas": "never",
         "typeLiteral.trailingCommas": "never",
         "typeParameters.trailingCommas": "never",
+        "operatorPosition": "maintain",
+        "binaryExpression.operatorPosition": "maintain",
+        "conditionalExpression.operatorPosition": "maintain",
+        "conditionalType.operatorPosition": "maintain",
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2388,15 +2436,29 @@ mod tests {
           try_statement_brace_position: Some(BracePosition::SameLine),
           while_statement_brace_position: Some(BracePosition::SameLine),
           single_body_position: Some(SingleBodyPosition::NextLine),
-          for_in_statement_single_body_position: Some(SingleBodyPosition::NextLine),
-          for_of_statement_single_body_position: Some(SingleBodyPosition::NextLine),
-          for_statement_single_body_position: Some(SingleBodyPosition::NextLine),
+          for_in_statement_single_body_position: Some(
+            SingleBodyPosition::NextLine
+          ),
+          for_of_statement_single_body_position: Some(
+            SingleBodyPosition::NextLine
+          ),
+          for_statement_single_body_position: Some(
+            SingleBodyPosition::NextLine
+          ),
           if_statement_single_body_position: Some(SingleBodyPosition::NextLine),
-          while_statement_single_body_position: Some(SingleBodyPosition::NextLine),
+          while_statement_single_body_position: Some(
+            SingleBodyPosition::NextLine
+          ),
           next_control_flow_position: Some(NextControlFlowPosition::SameLine),
-          do_while_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
-          if_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
-          try_statement_next_control_flow_position: Some(NextControlFlowPosition::SameLine),
+          do_while_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::SameLine
+          ),
+          if_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::SameLine
+          ),
+          try_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::SameLine
+          ),
           trailing_commas: Some(TrailingCommas::Never),
           arguments_trailing_commas: Some(TrailingCommas::Never),
           parameters_trailing_commas: Some(TrailingCommas::Never),
@@ -2410,6 +2472,12 @@ mod tests {
           tuple_type_trailing_commas: Some(TrailingCommas::Never),
           type_literal_trailing_commas: Some(TrailingCommas::Never),
           type_parameters_trailing_commas: Some(TrailingCommas::Never),
+          operator_position: Some(OperatorPosition::Maintain),
+          binary_expression_operator_position: Some(OperatorPosition::Maintain),
+          conditional_expression_operator_position: Some(
+            OperatorPosition::Maintain
+          ),
+          conditional_type_operator_position: Some(OperatorPosition::Maintain),
         },
       }
     );

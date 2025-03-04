@@ -1773,43 +1773,174 @@ impl WorkspaceDirectory {
           .options
           .for_of_statement_brace_position
           .or(root_config.options.for_of_statement_brace_position),
-        for_statement_brace_position: member_config.options.for_statement_brace_position.or(root_config.options.for_statement_brace_position),
-        function_declaration_brace_position: member_config.options.function_declaration_brace_position.or(root_config.options.function_declaration_brace_position),
-        function_expression_brace_position: member_config.options.function_expression_brace_position.or(root_config.options.function_expression_brace_position),
-        get_accessor_brace_position: member_config.options.get_accessor_brace_position.or(root_config.options.get_accessor_brace_position),
-        if_statement_brace_position: member_config.options.if_statement_brace_position.or(root_config.options.if_statement_brace_position),
-        interface_declaration_brace_position: member_config.options.interface_declaration_brace_position.or(root_config.options.interface_declaration_brace_position),
-        method_brace_position: member_config.options.method_brace_position.or(root_config.options.method_brace_position),
-        module_declaration_brace_position: member_config.options.module_declaration_brace_position.or(root_config.options.module_declaration_brace_position),
-        set_accessor_brace_position: member_config.options.set_accessor_brace_position.or(root_config.options.set_accessor_brace_position),
-        static_block_brace_position: member_config.options.static_block_brace_position.or(root_config.options.static_block_brace_position),
-        switch_case_brace_position: member_config.options.switch_case_brace_position.or(root_config.options.switch_case_brace_position),
-        switch_statement_brace_position: member_config.options.switch_statement_brace_position.or(root_config.options.switch_statement_brace_position),
-        try_statement_brace_position: member_config.options.try_statement_brace_position.or(root_config.options.try_statement_brace_position),
-        while_statement_brace_position: member_config.options.while_statement_brace_position.or(root_config.options.while_statement_brace_position),
-        single_body_position: member_config.options.single_body_position.or(root_config.options.single_body_position),
-        for_in_statement_single_body_position: member_config.options.for_in_statement_single_body_position.or(root_config.options.for_in_statement_single_body_position),
-        for_of_statement_single_body_position: member_config.options.for_of_statement_single_body_position.or(root_config.options.for_of_statement_single_body_position),
-        for_statement_single_body_position: member_config.options.for_statement_single_body_position.or(root_config.options.for_statement_single_body_position),
-        if_statement_single_body_position: member_config.options.if_statement_single_body_position.or(root_config.options.if_statement_single_body_position),
-        while_statement_single_body_position: member_config.options.while_statement_single_body_position.or(root_config.options.while_statement_single_body_position),
-        next_control_flow_position: member_config.options.next_control_flow_position.or(root_config.options.next_control_flow_position),
-        do_while_statement_next_control_flow_position: member_config.options.do_while_statement_next_control_flow_position.or(root_config.options.do_while_statement_next_control_flow_position),
-        if_statement_next_control_flow_position: member_config.options.if_statement_next_control_flow_position.or(root_config.options.if_statement_next_control_flow_position),
-        try_statement_next_control_flow_position: member_config.options.try_statement_next_control_flow_position.or(root_config.options.try_statement_next_control_flow_position),
-        trailing_commas: member_config.options.trailing_commas.or(root_config.options.trailing_commas),
-        arguments_trailing_commas: member_config.options.arguments_trailing_commas.or(root_config.options.arguments_trailing_commas),
-        parameters_trailing_commas: member_config.options.parameters_trailing_commas.or(root_config.options.parameters_trailing_commas),
-        array_expression_trailing_commas: member_config.options.array_expression_trailing_commas.or(root_config.options.array_expression_trailing_commas),
-        array_pattern_trailing_commas: member_config.options.array_pattern_trailing_commas.or(root_config.options.array_pattern_trailing_commas),
-        enum_declaration_trailing_commas: member_config.options.enum_declaration_trailing_commas.or(root_config.options.enum_declaration_trailing_commas),
-        export_declaration_trailing_commas: member_config.options.export_declaration_trailing_commas.or(root_config.options.export_declaration_trailing_commas),
-        import_declaration_trailing_commas: member_config.options.import_declaration_trailing_commas.or(root_config.options.import_declaration_trailing_commas),
-        object_expression_trailing_commas: member_config.options.object_expression_trailing_commas.or(root_config.options.object_expression_trailing_commas),
-        object_pattern_trailing_commas: member_config.options.object_pattern_trailing_commas.or(root_config.options.object_pattern_trailing_commas),
-        tuple_type_trailing_commas: member_config.options.tuple_type_trailing_commas.or(root_config.options.tuple_type_trailing_commas),
-        type_literal_trailing_commas: member_config.options.type_literal_trailing_commas.or(root_config.options.type_literal_trailing_commas),
-        type_parameters_trailing_commas: member_config.options.type_parameters_trailing_commas.or(root_config.options.type_parameters_trailing_commas),
+        for_statement_brace_position: member_config
+          .options
+          .for_statement_brace_position
+          .or(root_config.options.for_statement_brace_position),
+        function_declaration_brace_position: member_config
+          .options
+          .function_declaration_brace_position
+          .or(root_config.options.function_declaration_brace_position),
+        function_expression_brace_position: member_config
+          .options
+          .function_expression_brace_position
+          .or(root_config.options.function_expression_brace_position),
+        get_accessor_brace_position: member_config
+          .options
+          .get_accessor_brace_position
+          .or(root_config.options.get_accessor_brace_position),
+        if_statement_brace_position: member_config
+          .options
+          .if_statement_brace_position
+          .or(root_config.options.if_statement_brace_position),
+        interface_declaration_brace_position: member_config
+          .options
+          .interface_declaration_brace_position
+          .or(root_config.options.interface_declaration_brace_position),
+        method_brace_position: member_config
+          .options
+          .method_brace_position
+          .or(root_config.options.method_brace_position),
+        module_declaration_brace_position: member_config
+          .options
+          .module_declaration_brace_position
+          .or(root_config.options.module_declaration_brace_position),
+        set_accessor_brace_position: member_config
+          .options
+          .set_accessor_brace_position
+          .or(root_config.options.set_accessor_brace_position),
+        static_block_brace_position: member_config
+          .options
+          .static_block_brace_position
+          .or(root_config.options.static_block_brace_position),
+        switch_case_brace_position: member_config
+          .options
+          .switch_case_brace_position
+          .or(root_config.options.switch_case_brace_position),
+        switch_statement_brace_position: member_config
+          .options
+          .switch_statement_brace_position
+          .or(root_config.options.switch_statement_brace_position),
+        try_statement_brace_position: member_config
+          .options
+          .try_statement_brace_position
+          .or(root_config.options.try_statement_brace_position),
+        while_statement_brace_position: member_config
+          .options
+          .while_statement_brace_position
+          .or(root_config.options.while_statement_brace_position),
+        single_body_position: member_config
+          .options
+          .single_body_position
+          .or(root_config.options.single_body_position),
+        for_in_statement_single_body_position: member_config
+          .options
+          .for_in_statement_single_body_position
+          .or(root_config.options.for_in_statement_single_body_position),
+        for_of_statement_single_body_position: member_config
+          .options
+          .for_of_statement_single_body_position
+          .or(root_config.options.for_of_statement_single_body_position),
+        for_statement_single_body_position: member_config
+          .options
+          .for_statement_single_body_position
+          .or(root_config.options.for_statement_single_body_position),
+        if_statement_single_body_position: member_config
+          .options
+          .if_statement_single_body_position
+          .or(root_config.options.if_statement_single_body_position),
+        while_statement_single_body_position: member_config
+          .options
+          .while_statement_single_body_position
+          .or(root_config.options.while_statement_single_body_position),
+        next_control_flow_position: member_config
+          .options
+          .next_control_flow_position
+          .or(root_config.options.next_control_flow_position),
+        do_while_statement_next_control_flow_position: member_config
+          .options
+          .do_while_statement_next_control_flow_position
+          .or(
+            root_config
+              .options
+              .do_while_statement_next_control_flow_position,
+          ),
+        if_statement_next_control_flow_position: member_config
+          .options
+          .if_statement_next_control_flow_position
+          .or(root_config.options.if_statement_next_control_flow_position),
+        try_statement_next_control_flow_position: member_config
+          .options
+          .try_statement_next_control_flow_position
+          .or(root_config.options.try_statement_next_control_flow_position),
+        trailing_commas: member_config
+          .options
+          .trailing_commas
+          .or(root_config.options.trailing_commas),
+        arguments_trailing_commas: member_config
+          .options
+          .arguments_trailing_commas
+          .or(root_config.options.arguments_trailing_commas),
+        parameters_trailing_commas: member_config
+          .options
+          .parameters_trailing_commas
+          .or(root_config.options.parameters_trailing_commas),
+        array_expression_trailing_commas: member_config
+          .options
+          .array_expression_trailing_commas
+          .or(root_config.options.array_expression_trailing_commas),
+        array_pattern_trailing_commas: member_config
+          .options
+          .array_pattern_trailing_commas
+          .or(root_config.options.array_pattern_trailing_commas),
+        enum_declaration_trailing_commas: member_config
+          .options
+          .enum_declaration_trailing_commas
+          .or(root_config.options.enum_declaration_trailing_commas),
+        export_declaration_trailing_commas: member_config
+          .options
+          .export_declaration_trailing_commas
+          .or(root_config.options.export_declaration_trailing_commas),
+        import_declaration_trailing_commas: member_config
+          .options
+          .import_declaration_trailing_commas
+          .or(root_config.options.import_declaration_trailing_commas),
+        object_expression_trailing_commas: member_config
+          .options
+          .object_expression_trailing_commas
+          .or(root_config.options.object_expression_trailing_commas),
+        object_pattern_trailing_commas: member_config
+          .options
+          .object_pattern_trailing_commas
+          .or(root_config.options.object_pattern_trailing_commas),
+        tuple_type_trailing_commas: member_config
+          .options
+          .tuple_type_trailing_commas
+          .or(root_config.options.tuple_type_trailing_commas),
+        type_literal_trailing_commas: member_config
+          .options
+          .type_literal_trailing_commas
+          .or(root_config.options.type_literal_trailing_commas),
+        type_parameters_trailing_commas: member_config
+          .options
+          .type_parameters_trailing_commas
+          .or(root_config.options.type_parameters_trailing_commas),
+        operator_position: member_config
+          .options
+          .operator_position
+          .or(root_config.options.operator_position),
+        binary_expression_operator_position: member_config
+          .options
+          .binary_expression_operator_position
+          .or(root_config.options.binary_expression_operator_position),
+        conditional_expression_operator_position: member_config
+          .options
+          .conditional_expression_operator_position
+          .or(root_config.options.conditional_expression_operator_position),
+        conditional_type_operator_position: member_config
+          .options
+          .conditional_type_operator_position
+          .or(root_config.options.conditional_type_operator_position),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2347,14 +2478,15 @@ pub mod test {
 
   use crate::assert_contains;
   use crate::deno_json::BracePosition;
-use crate::deno_json::DenoJsonCache;
+  use crate::deno_json::DenoJsonCache;
   use crate::deno_json::NewLineKind;
   use crate::deno_json::NextControlFlowPosition;
-use crate::deno_json::ProseWrap;
+  use crate::deno_json::OperatorPosition;
+  use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
   use crate::deno_json::SingleBodyPosition;
-use crate::deno_json::TrailingCommas;
-use crate::deno_json::UseBraces;
+  use crate::deno_json::TrailingCommas;
+  use crate::deno_json::UseBraces;
   use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
@@ -3243,6 +3375,10 @@ use crate::deno_json::UseBraces;
           "tupleType.trailingCommas": "always",
           "typeLiteral.trailingCommas": "always",
           "typeParameters.trailingCommas": "always",
+          "operatorPosition": "sameLine",
+          "binaryExpression.operatorPosition": "sameLine",
+          "conditionalExpression.operatorPosition": "sameLine",
+          "conditionalType.operatorPosition": "sameLine",
         }
       }),
       json!({
@@ -3308,6 +3444,10 @@ use crate::deno_json::UseBraces;
           "tupleType.trailingCommas": "onlyMultiLine",
           "typeLiteral.trailingCommas": "onlyMultiLine",
           "typeParameters.trailingCommas": "onlyMultiLine",
+          "operatorPosition": "nextLine",
+          "binaryExpression.operatorPosition": "nextLine",
+          "conditionalExpression.operatorPosition": "nextLine",
+          "conditionalType.operatorPosition": "nextLine",
         }
       }),
     );
@@ -3357,28 +3497,54 @@ use crate::deno_json::UseBraces;
           try_statement_brace_position: Some(BracePosition::NextLine),
           while_statement_brace_position: Some(BracePosition::NextLine),
           single_body_position: Some(SingleBodyPosition::Maintain),
-          for_in_statement_single_body_position: Some(SingleBodyPosition::Maintain),
-          for_of_statement_single_body_position: Some(SingleBodyPosition::Maintain),
-          for_statement_single_body_position: Some(SingleBodyPosition::Maintain),
+          for_in_statement_single_body_position: Some(
+            SingleBodyPosition::Maintain
+          ),
+          for_of_statement_single_body_position: Some(
+            SingleBodyPosition::Maintain
+          ),
+          for_statement_single_body_position: Some(
+            SingleBodyPosition::Maintain
+          ),
           if_statement_single_body_position: Some(SingleBodyPosition::Maintain),
-          while_statement_single_body_position: Some(SingleBodyPosition::Maintain),
+          while_statement_single_body_position: Some(
+            SingleBodyPosition::Maintain
+          ),
           next_control_flow_position: Some(NextControlFlowPosition::Maintain),
-          do_while_statement_next_control_flow_position: Some(NextControlFlowPosition::Maintain),
-          if_statement_next_control_flow_position: Some(NextControlFlowPosition::Maintain),
-          try_statement_next_control_flow_position: Some(NextControlFlowPosition::Maintain),
+          do_while_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::Maintain
+          ),
+          if_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::Maintain
+          ),
+          try_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::Maintain
+          ),
           trailing_commas: Some(TrailingCommas::OnlyMultiLine),
           arguments_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
           parameters_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
           array_expression_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
           array_pattern_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
           enum_declaration_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
-          export_declaration_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
-          import_declaration_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
-          object_expression_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
+          export_declaration_trailing_commas: Some(
+            TrailingCommas::OnlyMultiLine
+          ),
+          import_declaration_trailing_commas: Some(
+            TrailingCommas::OnlyMultiLine
+          ),
+          object_expression_trailing_commas: Some(
+            TrailingCommas::OnlyMultiLine
+          ),
           object_pattern_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
           tuple_type_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
           type_literal_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
           type_parameters_trailing_commas: Some(TrailingCommas::OnlyMultiLine),
+          operator_position: Some(OperatorPosition::NextLine),
+          binary_expression_operator_position: Some(OperatorPosition::NextLine),
+          conditional_expression_operator_position: Some(
+            OperatorPosition::NextLine
+          ),
+          conditional_type_operator_position: Some(OperatorPosition::NextLine),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3439,15 +3605,29 @@ use crate::deno_json::UseBraces;
           try_statement_brace_position: Some(BracePosition::Maintain),
           while_statement_brace_position: Some(BracePosition::Maintain),
           single_body_position: Some(SingleBodyPosition::SameLine),
-          for_in_statement_single_body_position: Some(SingleBodyPosition::SameLine),
-          for_of_statement_single_body_position: Some(SingleBodyPosition::SameLine),
-          for_statement_single_body_position: Some(SingleBodyPosition::SameLine),
+          for_in_statement_single_body_position: Some(
+            SingleBodyPosition::SameLine
+          ),
+          for_of_statement_single_body_position: Some(
+            SingleBodyPosition::SameLine
+          ),
+          for_statement_single_body_position: Some(
+            SingleBodyPosition::SameLine
+          ),
           if_statement_single_body_position: Some(SingleBodyPosition::SameLine),
-          while_statement_single_body_position: Some(SingleBodyPosition::SameLine),
+          while_statement_single_body_position: Some(
+            SingleBodyPosition::SameLine
+          ),
           next_control_flow_position: Some(NextControlFlowPosition::NextLine),
-          do_while_statement_next_control_flow_position: Some(NextControlFlowPosition::NextLine),
-          if_statement_next_control_flow_position: Some(NextControlFlowPosition::NextLine),
-          try_statement_next_control_flow_position: Some(NextControlFlowPosition::NextLine),
+          do_while_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::NextLine
+          ),
+          if_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::NextLine
+          ),
+          try_statement_next_control_flow_position: Some(
+            NextControlFlowPosition::NextLine
+          ),
           trailing_commas: Some(TrailingCommas::Always),
           arguments_trailing_commas: Some(TrailingCommas::Always),
           parameters_trailing_commas: Some(TrailingCommas::Always),
@@ -3461,6 +3641,12 @@ use crate::deno_json::UseBraces;
           tuple_type_trailing_commas: Some(TrailingCommas::Always),
           type_literal_trailing_commas: Some(TrailingCommas::Always),
           type_parameters_trailing_commas: Some(TrailingCommas::Always),
+          operator_position: Some(OperatorPosition::SameLine),
+          binary_expression_operator_position: Some(OperatorPosition::SameLine),
+          conditional_expression_operator_position: Some(
+            OperatorPosition::SameLine
+          ),
+          conditional_type_operator_position: Some(OperatorPosition::SameLine),
         },
         files: FilePatterns {
           base: root_dir(),

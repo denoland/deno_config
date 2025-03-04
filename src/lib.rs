@@ -4,7 +4,6 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::unused_async)]
 #![deny(clippy::unnecessary_wraps)]
-
 #![recursion_limit = "256"]
 
 #[cfg(feature = "deno_json")]
