@@ -201,6 +201,15 @@ pub enum UseBraces {
   PreferNone,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum BracePosition {
+  Maintain,
+  SameLine,
+  NextLine,
+  SameLineUnlessHanging,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -218,6 +227,29 @@ pub struct FmtOptionsConfig {
   pub for_in_statement_use_braces: Option<UseBraces>,
   pub for_of_statement_use_braces: Option<UseBraces>,
   pub while_statement_use_braces: Option<UseBraces>,
+  pub brace_position: Option<BracePosition>,
+  pub arrow_function_brace_position: Option<BracePosition>,
+  pub class_declaration_brace_position: Option<BracePosition>,
+  pub class_expression_brace_position: Option<BracePosition>,
+  pub constructor_brace_position: Option<BracePosition>,
+  pub do_while_statement_brace_position: Option<BracePosition>,
+  pub enum_declaration_brace_position: Option<BracePosition>,
+  pub for_in_statement_brace_position: Option<BracePosition>,
+  pub for_of_statement_brace_position: Option<BracePosition>,
+  pub for_statement_brace_position: Option<BracePosition>,
+  pub function_declaration_brace_position: Option<BracePosition>,
+  pub function_expression_brace_position: Option<BracePosition>,
+  pub get_accessor_brace_position: Option<BracePosition>,
+  pub if_statement_brace_position: Option<BracePosition>,
+  pub interface_declaration_brace_position: Option<BracePosition>,
+  pub module_declaration_brace_position: Option<BracePosition>,
+  pub method_brace_position: Option<BracePosition>,
+  pub set_accessor_brace_position: Option<BracePosition>,
+  pub static_block_brace_position: Option<BracePosition>,
+  pub switch_case_brace_position: Option<BracePosition>,
+  pub switch_statement_brace_position: Option<BracePosition>,
+  pub try_statement_brace_position: Option<BracePosition>,
+  pub while_statement_brace_position: Option<BracePosition>,
 }
 
 impl FmtOptionsConfig {
@@ -236,6 +268,30 @@ impl FmtOptionsConfig {
       && self.for_in_statement_use_braces.is_none()
       && self.for_of_statement_use_braces.is_none()
       && self.while_statement_use_braces.is_none()
+      && self.brace_position.is_none()
+      && self.arrow_function_brace_position.is_none()
+      && self.class_declaration_brace_position.is_none()
+      && self.class_expression_brace_position.is_none()
+      && self.constructor_brace_position.is_none()
+      && self.do_while_statement_brace_position.is_none()
+      && self.enum_declaration_brace_position.is_none()
+      && self.for_in_statement_brace_position.is_none()
+      && self.for_of_statement_brace_position.is_none()
+      && self.for_statement_brace_position.is_none()
+      && self.function_declaration_brace_position.is_none()
+      && self.function_expression_brace_position.is_none()
+      && self.get_accessor_brace_position.is_none()
+      && self.if_statement_brace_position.is_none()
+      && self.interface_declaration_brace_position.is_none()
+      && self.module_declaration_brace_position.is_none()
+      && self.method_brace_position.is_none()
+      && self.set_accessor_brace_position.is_none()
+      && self.static_block_brace_position.is_none()
+      && self.switch_case_brace_position.is_none()
+      && self.switch_statement_brace_position.is_none()
+      && self.try_statement_brace_position.is_none()
+      && self.while_statement_brace_position.is_none()
+
   }
 }
 
@@ -304,6 +360,51 @@ struct SerializedFmtConfig {
   pub for_of_statement_use_braces: Option<UseBraces>,
   #[serde(rename = "whileStatement.useBraces")]
   pub while_statement_use_braces: Option<UseBraces>,
+  pub brace_position: Option<BracePosition>,
+  #[serde(rename = "arrowFunction.bracePosition")]
+  pub arrow_function_brace_position: Option<BracePosition>,
+  #[serde(rename = "classDeclaration.bracePosition")]
+  pub class_declaration_brace_position: Option<BracePosition>,
+  #[serde(rename = "classExpression.bracePosition")]
+  pub class_expression_brace_position: Option<BracePosition>,
+  #[serde(rename = "constructor.bracePosition")]
+  pub constructor_brace_position: Option<BracePosition>,
+  #[serde(rename = "doWhileStatement.bracePosition")]
+  pub do_while_statement_brace_position: Option<BracePosition>,
+  #[serde(rename = "enumDeclaration.bracePosition")]
+  pub enum_declaration_brace_position: Option<BracePosition>,
+  #[serde(rename = "forInStatement.bracePosition")]
+  pub for_in_statement_brace_position: Option<BracePosition>,
+  #[serde(rename = "forOfStatement.bracePosition")]
+  pub for_of_statement_brace_position: Option<BracePosition>,
+  #[serde(rename = "forStatement.bracePosition")]
+  pub for_statement_brace_position: Option<BracePosition>,
+  #[serde(rename = "functionDeclaration.bracePosition")]
+  pub function_declaration_brace_position: Option<BracePosition>,
+  #[serde(rename = "functionExpression.bracePosition")]
+  pub function_expression_brace_position: Option<BracePosition>,
+  #[serde(rename = "getAccessor.bracePosition")]
+  pub get_accessor_brace_position: Option<BracePosition>,
+  #[serde(rename = "ifStatement.bracePosition")]
+  pub if_statement_brace_position: Option<BracePosition>,
+  #[serde(rename = "interfaceDeclaration.bracePosition")]
+  pub interface_declaration_brace_position: Option<BracePosition>,
+  #[serde(rename = "moduleDeclaration.bracePosition")]
+  pub module_declaration_brace_position: Option<BracePosition>,
+  #[serde(rename = "method.bracePosition")]
+  pub method_brace_position: Option<BracePosition>,
+  #[serde(rename = "setAccessor.bracePosition")]
+  pub set_accessor_brace_position: Option<BracePosition>,
+  #[serde(rename = "staticBlock.bracePosition")]
+  pub static_block_brace_position: Option<BracePosition>,
+  #[serde(rename = "switchCase.bracePosition")]
+  pub switch_case_brace_position: Option<BracePosition>,
+  #[serde(rename = "switchStatement.bracePosition")]
+  pub switch_statement_brace_position: Option<BracePosition>,
+  #[serde(rename = "tryStatement.bracePosition")]
+  pub try_statement_brace_position: Option<BracePosition>,
+  #[serde(rename = "whileStatement.bracePosition")]
+  pub while_statement_brace_position: Option<BracePosition>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -334,6 +435,29 @@ impl SerializedFmtConfig {
       for_in_statement_use_braces: self.for_in_statement_use_braces,
       for_of_statement_use_braces: self.for_of_statement_use_braces,
       while_statement_use_braces: self.while_statement_use_braces,
+      brace_position: self.brace_position,
+      arrow_function_brace_position: self.arrow_function_brace_position,
+      class_declaration_brace_position: self.class_declaration_brace_position,
+      class_expression_brace_position: self.class_expression_brace_position,
+      constructor_brace_position: self.constructor_brace_position,
+      do_while_statement_brace_position: self.do_while_statement_brace_position,
+      enum_declaration_brace_position: self.enum_declaration_brace_position,
+      for_in_statement_brace_position: self.for_in_statement_brace_position,
+      for_of_statement_brace_position: self.for_of_statement_brace_position,
+      for_statement_brace_position: self.for_statement_brace_position,
+      function_declaration_brace_position: self.function_declaration_brace_position,
+      function_expression_brace_position: self.function_expression_brace_position,
+      get_accessor_brace_position: self.get_accessor_brace_position,
+      if_statement_brace_position: self.if_statement_brace_position,
+      interface_declaration_brace_position: self.interface_declaration_brace_position,
+      method_brace_position: self.method_brace_position,
+      module_declaration_brace_position: self.module_declaration_brace_position,
+      set_accessor_brace_position: self.set_accessor_brace_position,
+      static_block_brace_position: self.static_block_brace_position,
+      switch_case_brace_position: self.switch_case_brace_position,
+      switch_statement_brace_position: self.switch_statement_brace_position,
+      try_statement_brace_position: self.try_statement_brace_position,
+      while_statement_brace_position: self.while_statement_brace_position,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -1977,7 +2101,30 @@ mod tests {
         "forStatement.useBraces": "whenNotSingleLine",
         "forInStatement.useBraces": "whenNotSingleLine",
         "forOfStatement.useBraces": "whenNotSingleLine",
-        "whileStatement.useBraces": "whenNotSingleLine"
+        "whileStatement.useBraces": "whenNotSingleLine",
+        "bracePosition": "sameLine",
+        "arrowFunction.bracePosition": "sameLine",
+        "classDeclaration.bracePosition": "sameLine",
+        "classExpression.bracePosition": "sameLine",
+        "constructor.bracePosition": "sameLine",
+        "doWhileStatement.bracePosition": "sameLine",
+        "enumDeclaration.bracePosition": "sameLine",
+        "forInStatement.bracePosition": "sameLine",
+        "forOfStatement.bracePosition": "sameLine",
+        "forStatement.bracePosition": "sameLine",
+        "functionDeclaration.bracePosition": "sameLine",
+        "functionExpression.bracePosition": "sameLine",
+        "getAccessor.bracePosition": "sameLine",
+        "ifStatement.bracePosition": "sameLine",
+        "interfaceDeclaration.bracePosition": "sameLine",
+        "moduleDeclaration.bracePosition": "sameLine",
+        "method.bracePosition": "sameLine",
+        "setAccessor.bracePosition": "sameLine",
+        "staticBlock.bracePosition": "sameLine",
+        "switchStatement.bracePosition": "sameLine",
+        "switchCase.bracePosition": "sameLine",
+        "tryStatement.bracePosition": "sameLine",
+        "whileStatement.bracePosition": "sameLine"
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2058,6 +2205,29 @@ mod tests {
           for_in_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
           for_of_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
           while_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
+          brace_position: Some(BracePosition::SameLine),
+          arrow_function_brace_position: Some(BracePosition::SameLine),
+          class_declaration_brace_position: Some(BracePosition::SameLine),
+          class_expression_brace_position: Some(BracePosition::SameLine),
+          constructor_brace_position: Some(BracePosition::SameLine),
+          do_while_statement_brace_position: Some(BracePosition::SameLine),
+          enum_declaration_brace_position: Some(BracePosition::SameLine),
+          for_in_statement_brace_position: Some(BracePosition::SameLine),
+          for_of_statement_brace_position: Some(BracePosition::SameLine),
+          for_statement_brace_position: Some(BracePosition::SameLine),
+          function_declaration_brace_position: Some(BracePosition::SameLine),
+          function_expression_brace_position: Some(BracePosition::SameLine),
+          get_accessor_brace_position: Some(BracePosition::SameLine),
+          if_statement_brace_position: Some(BracePosition::SameLine),
+          interface_declaration_brace_position: Some(BracePosition::SameLine),
+          module_declaration_brace_position: Some(BracePosition::SameLine),
+          method_brace_position: Some(BracePosition::SameLine),
+          set_accessor_brace_position: Some(BracePosition::SameLine),
+          static_block_brace_position: Some(BracePosition::SameLine),
+          switch_statement_brace_position: Some(BracePosition::SameLine),
+          switch_case_brace_position: Some(BracePosition::SameLine),
+          try_statement_brace_position: Some(BracePosition::SameLine),
+          while_statement_brace_position: Some(BracePosition::SameLine),
         },
       }
     );

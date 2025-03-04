@@ -1737,6 +1737,56 @@ impl WorkspaceDirectory {
           .options
           .while_statement_use_braces
           .or(root_config.options.while_statement_use_braces),
+        brace_position: member_config
+          .options
+          .brace_position
+          .or(root_config.options.brace_position),
+        arrow_function_brace_position: member_config
+          .options
+          .arrow_function_brace_position
+          .or(root_config.options.arrow_function_brace_position),
+        class_declaration_brace_position: member_config
+          .options
+          .class_declaration_brace_position
+          .or(root_config.options.class_declaration_brace_position),
+        class_expression_brace_position: member_config
+          .options
+          .class_expression_brace_position
+          .or(root_config.options.class_expression_brace_position),
+        constructor_brace_position: member_config
+          .options
+          .constructor_brace_position
+          .or(root_config.options.constructor_brace_position),
+        do_while_statement_brace_position: member_config
+          .options
+          .do_while_statement_brace_position
+          .or(root_config.options.do_while_statement_brace_position),
+        enum_declaration_brace_position: member_config
+          .options
+          .enum_declaration_brace_position
+          .or(root_config.options.enum_declaration_brace_position),
+        for_in_statement_brace_position: member_config
+          .options
+          .for_in_statement_brace_position
+          .or(root_config.options.for_in_statement_brace_position),
+        for_of_statement_brace_position: member_config
+          .options
+          .for_of_statement_brace_position
+          .or(root_config.options.for_of_statement_brace_position),
+        for_statement_brace_position: member_config.options.for_statement_brace_position.or(root_config.options.for_statement_brace_position),
+        function_declaration_brace_position: member_config.options.function_declaration_brace_position.or(root_config.options.function_declaration_brace_position),
+        function_expression_brace_position: member_config.options.function_expression_brace_position.or(root_config.options.function_expression_brace_position),
+        get_accessor_brace_position: member_config.options.get_accessor_brace_position.or(root_config.options.get_accessor_brace_position),
+        if_statement_brace_position: member_config.options.if_statement_brace_position.or(root_config.options.if_statement_brace_position),
+        interface_declaration_brace_position: member_config.options.interface_declaration_brace_position.or(root_config.options.interface_declaration_brace_position),
+        method_brace_position: member_config.options.method_brace_position.or(root_config.options.method_brace_position),
+        module_declaration_brace_position: member_config.options.module_declaration_brace_position.or(root_config.options.module_declaration_brace_position),
+        set_accessor_brace_position: member_config.options.set_accessor_brace_position.or(root_config.options.set_accessor_brace_position),
+        static_block_brace_position: member_config.options.static_block_brace_position.or(root_config.options.static_block_brace_position),
+        switch_case_brace_position: member_config.options.switch_case_brace_position.or(root_config.options.switch_case_brace_position),
+        switch_statement_brace_position: member_config.options.switch_statement_brace_position.or(root_config.options.switch_statement_brace_position),
+        try_statement_brace_position: member_config.options.try_statement_brace_position.or(root_config.options.try_statement_brace_position),
+        while_statement_brace_position: member_config.options.while_statement_brace_position.or(root_config.options.while_statement_brace_position),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2273,7 +2323,8 @@ pub mod test {
   use sys_traits::impls::InMemorySys;
 
   use crate::assert_contains;
-  use crate::deno_json::DenoJsonCache;
+  use crate::deno_json::BracePosition;
+use crate::deno_json::DenoJsonCache;
   use crate::deno_json::NewLineKind;
   use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
@@ -3120,6 +3171,29 @@ pub mod test {
           "forInStatement.useBraces": "preferNone",
           "forOfStatement.useBraces": "preferNone",
           "whileStatement.useBraces": "preferNone",
+          "bracePosition": "maintain",
+          "arrowFunction.bracePosition": "maintain",
+          "classDeclaration.bracePosition": "maintain",
+          "classExpression.bracePosition": "maintain",
+          "constructor.bracePosition": "maintain",
+          "doWhileStatement.bracePosition": "maintain",
+          "enumDeclaration.bracePosition": "maintain",
+          "forInStatement.bracePosition": "maintain",
+          "forOfStatement.bracePosition": "maintain",
+          "forStatement.bracePosition": "maintain",
+          "functionDeclaration.bracePosition": "maintain",
+          "functionExpression.bracePosition": "maintain",
+          "getAccessor.bracePosition": "maintain",
+          "ifStatement.bracePosition": "maintain",
+          "interfaceDeclaration.bracePosition": "maintain",
+          "method.bracePosition": "maintain",
+          "moduleDeclaration.bracePosition": "maintain",
+          "setAccessor.bracePosition": "maintain",
+          "staticBlock.bracePosition": "maintain",
+          "switchCase.bracePosition": "maintain",
+          "switchStatement.bracePosition": "maintain",
+          "tryStatement.bracePosition": "maintain",
+          "whileStatement.bracePosition": "maintain",
         }
       }),
       json!({
@@ -3139,6 +3213,29 @@ pub mod test {
           "forInStatement.useBraces": "always",
           "forOfStatement.useBraces": "always",
           "whileStatement.useBraces": "always",
+          "bracePosition": "nextLine",
+          "arrowFunction.bracePosition": "nextLine",
+          "classDeclaration.bracePosition": "nextLine",
+          "classExpression.bracePosition": "nextLine",
+          "constructor.bracePosition": "nextLine",
+          "doWhileStatement.bracePosition": "nextLine",
+          "enumDeclaration.bracePosition": "nextLine",
+          "forInStatement.bracePosition": "nextLine",
+          "forOfStatement.bracePosition": "nextLine",
+          "forStatement.bracePosition": "nextLine",
+          "functionDeclaration.bracePosition": "nextLine",
+          "functionExpression.bracePosition": "nextLine",
+          "getAccessor.bracePosition": "nextLine",
+          "ifStatement.bracePosition": "nextLine",
+          "interfaceDeclaration.bracePosition": "nextLine",
+          "method.bracePosition": "nextLine",
+          "moduleDeclaration.bracePosition": "nextLine",
+          "setAccessor.bracePosition": "nextLine",
+          "staticBlock.bracePosition": "nextLine",
+          "switchCase.bracePosition": "nextLine",
+          "switchStatement.bracePosition": "nextLine",
+          "tryStatement.bracePosition": "nextLine",
+          "whileStatement.bracePosition": "nextLine",
         }
       }),
     );
@@ -3164,6 +3261,29 @@ pub mod test {
           for_in_statement_use_braces: Some(UseBraces::Always),
           for_of_statement_use_braces: Some(UseBraces::Always),
           while_statement_use_braces: Some(UseBraces::Always),
+          brace_position: Some(BracePosition::NextLine),
+          arrow_function_brace_position: Some(BracePosition::NextLine),
+          class_declaration_brace_position: Some(BracePosition::NextLine),
+          class_expression_brace_position: Some(BracePosition::NextLine),
+          constructor_brace_position: Some(BracePosition::NextLine),
+          do_while_statement_brace_position: Some(BracePosition::NextLine),
+          enum_declaration_brace_position: Some(BracePosition::NextLine),
+          for_in_statement_brace_position: Some(BracePosition::NextLine),
+          for_of_statement_brace_position: Some(BracePosition::NextLine),
+          for_statement_brace_position: Some(BracePosition::NextLine),
+          function_declaration_brace_position: Some(BracePosition::NextLine),
+          function_expression_brace_position: Some(BracePosition::NextLine),
+          get_accessor_brace_position: Some(BracePosition::NextLine),
+          if_statement_brace_position: Some(BracePosition::NextLine),
+          interface_declaration_brace_position: Some(BracePosition::NextLine),
+          method_brace_position: Some(BracePosition::NextLine),
+          module_declaration_brace_position: Some(BracePosition::NextLine),
+          set_accessor_brace_position: Some(BracePosition::NextLine),
+          static_block_brace_position: Some(BracePosition::NextLine),
+          switch_case_brace_position: Some(BracePosition::NextLine),
+          switch_statement_brace_position: Some(BracePosition::NextLine),
+          try_statement_brace_position: Some(BracePosition::NextLine),
+          while_statement_brace_position: Some(BracePosition::NextLine),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3200,6 +3320,29 @@ pub mod test {
           for_in_statement_use_braces: Some(UseBraces::PreferNone),
           for_of_statement_use_braces: Some(UseBraces::PreferNone),
           while_statement_use_braces: Some(UseBraces::PreferNone),
+          brace_position: Some(BracePosition::Maintain),
+          arrow_function_brace_position: Some(BracePosition::Maintain),
+          class_declaration_brace_position: Some(BracePosition::Maintain),
+          class_expression_brace_position: Some(BracePosition::Maintain),
+          constructor_brace_position: Some(BracePosition::Maintain),
+          do_while_statement_brace_position: Some(BracePosition::Maintain),
+          enum_declaration_brace_position: Some(BracePosition::Maintain),
+          for_in_statement_brace_position: Some(BracePosition::Maintain),
+          for_of_statement_brace_position: Some(BracePosition::Maintain),
+          for_statement_brace_position: Some(BracePosition::Maintain),
+          function_declaration_brace_position: Some(BracePosition::Maintain),
+          function_expression_brace_position: Some(BracePosition::Maintain),
+          get_accessor_brace_position: Some(BracePosition::Maintain),
+          if_statement_brace_position: Some(BracePosition::Maintain),
+          interface_declaration_brace_position: Some(BracePosition::Maintain),
+          method_brace_position: Some(BracePosition::Maintain),
+          module_declaration_brace_position: Some(BracePosition::Maintain),
+          set_accessor_brace_position: Some(BracePosition::Maintain),
+          static_block_brace_position: Some(BracePosition::Maintain),
+          switch_case_brace_position: Some(BracePosition::Maintain),
+          switch_statement_brace_position: Some(BracePosition::Maintain),
+          try_statement_brace_position: Some(BracePosition::Maintain),
+          while_statement_brace_position: Some(BracePosition::Maintain),
         },
         files: FilePatterns {
           base: root_dir(),
