@@ -11,7 +11,6 @@
 		"indentWidth": 8,
 		"singleQuote": true,
 		"proseWrap": "always",
-		"semiColons": false,
-		"quoteProps": "consistent"
+		"semiColons": false
 	}
 }

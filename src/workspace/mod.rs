@@ -1713,6 +1713,10 @@ impl WorkspaceDirectory {
           .options
           .new_line_kind
           .or(root_config.options.new_line_kind),
+        use_braces: member_config
+          .options
+          .use_braces
+          .or(root_config.options.use_braces),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2253,7 +2257,8 @@ pub mod test {
   use crate::deno_json::NewLineKind;
 use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
-  use crate::glob::FileCollector;
+  use crate::deno_json::UseBraces;
+use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
@@ -3089,6 +3094,7 @@ use crate::deno_json::ProseWrap;
           "semiColons": false,
           "quoteProps": "asNeeded",
           "newLineKind": "auto",
+          "useBraces": "preferNone",
         }
       }),
       json!({
@@ -3102,6 +3108,7 @@ use crate::deno_json::ProseWrap;
           "semiColons": true,
           "quoteProps": "consistent",
           "newLineKind": "lf",
+          "useBraces": "always",
         }
       }),
     );
@@ -3121,6 +3128,7 @@ use crate::deno_json::ProseWrap;
           semi_colons: Some(true),
           quote_props: Some(QuoteProps::Consistent),
           new_line_kind: Some(NewLineKind::LineFeed),
+          use_braces: Some(UseBraces::Always),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3151,6 +3159,7 @@ use crate::deno_json::ProseWrap;
           semi_colons: Some(false),
           quote_props: Some(QuoteProps::AsNeeded),
           new_line_kind: Some(NewLineKind::Auto),
+          use_braces: Some(UseBraces::PreferNone),
         },
         files: FilePatterns {
           base: root_dir(),

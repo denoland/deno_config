@@ -192,6 +192,15 @@ pub enum NewLineKind {
   System,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum UseBraces {
+  Maintain,
+  WhenNotSingleLine,
+  Always,
+  PreferNone,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -203,6 +212,7 @@ pub struct FmtOptionsConfig {
   pub semi_colons: Option<bool>,
   pub quote_props: Option<QuoteProps>,
   pub new_line_kind: Option<NewLineKind>,
+  pub use_braces: Option<UseBraces>,
 }
 
 impl FmtOptionsConfig {
@@ -213,6 +223,9 @@ impl FmtOptionsConfig {
       && self.single_quote.is_none()
       && self.prose_wrap.is_none()
       && self.semi_colons.is_none()
+      && self.quote_props.is_none()
+      && self.new_line_kind.is_none()
+      && self.use_braces.is_none()
   }
 }
 
@@ -270,6 +283,7 @@ struct SerializedFmtConfig {
   pub semi_colons: Option<bool>,
   pub quote_props: Option<QuoteProps>,
   pub new_line_kind: Option<NewLineKind>,
+  pub use_braces: Option<UseBraces>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -294,6 +308,7 @@ impl SerializedFmtConfig {
       semi_colons: self.semi_colons,
       quote_props: self.quote_props,
       new_line_kind: self.new_line_kind,
+      use_braces: self.use_braces,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -1932,6 +1947,7 @@ mod tests {
         "proseWrap": "preserve",
         "quoteProps": "asNeeded",
         "newLineKind": "crlf",
+        "useBraces": "whenNotSingleLine",
 
       },
       "tasks": {
@@ -2003,10 +2019,11 @@ mod tests {
           line_width: Some(80),
           indent_width: Some(4),
           single_quote: Some(true),
+          semi_colons: None,
           prose_wrap: Some(ProseWrap::Preserve),
           quote_props: Some(QuoteProps::AsNeeded),
           new_line_kind: Some(NewLineKind::CarriageReturnLineFeed),
-          ..Default::default()
+          use_braces: Some(UseBraces::WhenNotSingleLine),
         },
       }
     );
