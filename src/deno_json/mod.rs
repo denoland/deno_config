@@ -352,6 +352,7 @@ pub struct FmtOptionsConfig {
   pub variable_statement_prefer_hanging: Option<bool>,
   pub while_statement_prefer_hanging: Option<bool>,
   pub arrow_function_use_parentheses: Option<UseParentheses>,
+  pub binary_expression_line_per_expression: Option<bool>,
 }
 
 impl FmtOptionsConfig {
@@ -446,6 +447,7 @@ impl FmtOptionsConfig {
       && self.variable_statement_prefer_hanging.is_none()
       && self.while_statement_prefer_hanging.is_none()
       && self.arrow_function_use_parentheses.is_none()
+      && self.binary_expression_line_per_expression.is_none()
   }
 }
 
@@ -661,6 +663,8 @@ struct SerializedFmtConfig {
   pub while_statement_prefer_hanging: Option<bool>,
   #[serde(rename = "arrowFunction.useParentheses")]
   pub arrow_function_use_parentheses: Option<UseParentheses>,
+  #[serde(rename = "binaryExpression.linePerExpression")]
+  pub binary_expression_line_per_expression: Option<bool>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -784,6 +788,8 @@ impl SerializedFmtConfig {
       variable_statement_prefer_hanging: self.variable_statement_prefer_hanging,
       while_statement_prefer_hanging: self.while_statement_prefer_hanging,
       arrow_function_use_parentheses: self.arrow_function_use_parentheses,
+      binary_expression_line_per_expression: self
+        .binary_expression_line_per_expression,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2505,6 +2511,7 @@ mod tests {
         "variableStatement.preferHanging": true,
         "whileStatement.preferHanging": true,
         "arrowFunction.useParentheses": "force",
+        "binaryExpression.linePerExpression": true,
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2677,6 +2684,7 @@ mod tests {
           variable_statement_prefer_hanging: Some(true),
           while_statement_prefer_hanging: Some(true),
           arrow_function_use_parentheses: Some(UseParentheses::Force),
+          binary_expression_line_per_expression: Some(true),
         },
       }
     );

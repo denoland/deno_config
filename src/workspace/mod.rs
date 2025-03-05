@@ -2049,6 +2049,10 @@ impl WorkspaceDirectory {
           .options
           .arrow_function_use_parentheses
           .or(root_config.options.arrow_function_use_parentheses),
+        binary_expression_line_per_expression: member_config
+          .options
+          .binary_expression_line_per_expression
+          .or(root_config.options.binary_expression_line_per_expression),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2597,7 +2601,7 @@ pub mod test {
   use crate::deno_json::TrailingCommas;
   use crate::deno_json::UseBraces;
   use crate::deno_json::UseParentheses;
-use crate::glob::FileCollector;
+  use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
@@ -3515,6 +3519,7 @@ use crate::glob::FileCollector;
           "variableStatement.preferHanging": false,
           "whileStatement.preferHanging": false,
           "arrowFunction.useParentheses": "maintain",
+          "binaryExpression.linePerExpression": false,
         }
       }),
       json!({
@@ -3610,6 +3615,7 @@ use crate::glob::FileCollector;
           "variableStatement.preferHanging": true,
           "whileStatement.preferHanging": true,
           "arrowFunction.useParentheses": "preferNone",
+          "binaryExpression.linePerExpression": true,
         }
       }),
     );
@@ -3733,6 +3739,7 @@ use crate::glob::FileCollector;
           variable_statement_prefer_hanging: Some(true),
           while_statement_prefer_hanging: Some(true),
           arrow_function_use_parentheses: Some(UseParentheses::PreferNone),
+          binary_expression_line_per_expression: Some(true),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3861,6 +3868,7 @@ use crate::glob::FileCollector;
           variable_statement_prefer_hanging: Some(false),
           while_statement_prefer_hanging: Some(false),
           arrow_function_use_parentheses: Some(UseParentheses::Maintain),
+          binary_expression_line_per_expression: Some(false),
         },
         files: FilePatterns {
           base: root_dir(),
