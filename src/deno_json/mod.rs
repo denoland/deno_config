@@ -266,6 +266,15 @@ pub enum BracketPosition {
   NextLine,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+
+pub enum MultiLineParens {
+  Never,
+  Prefer,
+  Always,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -365,6 +374,7 @@ pub struct FmtOptionsConfig {
   pub jsx_opening_element_bracket_position: Option<BracketPosition>,
   pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
   pub jsx_force_new_lines_surrounding_content: Option<bool>,
+  pub jsx_multi_line_parens: Option<MultiLineParens>,
 }
 
 impl FmtOptionsConfig {
@@ -464,6 +474,7 @@ impl FmtOptionsConfig {
       && self.jsx_opening_element_bracket_position.is_none()
       && self.jsx_self_closing_element_bracket_position.is_none()
       && self.jsx_force_new_lines_surrounding_content.is_none()
+      && self.jsx_multi_line_parens.is_none()
   }
 }
 
@@ -689,6 +700,8 @@ struct SerializedFmtConfig {
   pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
   #[serde(rename = "jsx.forceNewLinesSurroundingContent")]
   pub jsx_force_new_lines_surrounding_content: Option<bool>,
+  #[serde(rename = "jsx.multiLineParens")]
+  pub jsx_multi_line_parens: Option<MultiLineParens>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -821,6 +834,7 @@ impl SerializedFmtConfig {
         .jsx_self_closing_element_bracket_position,
       jsx_force_new_lines_surrounding_content: self
         .jsx_force_new_lines_surrounding_content,
+      jsx_multi_line_parens: self.jsx_multi_line_parens,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2547,6 +2561,7 @@ mod tests {
         "jsxOpeningElement.bracketPosition": "maintain",
         "jsxSelfClosingElement.bracketPosition": "maintain",
         "jsx.forceNewLinesSurroundingContent": true,
+        "jsx.multiLineParens": "never",
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2726,6 +2741,7 @@ mod tests {
             BracketPosition::Maintain
           ),
           jsx_force_new_lines_surrounding_content: Some(true),
+          jsx_multi_line_parens: Some(MultiLineParens::Never),
         },
       }
     );

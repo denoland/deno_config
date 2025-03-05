@@ -2073,6 +2073,10 @@ impl WorkspaceDirectory {
           .options
           .jsx_force_new_lines_surrounding_content
           .or(root_config.options.jsx_force_new_lines_surrounding_content),
+        jsx_multi_line_parens: member_config
+          .options
+          .jsx_multi_line_parens
+          .or(root_config.options.jsx_multi_line_parens),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2612,6 +2616,7 @@ pub mod test {
   use crate::deno_json::BracePosition;
   use crate::deno_json::BracketPosition;
   use crate::deno_json::DenoJsonCache;
+  use crate::deno_json::MultiLineParens;
   use crate::deno_json::NewLineKind;
   use crate::deno_json::NextControlFlowPosition;
   use crate::deno_json::OperatorPosition;
@@ -3545,6 +3550,7 @@ pub mod test {
           "jsxOpeningElement.bracketPosition": "sameLine",
           "jsxSelfClosingElement.bracketPosition": "sameLine",
           "jsx.forceNewLinesSurroundingContent": false,
+          "jsx.multiLineParens": "prefer",
         }
       }),
       json!({
@@ -3645,6 +3651,7 @@ pub mod test {
           "jsxOpeningElement.bracketPosition": "nextLine",
           "jsxSelfClosingElement.bracketPosition": "nextLine",
           "jsx.forceNewLinesSurroundingContent": true,
+          "jsx.multiLineParens": "always",
         }
       }),
     );
@@ -3775,6 +3782,7 @@ pub mod test {
             BracketPosition::NextLine
           ),
           jsx_force_new_lines_surrounding_content: Some(true),
+          jsx_multi_line_parens: Some(MultiLineParens::Always),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3910,6 +3918,7 @@ pub mod test {
             BracketPosition::SameLine
           ),
           jsx_force_new_lines_surrounding_content: Some(false),
+          jsx_multi_line_parens: Some(MultiLineParens::Prefer),
         },
         files: FilePatterns {
           base: root_dir(),
