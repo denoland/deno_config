@@ -258,6 +258,14 @@ pub enum UseParentheses {
   PreferNone,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum BracketPosition {
+  Maintain,
+  SameLine,
+  NextLine,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -353,6 +361,9 @@ pub struct FmtOptionsConfig {
   pub while_statement_prefer_hanging: Option<bool>,
   pub arrow_function_use_parentheses: Option<UseParentheses>,
   pub binary_expression_line_per_expression: Option<bool>,
+  pub jsx_bracket_position: Option<BracketPosition>,
+  pub jsx_opening_element_bracket_position: Option<BracketPosition>,
+  pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
 }
 
 impl FmtOptionsConfig {
@@ -448,6 +459,9 @@ impl FmtOptionsConfig {
       && self.while_statement_prefer_hanging.is_none()
       && self.arrow_function_use_parentheses.is_none()
       && self.binary_expression_line_per_expression.is_none()
+      && self.jsx_bracket_position.is_none()
+      && self.jsx_opening_element_bracket_position.is_none()
+      && self.jsx_self_closing_element_bracket_position.is_none()
   }
 }
 
@@ -665,6 +679,12 @@ struct SerializedFmtConfig {
   pub arrow_function_use_parentheses: Option<UseParentheses>,
   #[serde(rename = "binaryExpression.linePerExpression")]
   pub binary_expression_line_per_expression: Option<bool>,
+  #[serde(rename = "jsx.bracketPosition")]
+  pub jsx_bracket_position: Option<BracketPosition>,
+  #[serde(rename = "jsxOpeningElement.bracketPosition")]
+  pub jsx_opening_element_bracket_position: Option<BracketPosition>,
+  #[serde(rename = "jsxSelfClosingElement.bracketPosition")]
+  pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -790,6 +810,11 @@ impl SerializedFmtConfig {
       arrow_function_use_parentheses: self.arrow_function_use_parentheses,
       binary_expression_line_per_expression: self
         .binary_expression_line_per_expression,
+      jsx_bracket_position: self.jsx_bracket_position,
+      jsx_opening_element_bracket_position: self
+        .jsx_opening_element_bracket_position,
+      jsx_self_closing_element_bracket_position: self
+        .jsx_self_closing_element_bracket_position,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2512,6 +2537,9 @@ mod tests {
         "whileStatement.preferHanging": true,
         "arrowFunction.useParentheses": "force",
         "binaryExpression.linePerExpression": true,
+        "jsx.bracketPosition": "maintain",
+        "jsxOpeningElement.bracketPosition": "maintain",
+        "jsxSelfClosingElement.bracketPosition": "maintain",
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2685,6 +2713,9 @@ mod tests {
           while_statement_prefer_hanging: Some(true),
           arrow_function_use_parentheses: Some(UseParentheses::Force),
           binary_expression_line_per_expression: Some(true),
+          jsx_bracket_position: Some(BracketPosition::Maintain),
+          jsx_opening_element_bracket_position: Some(BracketPosition::Maintain),
+          jsx_self_closing_element_bracket_position: Some(BracketPosition::Maintain),
         },
       }
     );

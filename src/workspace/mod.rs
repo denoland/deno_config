@@ -2053,6 +2053,18 @@ impl WorkspaceDirectory {
           .options
           .binary_expression_line_per_expression
           .or(root_config.options.binary_expression_line_per_expression),
+        jsx_bracket_position: member_config
+          .options
+          .jsx_bracket_position
+          .or(root_config.options.jsx_bracket_position),
+          jsx_opening_element_bracket_position: member_config
+          .options
+          .jsx_opening_element_bracket_position
+          .or(root_config.options.jsx_opening_element_bracket_position),
+          jsx_self_closing_element_bracket_position: member_config
+          .options
+          .jsx_self_closing_element_bracket_position
+          .or(root_config.options.jsx_self_closing_element_bracket_position),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2590,7 +2602,8 @@ pub mod test {
 
   use crate::assert_contains;
   use crate::deno_json::BracePosition;
-  use crate::deno_json::DenoJsonCache;
+  use crate::deno_json::BracketPosition;
+use crate::deno_json::DenoJsonCache;
   use crate::deno_json::NewLineKind;
   use crate::deno_json::NextControlFlowPosition;
   use crate::deno_json::OperatorPosition;
@@ -3520,6 +3533,9 @@ pub mod test {
           "whileStatement.preferHanging": false,
           "arrowFunction.useParentheses": "maintain",
           "binaryExpression.linePerExpression": false,
+          "jsx.bracketPosition": "sameLine",
+          "jsxOpeningElement.bracketPosition": "sameLine",
+          "jsxSelfClosingElement.bracketPosition": "sameLine",
         }
       }),
       json!({
@@ -3616,6 +3632,9 @@ pub mod test {
           "whileStatement.preferHanging": true,
           "arrowFunction.useParentheses": "preferNone",
           "binaryExpression.linePerExpression": true,
+          "jsx.bracketPosition": "nextLine",
+          "jsxOpeningElement.bracketPosition": "nextLine",
+          "jsxSelfClosingElement.bracketPosition": "nextLine",
         }
       }),
     );
@@ -3740,6 +3759,9 @@ pub mod test {
           while_statement_prefer_hanging: Some(true),
           arrow_function_use_parentheses: Some(UseParentheses::PreferNone),
           binary_expression_line_per_expression: Some(true),
+          jsx_bracket_position: Some(BracketPosition::NextLine),
+          jsx_opening_element_bracket_position: Some(BracketPosition::NextLine),
+          jsx_self_closing_element_bracket_position: Some(BracketPosition::NextLine),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3869,6 +3891,9 @@ pub mod test {
           while_statement_prefer_hanging: Some(false),
           arrow_function_use_parentheses: Some(UseParentheses::Maintain),
           binary_expression_line_per_expression: Some(false),
+          jsx_bracket_position: Some(BracketPosition::SameLine),
+          jsx_opening_element_bracket_position: Some(BracketPosition::SameLine),
+          jsx_self_closing_element_bracket_position: Some(BracketPosition::SameLine),
         },
         files: FilePatterns {
           base: root_dir(),
