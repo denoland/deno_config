@@ -2077,6 +2077,10 @@ impl WorkspaceDirectory {
           .options
           .jsx_multi_line_parens
           .or(root_config.options.jsx_multi_line_parens),
+        member_expression_line_per_expression: member_config
+          .options
+          .member_expression_line_per_expression
+          .or(root_config.options.member_expression_line_per_expression),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -3551,6 +3555,7 @@ pub mod test {
           "jsxSelfClosingElement.bracketPosition": "sameLine",
           "jsx.forceNewLinesSurroundingContent": false,
           "jsx.multiLineParens": "prefer",
+          "memberExpression.linePerExpression": false,
         }
       }),
       json!({
@@ -3652,6 +3657,7 @@ pub mod test {
           "jsxSelfClosingElement.bracketPosition": "nextLine",
           "jsx.forceNewLinesSurroundingContent": true,
           "jsx.multiLineParens": "always",
+          "memberExpression.linePerExpression": true,
         }
       }),
     );
@@ -3783,6 +3789,7 @@ pub mod test {
           ),
           jsx_force_new_lines_surrounding_content: Some(true),
           jsx_multi_line_parens: Some(MultiLineParens::Always),
+          member_expression_line_per_expression: Some(true),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3919,6 +3926,7 @@ pub mod test {
           ),
           jsx_force_new_lines_surrounding_content: Some(false),
           jsx_multi_line_parens: Some(MultiLineParens::Prefer),
+          member_expression_line_per_expression: Some(false),
         },
         files: FilePatterns {
           base: root_dir(),

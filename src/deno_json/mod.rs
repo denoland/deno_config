@@ -375,6 +375,7 @@ pub struct FmtOptionsConfig {
   pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
   pub jsx_force_new_lines_surrounding_content: Option<bool>,
   pub jsx_multi_line_parens: Option<MultiLineParens>,
+  pub member_expression_line_per_expression: Option<bool>,
 }
 
 impl FmtOptionsConfig {
@@ -475,6 +476,7 @@ impl FmtOptionsConfig {
       && self.jsx_self_closing_element_bracket_position.is_none()
       && self.jsx_force_new_lines_surrounding_content.is_none()
       && self.jsx_multi_line_parens.is_none()
+      && self.member_expression_line_per_expression.is_none()
   }
 }
 
@@ -702,6 +704,8 @@ struct SerializedFmtConfig {
   pub jsx_force_new_lines_surrounding_content: Option<bool>,
   #[serde(rename = "jsx.multiLineParens")]
   pub jsx_multi_line_parens: Option<MultiLineParens>,
+  #[serde(rename = "memberExpression.linePerExpression")]
+  pub member_expression_line_per_expression: Option<bool>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -835,6 +839,8 @@ impl SerializedFmtConfig {
       jsx_force_new_lines_surrounding_content: self
         .jsx_force_new_lines_surrounding_content,
       jsx_multi_line_parens: self.jsx_multi_line_parens,
+      member_expression_line_per_expression: self
+        .member_expression_line_per_expression,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2562,6 +2568,7 @@ mod tests {
         "jsxSelfClosingElement.bracketPosition": "maintain",
         "jsx.forceNewLinesSurroundingContent": true,
         "jsx.multiLineParens": "never",
+        "memberExpression.linePerExpression": true,
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2742,6 +2749,7 @@ mod tests {
           ),
           jsx_force_new_lines_surrounding_content: Some(true),
           jsx_multi_line_parens: Some(MultiLineParens::Never),
+          member_expression_line_per_expression: Some(true),
         },
       }
     );
