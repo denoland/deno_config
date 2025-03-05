@@ -2057,14 +2057,22 @@ impl WorkspaceDirectory {
           .options
           .jsx_bracket_position
           .or(root_config.options.jsx_bracket_position),
-          jsx_opening_element_bracket_position: member_config
+        jsx_opening_element_bracket_position: member_config
           .options
           .jsx_opening_element_bracket_position
           .or(root_config.options.jsx_opening_element_bracket_position),
-          jsx_self_closing_element_bracket_position: member_config
+        jsx_self_closing_element_bracket_position: member_config
           .options
           .jsx_self_closing_element_bracket_position
-          .or(root_config.options.jsx_self_closing_element_bracket_position),
+          .or(
+            root_config
+              .options
+              .jsx_self_closing_element_bracket_position,
+          ),
+        jsx_force_new_lines_surrounding_content: member_config
+          .options
+          .jsx_force_new_lines_surrounding_content
+          .or(root_config.options.jsx_force_new_lines_surrounding_content),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2603,7 +2611,7 @@ pub mod test {
   use crate::assert_contains;
   use crate::deno_json::BracePosition;
   use crate::deno_json::BracketPosition;
-use crate::deno_json::DenoJsonCache;
+  use crate::deno_json::DenoJsonCache;
   use crate::deno_json::NewLineKind;
   use crate::deno_json::NextControlFlowPosition;
   use crate::deno_json::OperatorPosition;
@@ -3536,6 +3544,7 @@ use crate::deno_json::DenoJsonCache;
           "jsx.bracketPosition": "sameLine",
           "jsxOpeningElement.bracketPosition": "sameLine",
           "jsxSelfClosingElement.bracketPosition": "sameLine",
+          "jsx.forceNewLinesSurroundingContent": false,
         }
       }),
       json!({
@@ -3635,6 +3644,7 @@ use crate::deno_json::DenoJsonCache;
           "jsx.bracketPosition": "nextLine",
           "jsxOpeningElement.bracketPosition": "nextLine",
           "jsxSelfClosingElement.bracketPosition": "nextLine",
+          "jsx.forceNewLinesSurroundingContent": true,
         }
       }),
     );
@@ -3761,7 +3771,10 @@ use crate::deno_json::DenoJsonCache;
           binary_expression_line_per_expression: Some(true),
           jsx_bracket_position: Some(BracketPosition::NextLine),
           jsx_opening_element_bracket_position: Some(BracketPosition::NextLine),
-          jsx_self_closing_element_bracket_position: Some(BracketPosition::NextLine),
+          jsx_self_closing_element_bracket_position: Some(
+            BracketPosition::NextLine
+          ),
+          jsx_force_new_lines_surrounding_content: Some(true),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3893,7 +3906,10 @@ use crate::deno_json::DenoJsonCache;
           binary_expression_line_per_expression: Some(false),
           jsx_bracket_position: Some(BracketPosition::SameLine),
           jsx_opening_element_bracket_position: Some(BracketPosition::SameLine),
-          jsx_self_closing_element_bracket_position: Some(BracketPosition::SameLine),
+          jsx_self_closing_element_bracket_position: Some(
+            BracketPosition::SameLine
+          ),
+          jsx_force_new_lines_surrounding_content: Some(false),
         },
         files: FilePatterns {
           base: root_dir(),

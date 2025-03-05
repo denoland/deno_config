@@ -364,6 +364,7 @@ pub struct FmtOptionsConfig {
   pub jsx_bracket_position: Option<BracketPosition>,
   pub jsx_opening_element_bracket_position: Option<BracketPosition>,
   pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
+  pub jsx_force_new_lines_surrounding_content: Option<bool>,
 }
 
 impl FmtOptionsConfig {
@@ -462,6 +463,7 @@ impl FmtOptionsConfig {
       && self.jsx_bracket_position.is_none()
       && self.jsx_opening_element_bracket_position.is_none()
       && self.jsx_self_closing_element_bracket_position.is_none()
+      && self.jsx_force_new_lines_surrounding_content.is_none()
   }
 }
 
@@ -685,6 +687,8 @@ struct SerializedFmtConfig {
   pub jsx_opening_element_bracket_position: Option<BracketPosition>,
   #[serde(rename = "jsxSelfClosingElement.bracketPosition")]
   pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
+  #[serde(rename = "jsx.forceNewLinesSurroundingContent")]
+  pub jsx_force_new_lines_surrounding_content: Option<bool>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -815,6 +819,8 @@ impl SerializedFmtConfig {
         .jsx_opening_element_bracket_position,
       jsx_self_closing_element_bracket_position: self
         .jsx_self_closing_element_bracket_position,
+      jsx_force_new_lines_surrounding_content: self
+        .jsx_force_new_lines_surrounding_content,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2540,6 +2546,7 @@ mod tests {
         "jsx.bracketPosition": "maintain",
         "jsxOpeningElement.bracketPosition": "maintain",
         "jsxSelfClosingElement.bracketPosition": "maintain",
+        "jsx.forceNewLinesSurroundingContent": true,
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2715,7 +2722,10 @@ mod tests {
           binary_expression_line_per_expression: Some(true),
           jsx_bracket_position: Some(BracketPosition::Maintain),
           jsx_opening_element_bracket_position: Some(BracketPosition::Maintain),
-          jsx_self_closing_element_bracket_position: Some(BracketPosition::Maintain),
+          jsx_self_closing_element_bracket_position: Some(
+            BracketPosition::Maintain
+          ),
+          jsx_force_new_lines_surrounding_content: Some(true),
         },
       }
     );
