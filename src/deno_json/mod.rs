@@ -268,11 +268,17 @@ pub enum BracketPosition {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-
 pub enum MultiLineParens {
   Never,
   Prefer,
   Always,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum SeparatorKind {
+  SemiColon,
+  Comma,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
@@ -376,6 +382,9 @@ pub struct FmtOptionsConfig {
   pub jsx_force_new_lines_surrounding_content: Option<bool>,
   pub jsx_multi_line_parens: Option<MultiLineParens>,
   pub member_expression_line_per_expression: Option<bool>,
+  pub type_literal_separator_kind: Option<SeparatorKind>,
+  pub type_literal_separator_kind_single_line: Option<SeparatorKind>,
+  pub type_literal_separator_kind_multi_line: Option<SeparatorKind>,
 }
 
 impl FmtOptionsConfig {
@@ -706,6 +715,12 @@ struct SerializedFmtConfig {
   pub jsx_multi_line_parens: Option<MultiLineParens>,
   #[serde(rename = "memberExpression.linePerExpression")]
   pub member_expression_line_per_expression: Option<bool>,
+  #[serde(rename = "typeLiteral.separatorKind")]
+  pub type_literal_separator_kind: Option<SeparatorKind>,
+  #[serde(rename = "typeLiteral.separatorKind.singleLine")]
+  pub type_literal_separator_kind_single_line: Option<SeparatorKind>,
+  #[serde(rename = "typeLiteral.separatorKind.multiLine")]
+  pub type_literal_separator_kind_multi_line: Option<SeparatorKind>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -841,6 +856,11 @@ impl SerializedFmtConfig {
       jsx_multi_line_parens: self.jsx_multi_line_parens,
       member_expression_line_per_expression: self
         .member_expression_line_per_expression,
+      type_literal_separator_kind: self.type_literal_separator_kind,
+      type_literal_separator_kind_single_line: self
+        .type_literal_separator_kind_single_line,
+      type_literal_separator_kind_multi_line: self
+        .type_literal_separator_kind_multi_line,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2569,6 +2589,9 @@ mod tests {
         "jsx.forceNewLinesSurroundingContent": true,
         "jsx.multiLineParens": "never",
         "memberExpression.linePerExpression": true,
+        "typeLiteral.separatorKind": "semiColon",
+        "typeLiteral.separatorKind.singleLine": "semiColon",
+        "typeLiteral.separatorKind.multiLine": "semiColon"
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2750,6 +2773,13 @@ mod tests {
           jsx_force_new_lines_surrounding_content: Some(true),
           jsx_multi_line_parens: Some(MultiLineParens::Never),
           member_expression_line_per_expression: Some(true),
+          type_literal_separator_kind: Some(SeparatorKind::SemiColon),
+          type_literal_separator_kind_single_line: Some(
+            SeparatorKind::SemiColon
+          ),
+          type_literal_separator_kind_multi_line: Some(
+            SeparatorKind::SemiColon
+          ),
         },
       }
     );

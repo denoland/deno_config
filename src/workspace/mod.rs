@@ -2081,6 +2081,18 @@ impl WorkspaceDirectory {
           .options
           .member_expression_line_per_expression
           .or(root_config.options.member_expression_line_per_expression),
+        type_literal_separator_kind: member_config
+          .options
+          .type_literal_separator_kind
+          .or(root_config.options.type_literal_separator_kind),
+        type_literal_separator_kind_single_line: member_config
+          .options
+          .type_literal_separator_kind_single_line
+          .or(root_config.options.type_literal_separator_kind_single_line),
+        type_literal_separator_kind_multi_line: member_config
+          .options
+          .type_literal_separator_kind_multi_line
+          .or(root_config.options.type_literal_separator_kind_multi_line),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2627,6 +2639,7 @@ pub mod test {
   use crate::deno_json::PreferHanging;
   use crate::deno_json::ProseWrap;
   use crate::deno_json::QuoteProps;
+  use crate::deno_json::SeparatorKind;
   use crate::deno_json::SingleBodyPosition;
   use crate::deno_json::TrailingCommas;
   use crate::deno_json::UseBraces;
@@ -3556,6 +3569,9 @@ pub mod test {
           "jsx.forceNewLinesSurroundingContent": false,
           "jsx.multiLineParens": "prefer",
           "memberExpression.linePerExpression": false,
+          "typeLiteral.separatorKind": "comma",
+          "typeLiteral.separatorKind.singleLine": "comma",
+          "typeLiteral.separatorKind.multiLine": "comma",
         }
       }),
       json!({
@@ -3658,6 +3674,9 @@ pub mod test {
           "jsx.forceNewLinesSurroundingContent": true,
           "jsx.multiLineParens": "always",
           "memberExpression.linePerExpression": true,
+          "typeLiteral.separatorKind": "semiColon",
+          "typeLiteral.separatorKind.singleLine": "semiColon",
+          "typeLiteral.separatorKind.multiLine": "semiColon",
         }
       }),
     );
@@ -3790,6 +3809,13 @@ pub mod test {
           jsx_force_new_lines_surrounding_content: Some(true),
           jsx_multi_line_parens: Some(MultiLineParens::Always),
           member_expression_line_per_expression: Some(true),
+          type_literal_separator_kind: Some(SeparatorKind::SemiColon),
+          type_literal_separator_kind_single_line: Some(
+            SeparatorKind::SemiColon
+          ),
+          type_literal_separator_kind_multi_line: Some(
+            SeparatorKind::SemiColon
+          ),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3927,6 +3953,9 @@ pub mod test {
           jsx_force_new_lines_surrounding_content: Some(false),
           jsx_multi_line_parens: Some(MultiLineParens::Prefer),
           member_expression_line_per_expression: Some(false),
+          type_literal_separator_kind: Some(SeparatorKind::Comma),
+          type_literal_separator_kind_single_line: Some(SeparatorKind::Comma),
+          type_literal_separator_kind_multi_line: Some(SeparatorKind::Comma),
         },
         files: FilePatterns {
           base: root_dir(),
