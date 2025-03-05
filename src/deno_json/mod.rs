@@ -250,6 +250,14 @@ pub enum PreferHanging {
   Never,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum UseParentheses {
+  Force,
+  Maintain,
+  PreferNone,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -343,6 +351,7 @@ pub struct FmtOptionsConfig {
   pub union_and_intersection_type_prefer_hanging: Option<bool>,
   pub variable_statement_prefer_hanging: Option<bool>,
   pub while_statement_prefer_hanging: Option<bool>,
+  pub arrow_function_use_parentheses: Option<UseParentheses>,
 }
 
 impl FmtOptionsConfig {
@@ -436,6 +445,7 @@ impl FmtOptionsConfig {
       && self.union_and_intersection_type_prefer_hanging.is_none()
       && self.variable_statement_prefer_hanging.is_none()
       && self.while_statement_prefer_hanging.is_none()
+      && self.arrow_function_use_parentheses.is_none()
   }
 }
 
@@ -649,6 +659,8 @@ struct SerializedFmtConfig {
   pub variable_statement_prefer_hanging: Option<bool>,
   #[serde(rename = "whileStatement.preferHanging")]
   pub while_statement_prefer_hanging: Option<bool>,
+  #[serde(rename = "arrowFunction.useParentheses")]
+  pub arrow_function_use_parentheses: Option<UseParentheses>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -771,6 +783,7 @@ impl SerializedFmtConfig {
         .union_and_intersection_type_prefer_hanging,
       variable_statement_prefer_hanging: self.variable_statement_prefer_hanging,
       while_statement_prefer_hanging: self.while_statement_prefer_hanging,
+      arrow_function_use_parentheses: self.arrow_function_use_parentheses,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2491,6 +2504,7 @@ mod tests {
         "unionAndIntersectionType.preferHanging": true,
         "variableStatement.preferHanging": true,
         "whileStatement.preferHanging": true,
+        "arrowFunction.useParentheses": "force",
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2662,6 +2676,7 @@ mod tests {
           union_and_intersection_type_prefer_hanging: Some(true),
           variable_statement_prefer_hanging: Some(true),
           while_statement_prefer_hanging: Some(true),
+          arrow_function_use_parentheses: Some(UseParentheses::Force),
         },
       }
     );

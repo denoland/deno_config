@@ -2045,6 +2045,10 @@ impl WorkspaceDirectory {
           .options
           .while_statement_prefer_hanging
           .or(root_config.options.while_statement_prefer_hanging),
+        arrow_function_use_parentheses: member_config
+          .options
+          .arrow_function_use_parentheses
+          .or(root_config.options.arrow_function_use_parentheses),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2592,7 +2596,8 @@ pub mod test {
   use crate::deno_json::SingleBodyPosition;
   use crate::deno_json::TrailingCommas;
   use crate::deno_json::UseBraces;
-  use crate::glob::FileCollector;
+  use crate::deno_json::UseParentheses;
+use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
   use crate::glob::PathOrPattern;
@@ -3509,6 +3514,7 @@ pub mod test {
           "unionAndIntersectionType.preferHanging": false,
           "variableStatement.preferHanging": false,
           "whileStatement.preferHanging": false,
+          "arrowFunction.useParentheses": "maintain",
         }
       }),
       json!({
@@ -3603,6 +3609,7 @@ pub mod test {
           "unionAndIntersectionType.preferHanging": true,
           "variableStatement.preferHanging": true,
           "whileStatement.preferHanging": true,
+          "arrowFunction.useParentheses": "preferNone",
         }
       }),
     );
@@ -3725,6 +3732,7 @@ pub mod test {
           union_and_intersection_type_prefer_hanging: Some(true),
           variable_statement_prefer_hanging: Some(true),
           while_statement_prefer_hanging: Some(true),
+          arrow_function_use_parentheses: Some(UseParentheses::PreferNone),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3852,6 +3860,7 @@ pub mod test {
           union_and_intersection_type_prefer_hanging: Some(false),
           variable_statement_prefer_hanging: Some(false),
           while_statement_prefer_hanging: Some(false),
+          arrow_function_use_parentheses: Some(UseParentheses::Maintain),
         },
         files: FilePatterns {
           base: root_dir(),
