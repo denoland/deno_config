@@ -286,6 +286,8 @@ pub struct FmtOptionsConfig {
   pub jsx_force_new_lines_surrounding_content: Option<bool>,
   pub jsx_multi_line_parens: Option<MultiLineParens>,
   pub type_literal_separator_kind: Option<SeparatorKind>,
+  pub space_around: Option<bool>,
+  pub space_surrounding_properties: Option<bool>,
 }
 
 impl FmtOptionsConfig {
@@ -307,6 +309,9 @@ impl FmtOptionsConfig {
       && self.jsx_bracket_position.is_none()
       && self.jsx_force_new_lines_surrounding_content.is_none()
       && self.jsx_multi_line_parens.is_none()
+      && self.type_literal_separator_kind.is_none()
+      && self.space_around.is_none()
+      && self.space_surrounding_properties.is_none()
   }
 }
 
@@ -378,6 +383,8 @@ struct SerializedFmtConfig {
   pub jsx_multi_line_parens: Option<MultiLineParens>,
   #[serde(rename = "typeLiteral.separatorKind")]
   pub type_literal_separator_kind: Option<SeparatorKind>,
+  pub space_around: Option<bool>,
+  pub space_surrounding_properties: Option<bool>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -413,6 +420,8 @@ impl SerializedFmtConfig {
         .jsx_force_new_lines_surrounding_content,
       jsx_multi_line_parens: self.jsx_multi_line_parens,
       type_literal_separator_kind: self.type_literal_separator_kind,
+      space_around: self.space_around,
+      space_surrounding_properties: self.space_surrounding_properties,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2062,6 +2071,8 @@ mod tests {
         "jsx.forceNewLinesSurroundingContent": true,
         "jsx.multiLineParens": "never",
         "typeLiteral.separatorKind": "semiColon",
+        "spaceAround": true,
+        "spaceSurroundingProperties": true
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2146,6 +2157,8 @@ mod tests {
           jsx_force_new_lines_surrounding_content: Some(true),
           jsx_multi_line_parens: Some(MultiLineParens::Never),
           type_literal_separator_kind: Some(SeparatorKind::SemiColon),
+          space_around: Some(true),
+          space_surrounding_properties: Some(true),
         },
       }
     );

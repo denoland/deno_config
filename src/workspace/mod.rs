@@ -1753,6 +1753,14 @@ impl WorkspaceDirectory {
           .options
           .type_literal_separator_kind
           .or(root_config.options.type_literal_separator_kind),
+        space_around: member_config
+          .options
+          .space_around
+          .or(root_config.options.space_around),
+        space_surrounding_properties: member_config
+          .options
+          .space_surrounding_properties
+          .or(root_config.options.space_surrounding_properties),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -3148,6 +3156,8 @@ pub mod test {
           "jsx.forceNewLinesSurroundingContent": false,
           "jsx.multiLineParens": "prefer",
           "typeLiteral.separatorKind": "comma",
+          "spaceAround": false,
+          "spaceSurroundingProperties": false,
         }
       }),
       json!({
@@ -3171,6 +3181,8 @@ pub mod test {
           "jsx.forceNewLinesSurroundingContent": true,
           "jsx.multiLineParens": "always",
           "typeLiteral.separatorKind": "semiColon",
+          "spaceAround": true,
+          "spaceSurroundingProperties": true,
         }
       }),
     );
@@ -3200,6 +3212,8 @@ pub mod test {
           jsx_force_new_lines_surrounding_content: Some(true),
           jsx_multi_line_parens: Some(MultiLineParens::Always),
           type_literal_separator_kind: Some(SeparatorKind::SemiColon),
+          space_around: Some(true),
+          space_surrounding_properties: Some(true),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3240,6 +3254,8 @@ pub mod test {
           jsx_force_new_lines_surrounding_content: Some(false),
           jsx_multi_line_parens: Some(MultiLineParens::Prefer),
           type_literal_separator_kind: Some(SeparatorKind::Comma),
+          space_around: Some(false),
+          space_surrounding_properties: Some(false),
         },
         files: FilePatterns {
           base: root_dir(),
