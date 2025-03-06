@@ -244,22 +244,6 @@ pub enum OperatorPosition {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub enum PreferHanging {
-  Always,
-  OnlySingleItem,
-  Never,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub enum UseParentheses {
-  Force,
-  Maintain,
-  PreferNone,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum BracketPosition {
   Maintain,
   SameLine,
@@ -293,98 +277,15 @@ pub struct FmtOptionsConfig {
   pub quote_props: Option<QuoteProps>,
   pub new_line_kind: Option<NewLineKind>,
   pub use_braces: Option<UseBraces>,
-  pub for_in_statement_use_braces: Option<UseBraces>,
-  pub for_of_statement_use_braces: Option<UseBraces>,
-  pub for_statement_use_braces: Option<UseBraces>,
-  pub if_statement_use_braces: Option<UseBraces>,
-  pub while_statement_use_braces: Option<UseBraces>,
   pub brace_position: Option<BracePosition>,
-  pub arrow_function_brace_position: Option<BracePosition>,
-  pub class_declaration_brace_position: Option<BracePosition>,
-  pub class_expression_brace_position: Option<BracePosition>,
-  pub constructor_brace_position: Option<BracePosition>,
-  pub do_while_statement_brace_position: Option<BracePosition>,
-  pub enum_declaration_brace_position: Option<BracePosition>,
-  pub for_in_statement_brace_position: Option<BracePosition>,
-  pub for_of_statement_brace_position: Option<BracePosition>,
-  pub for_statement_brace_position: Option<BracePosition>,
-  pub function_declaration_brace_position: Option<BracePosition>,
-  pub function_expression_brace_position: Option<BracePosition>,
-  pub get_accessor_brace_position: Option<BracePosition>,
-  pub if_statement_brace_position: Option<BracePosition>,
-  pub interface_declaration_brace_position: Option<BracePosition>,
-  pub module_declaration_brace_position: Option<BracePosition>,
-  pub method_brace_position: Option<BracePosition>,
-  pub set_accessor_brace_position: Option<BracePosition>,
-  pub static_block_brace_position: Option<BracePosition>,
-  pub switch_case_brace_position: Option<BracePosition>,
-  pub switch_statement_brace_position: Option<BracePosition>,
-  pub try_statement_brace_position: Option<BracePosition>,
-  pub while_statement_brace_position: Option<BracePosition>,
   pub single_body_position: Option<SingleBodyPosition>,
-  pub for_in_statement_single_body_position: Option<SingleBodyPosition>,
-  pub for_of_statement_single_body_position: Option<SingleBodyPosition>,
-  pub for_statement_single_body_position: Option<SingleBodyPosition>,
-  pub if_statement_single_body_position: Option<SingleBodyPosition>,
-  pub while_statement_single_body_position: Option<SingleBodyPosition>,
   pub next_control_flow_position: Option<NextControlFlowPosition>,
-  pub do_while_statement_next_control_flow_position:
-    Option<NextControlFlowPosition>,
-  pub if_statement_next_control_flow_position: Option<NextControlFlowPosition>,
-  pub try_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   pub trailing_commas: Option<TrailingCommas>,
-  pub arguments_trailing_commas: Option<TrailingCommas>,
-  pub parameters_trailing_commas: Option<TrailingCommas>,
-  pub array_expression_trailing_commas: Option<TrailingCommas>,
-  pub array_pattern_trailing_commas: Option<TrailingCommas>,
-  pub enum_declaration_trailing_commas: Option<TrailingCommas>,
-  pub export_declaration_trailing_commas: Option<TrailingCommas>,
-  pub import_declaration_trailing_commas: Option<TrailingCommas>,
-  pub object_expression_trailing_commas: Option<TrailingCommas>,
-  pub object_pattern_trailing_commas: Option<TrailingCommas>,
-  pub tuple_type_trailing_commas: Option<TrailingCommas>,
-  pub type_literal_trailing_commas: Option<TrailingCommas>,
-  pub type_parameters_trailing_commas: Option<TrailingCommas>,
   pub operator_position: Option<OperatorPosition>,
-  pub binary_expression_operator_position: Option<OperatorPosition>,
-  pub conditional_expression_operator_position: Option<OperatorPosition>,
-  pub conditional_type_operator_position: Option<OperatorPosition>,
-  pub prefer_hanging: Option<bool>,
-  pub arguments_prefer_hanging: Option<PreferHanging>,
-  pub array_expression_prefer_hanging: Option<PreferHanging>,
-  pub array_pattern_prefer_hanging: Option<bool>,
-  pub do_while_statement_prefer_hanging: Option<bool>,
-  pub export_declaration_prefer_hanging: Option<bool>,
-  pub extends_clause_prefer_hanging: Option<bool>,
-  pub for_in_statement_prefer_hanging: Option<bool>,
-  pub for_of_statement_prefer_hanging: Option<bool>,
-  pub for_statement_prefer_hanging: Option<bool>,
-  pub if_statement_prefer_hanging: Option<bool>,
-  pub implements_clause_prefer_hanging: Option<bool>,
-  pub import_declaration_prefer_hanging: Option<bool>,
-  pub jsx_attributes_prefer_hanging: Option<bool>,
-  pub object_expression_prefer_hanging: Option<bool>,
-  pub object_pattern_prefer_hanging: Option<bool>,
-  pub parameters_prefer_hanging: Option<PreferHanging>,
-  pub sequence_expression_prefer_hanging: Option<bool>,
-  pub switch_statement_prefer_hanging: Option<bool>,
-  pub tuple_type_prefer_hanging: Option<PreferHanging>,
-  pub type_literal_prefer_hanging: Option<bool>,
-  pub type_parameters_prefer_hanging: Option<PreferHanging>,
-  pub union_and_intersection_type_prefer_hanging: Option<bool>,
-  pub variable_statement_prefer_hanging: Option<bool>,
-  pub while_statement_prefer_hanging: Option<bool>,
-  pub arrow_function_use_parentheses: Option<UseParentheses>,
-  pub binary_expression_line_per_expression: Option<bool>,
   pub jsx_bracket_position: Option<BracketPosition>,
-  pub jsx_opening_element_bracket_position: Option<BracketPosition>,
-  pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
   pub jsx_force_new_lines_surrounding_content: Option<bool>,
   pub jsx_multi_line_parens: Option<MultiLineParens>,
-  pub member_expression_line_per_expression: Option<bool>,
   pub type_literal_separator_kind: Option<SeparatorKind>,
-  pub type_literal_separator_kind_single_line: Option<SeparatorKind>,
-  pub type_literal_separator_kind_multi_line: Option<SeparatorKind>,
 }
 
 impl FmtOptionsConfig {
@@ -398,94 +299,14 @@ impl FmtOptionsConfig {
       && self.quote_props.is_none()
       && self.new_line_kind.is_none()
       && self.use_braces.is_none()
-      && self.for_in_statement_use_braces.is_none()
-      && self.for_of_statement_use_braces.is_none()
-      && self.for_statement_use_braces.is_none()
-      && self.if_statement_use_braces.is_none()
-      && self.while_statement_use_braces.is_none()
       && self.brace_position.is_none()
-      && self.arrow_function_brace_position.is_none()
-      && self.class_declaration_brace_position.is_none()
-      && self.class_expression_brace_position.is_none()
-      && self.constructor_brace_position.is_none()
-      && self.do_while_statement_brace_position.is_none()
-      && self.enum_declaration_brace_position.is_none()
-      && self.for_in_statement_brace_position.is_none()
-      && self.for_of_statement_brace_position.is_none()
-      && self.for_statement_brace_position.is_none()
-      && self.function_declaration_brace_position.is_none()
-      && self.function_expression_brace_position.is_none()
-      && self.get_accessor_brace_position.is_none()
-      && self.if_statement_brace_position.is_none()
-      && self.interface_declaration_brace_position.is_none()
-      && self.module_declaration_brace_position.is_none()
-      && self.method_brace_position.is_none()
-      && self.set_accessor_brace_position.is_none()
-      && self.static_block_brace_position.is_none()
-      && self.switch_case_brace_position.is_none()
-      && self.switch_statement_brace_position.is_none()
-      && self.try_statement_brace_position.is_none()
-      && self.while_statement_brace_position.is_none()
       && self.single_body_position.is_none()
-      && self.for_in_statement_single_body_position.is_none()
-      && self.for_of_statement_single_body_position.is_none()
-      && self.for_statement_single_body_position.is_none()
-      && self.if_statement_single_body_position.is_none()
-      && self.while_statement_single_body_position.is_none()
       && self.next_control_flow_position.is_none()
-      && self.do_while_statement_next_control_flow_position.is_none()
-      && self.if_statement_next_control_flow_position.is_none()
-      && self.try_statement_next_control_flow_position.is_none()
       && self.trailing_commas.is_none()
-      && self.arguments_trailing_commas.is_none()
-      && self.parameters_trailing_commas.is_none()
-      && self.array_expression_trailing_commas.is_none()
-      && self.array_pattern_trailing_commas.is_none()
-      && self.enum_declaration_trailing_commas.is_none()
-      && self.export_declaration_trailing_commas.is_none()
-      && self.import_declaration_trailing_commas.is_none()
-      && self.object_expression_trailing_commas.is_none()
-      && self.object_pattern_trailing_commas.is_none()
-      && self.tuple_type_trailing_commas.is_none()
-      && self.type_literal_trailing_commas.is_none()
-      && self.type_parameters_trailing_commas.is_none()
       && self.operator_position.is_none()
-      && self.binary_expression_operator_position.is_none()
-      && self.conditional_expression_operator_position.is_none()
-      && self.conditional_type_operator_position.is_none()
-      && self.prefer_hanging.is_none()
-      && self.arguments_prefer_hanging.is_none()
-      && self.array_expression_prefer_hanging.is_none()
-      && self.array_pattern_prefer_hanging.is_none()
-      && self.do_while_statement_prefer_hanging.is_none()
-      && self.export_declaration_prefer_hanging.is_none()
-      && self.extends_clause_prefer_hanging.is_none()
-      && self.for_in_statement_prefer_hanging.is_none()
-      && self.for_of_statement_prefer_hanging.is_none()
-      && self.for_statement_prefer_hanging.is_none()
-      && self.if_statement_prefer_hanging.is_none()
-      && self.implements_clause_prefer_hanging.is_none()
-      && self.import_declaration_prefer_hanging.is_none()
-      && self.jsx_attributes_prefer_hanging.is_none()
-      && self.object_expression_prefer_hanging.is_none()
-      && self.object_pattern_prefer_hanging.is_none()
-      && self.parameters_prefer_hanging.is_none()
-      && self.sequence_expression_prefer_hanging.is_none()
-      && self.switch_statement_prefer_hanging.is_none()
-      && self.tuple_type_prefer_hanging.is_none()
-      && self.type_literal_prefer_hanging.is_none()
-      && self.type_parameters_prefer_hanging.is_none()
-      && self.union_and_intersection_type_prefer_hanging.is_none()
-      && self.variable_statement_prefer_hanging.is_none()
-      && self.while_statement_prefer_hanging.is_none()
-      && self.arrow_function_use_parentheses.is_none()
-      && self.binary_expression_line_per_expression.is_none()
       && self.jsx_bracket_position.is_none()
-      && self.jsx_opening_element_bracket_position.is_none()
-      && self.jsx_self_closing_element_bracket_position.is_none()
       && self.jsx_force_new_lines_surrounding_content.is_none()
       && self.jsx_multi_line_parens.is_none()
-      && self.member_expression_line_per_expression.is_none()
   }
 }
 
@@ -544,183 +365,19 @@ struct SerializedFmtConfig {
   pub quote_props: Option<QuoteProps>,
   pub new_line_kind: Option<NewLineKind>,
   pub use_braces: Option<UseBraces>,
-  #[serde(rename = "forInStatement.useBraces")]
-  pub for_in_statement_use_braces: Option<UseBraces>,
-  #[serde(rename = "forOfStatement.useBraces")]
-  pub for_of_statement_use_braces: Option<UseBraces>,
-  #[serde(rename = "forStatement.useBraces")]
-  pub for_statement_use_braces: Option<UseBraces>,
-  #[serde(rename = "ifStatement.useBraces")]
-  pub if_statement_use_braces: Option<UseBraces>,
-  #[serde(rename = "whileStatement.useBraces")]
-  pub while_statement_use_braces: Option<UseBraces>,
   pub brace_position: Option<BracePosition>,
-  #[serde(rename = "arrowFunction.bracePosition")]
-  pub arrow_function_brace_position: Option<BracePosition>,
-  #[serde(rename = "classDeclaration.bracePosition")]
-  pub class_declaration_brace_position: Option<BracePosition>,
-  #[serde(rename = "classExpression.bracePosition")]
-  pub class_expression_brace_position: Option<BracePosition>,
-  #[serde(rename = "constructor.bracePosition")]
-  pub constructor_brace_position: Option<BracePosition>,
-  #[serde(rename = "doWhileStatement.bracePosition")]
-  pub do_while_statement_brace_position: Option<BracePosition>,
-  #[serde(rename = "enumDeclaration.bracePosition")]
-  pub enum_declaration_brace_position: Option<BracePosition>,
-  #[serde(rename = "forInStatement.bracePosition")]
-  pub for_in_statement_brace_position: Option<BracePosition>,
-  #[serde(rename = "forOfStatement.bracePosition")]
-  pub for_of_statement_brace_position: Option<BracePosition>,
-  #[serde(rename = "forStatement.bracePosition")]
-  pub for_statement_brace_position: Option<BracePosition>,
-  #[serde(rename = "functionDeclaration.bracePosition")]
-  pub function_declaration_brace_position: Option<BracePosition>,
-  #[serde(rename = "functionExpression.bracePosition")]
-  pub function_expression_brace_position: Option<BracePosition>,
-  #[serde(rename = "getAccessor.bracePosition")]
-  pub get_accessor_brace_position: Option<BracePosition>,
-  #[serde(rename = "ifStatement.bracePosition")]
-  pub if_statement_brace_position: Option<BracePosition>,
-  #[serde(rename = "interfaceDeclaration.bracePosition")]
-  pub interface_declaration_brace_position: Option<BracePosition>,
-  #[serde(rename = "moduleDeclaration.bracePosition")]
-  pub module_declaration_brace_position: Option<BracePosition>,
-  #[serde(rename = "method.bracePosition")]
-  pub method_brace_position: Option<BracePosition>,
-  #[serde(rename = "setAccessor.bracePosition")]
-  pub set_accessor_brace_position: Option<BracePosition>,
-  #[serde(rename = "staticBlock.bracePosition")]
-  pub static_block_brace_position: Option<BracePosition>,
-  #[serde(rename = "switchCase.bracePosition")]
-  pub switch_case_brace_position: Option<BracePosition>,
-  #[serde(rename = "switchStatement.bracePosition")]
-  pub switch_statement_brace_position: Option<BracePosition>,
-  #[serde(rename = "tryStatement.bracePosition")]
-  pub try_statement_brace_position: Option<BracePosition>,
-  #[serde(rename = "whileStatement.bracePosition")]
-  pub while_statement_brace_position: Option<BracePosition>,
   pub single_body_position: Option<SingleBodyPosition>,
-  #[serde(rename = "forInStatement.singleBodyPosition")]
-  pub for_in_statement_single_body_position: Option<SingleBodyPosition>,
-  #[serde(rename = "forOfStatement.singleBodyPosition")]
-  pub for_of_statement_single_body_position: Option<SingleBodyPosition>,
-  #[serde(rename = "forStatement.singleBodyPosition")]
-  pub for_statement_single_body_position: Option<SingleBodyPosition>,
-  #[serde(rename = "ifStatement.singleBodyPosition")]
-  pub if_statement_single_body_position: Option<SingleBodyPosition>,
-  #[serde(rename = "whileStatement.singleBodyPosition")]
-  pub while_statement_single_body_position: Option<SingleBodyPosition>,
   pub next_control_flow_position: Option<NextControlFlowPosition>,
-  #[serde(rename = "doWhileStatement.nextControlFlowPosition")]
-  pub do_while_statement_next_control_flow_position:
-    Option<NextControlFlowPosition>,
-  #[serde(rename = "ifStatement.nextControlFlowPosition")]
-  pub if_statement_next_control_flow_position: Option<NextControlFlowPosition>,
-  #[serde(rename = "tryStatement.nextControlFlowPosition")]
-  pub try_statement_next_control_flow_position: Option<NextControlFlowPosition>,
   pub trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "arguments.trailingCommas")]
-  pub arguments_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "parameters.trailingCommas")]
-  pub parameters_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "arrayExpression.trailingCommas")]
-  pub array_expression_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "arrayPattern.trailingCommas")]
-  pub array_pattern_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "enumDeclaration.trailingCommas")]
-  pub enum_declaration_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "exportDeclaration.trailingCommas")]
-  pub export_declaration_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "importDeclaration.trailingCommas")]
-  pub import_declaration_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "objectExpression.trailingCommas")]
-  pub object_expression_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "objectPattern.trailingCommas")]
-  pub object_pattern_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "tupleType.trailingCommas")]
-  pub tuple_type_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "typeLiteral.trailingCommas")]
-  pub type_literal_trailing_commas: Option<TrailingCommas>,
-  #[serde(rename = "typeParameters.trailingCommas")]
-  pub type_parameters_trailing_commas: Option<TrailingCommas>,
   pub operator_position: Option<OperatorPosition>,
-  #[serde(rename = "binaryExpression.operatorPosition")]
-  pub binary_expression_operator_position: Option<OperatorPosition>,
-  #[serde(rename = "conditionalExpression.operatorPosition")]
-  pub conditional_expression_operator_position: Option<OperatorPosition>,
-  #[serde(rename = "conditionalType.operatorPosition")]
-  pub conditional_type_operator_position: Option<OperatorPosition>,
-  pub prefer_hanging: Option<bool>,
-  #[serde(rename = "arguments.preferHanging")]
-  pub arguments_prefer_hanging: Option<PreferHanging>,
-  #[serde(rename = "arrayExpression.preferHanging")]
-  pub array_expression_prefer_hanging: Option<PreferHanging>,
-  #[serde(rename = "arrayPattern.preferHanging")]
-  pub array_pattern_prefer_hanging: Option<bool>,
-  #[serde(rename = "doWhileStatement.preferHanging")]
-  pub do_while_statement_prefer_hanging: Option<bool>,
-  #[serde(rename = "exportDeclaration.preferHanging")]
-  pub export_declaration_prefer_hanging: Option<bool>,
-  #[serde(rename = "extendsClause.preferHanging")]
-  pub extends_clause_prefer_hanging: Option<bool>,
-  #[serde(rename = "forInStatement.preferHanging")]
-  pub for_in_statement_prefer_hanging: Option<bool>,
-  #[serde(rename = "forOfStatement.preferHanging")]
-  pub for_of_statement_prefer_hanging: Option<bool>,
-  #[serde(rename = "forStatement.preferHanging")]
-  pub for_statement_prefer_hanging: Option<bool>,
-  #[serde(rename = "ifStatement.preferHanging")]
-  pub if_statement_prefer_hanging: Option<bool>,
-  #[serde(rename = "implementsClause.preferHanging")]
-  pub implements_clause_prefer_hanging: Option<bool>,
-  #[serde(rename = "importDeclaration.preferHanging")]
-  pub import_declaration_prefer_hanging: Option<bool>,
-  #[serde(rename = "jsxAttributes.preferHanging")]
-  pub jsx_attributes_prefer_hanging: Option<bool>,
-  #[serde(rename = "objectExpression.preferHanging")]
-  pub object_expression_prefer_hanging: Option<bool>,
-  #[serde(rename = "objectPattern.preferHanging")]
-  pub object_pattern_prefer_hanging: Option<bool>,
-  #[serde(rename = "parameters.preferHanging")]
-  pub parameters_prefer_hanging: Option<PreferHanging>,
-  #[serde(rename = "sequenceExpression.preferHanging")]
-  pub sequence_expression_prefer_hanging: Option<bool>,
-  #[serde(rename = "switchStatement.preferHanging")]
-  pub switch_statement_prefer_hanging: Option<bool>,
-  #[serde(rename = "tupleType.preferHanging")]
-  pub tuple_type_prefer_hanging: Option<PreferHanging>,
-  #[serde(rename = "typeLiteral.preferHanging")]
-  pub type_literal_prefer_hanging: Option<bool>,
-  #[serde(rename = "typeParameters.preferHanging")]
-  pub type_parameters_prefer_hanging: Option<PreferHanging>,
-  #[serde(rename = "unionAndIntersectionType.preferHanging")]
-  pub union_and_intersection_type_prefer_hanging: Option<bool>,
-  #[serde(rename = "variableStatement.preferHanging")]
-  pub variable_statement_prefer_hanging: Option<bool>,
-  #[serde(rename = "whileStatement.preferHanging")]
-  pub while_statement_prefer_hanging: Option<bool>,
-  #[serde(rename = "arrowFunction.useParentheses")]
-  pub arrow_function_use_parentheses: Option<UseParentheses>,
-  #[serde(rename = "binaryExpression.linePerExpression")]
-  pub binary_expression_line_per_expression: Option<bool>,
   #[serde(rename = "jsx.bracketPosition")]
   pub jsx_bracket_position: Option<BracketPosition>,
-  #[serde(rename = "jsxOpeningElement.bracketPosition")]
-  pub jsx_opening_element_bracket_position: Option<BracketPosition>,
-  #[serde(rename = "jsxSelfClosingElement.bracketPosition")]
-  pub jsx_self_closing_element_bracket_position: Option<BracketPosition>,
   #[serde(rename = "jsx.forceNewLinesSurroundingContent")]
   pub jsx_force_new_lines_surrounding_content: Option<bool>,
   #[serde(rename = "jsx.multiLineParens")]
   pub jsx_multi_line_parens: Option<MultiLineParens>,
-  #[serde(rename = "memberExpression.linePerExpression")]
-  pub member_expression_line_per_expression: Option<bool>,
   #[serde(rename = "typeLiteral.separatorKind")]
   pub type_literal_separator_kind: Option<SeparatorKind>,
-  #[serde(rename = "typeLiteral.separatorKind.singleLine")]
-  pub type_literal_separator_kind_single_line: Option<SeparatorKind>,
-  #[serde(rename = "typeLiteral.separatorKind.multiLine")]
-  pub type_literal_separator_kind_multi_line: Option<SeparatorKind>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -746,121 +403,16 @@ impl SerializedFmtConfig {
       quote_props: self.quote_props,
       new_line_kind: self.new_line_kind,
       use_braces: self.use_braces,
-      if_statement_use_braces: self.if_statement_use_braces,
-      for_statement_use_braces: self.for_statement_use_braces,
-      for_in_statement_use_braces: self.for_in_statement_use_braces,
-      for_of_statement_use_braces: self.for_of_statement_use_braces,
-      while_statement_use_braces: self.while_statement_use_braces,
       brace_position: self.brace_position,
-      arrow_function_brace_position: self.arrow_function_brace_position,
-      class_declaration_brace_position: self.class_declaration_brace_position,
-      class_expression_brace_position: self.class_expression_brace_position,
-      constructor_brace_position: self.constructor_brace_position,
-      do_while_statement_brace_position: self.do_while_statement_brace_position,
-      enum_declaration_brace_position: self.enum_declaration_brace_position,
-      for_in_statement_brace_position: self.for_in_statement_brace_position,
-      for_of_statement_brace_position: self.for_of_statement_brace_position,
-      for_statement_brace_position: self.for_statement_brace_position,
-      function_declaration_brace_position: self
-        .function_declaration_brace_position,
-      function_expression_brace_position: self
-        .function_expression_brace_position,
-      get_accessor_brace_position: self.get_accessor_brace_position,
-      if_statement_brace_position: self.if_statement_brace_position,
-      interface_declaration_brace_position: self
-        .interface_declaration_brace_position,
-      method_brace_position: self.method_brace_position,
-      module_declaration_brace_position: self.module_declaration_brace_position,
-      set_accessor_brace_position: self.set_accessor_brace_position,
-      static_block_brace_position: self.static_block_brace_position,
-      switch_case_brace_position: self.switch_case_brace_position,
-      switch_statement_brace_position: self.switch_statement_brace_position,
-      try_statement_brace_position: self.try_statement_brace_position,
-      while_statement_brace_position: self.while_statement_brace_position,
       single_body_position: self.single_body_position,
-      for_in_statement_single_body_position: self
-        .for_in_statement_single_body_position,
-      for_of_statement_single_body_position: self
-        .for_of_statement_single_body_position,
-      for_statement_single_body_position: self
-        .for_statement_single_body_position,
-      if_statement_single_body_position: self.if_statement_single_body_position,
-      while_statement_single_body_position: self
-        .while_statement_single_body_position,
       next_control_flow_position: self.next_control_flow_position,
-      do_while_statement_next_control_flow_position: self
-        .do_while_statement_next_control_flow_position,
-      if_statement_next_control_flow_position: self
-        .if_statement_next_control_flow_position,
-      try_statement_next_control_flow_position: self
-        .try_statement_next_control_flow_position,
       trailing_commas: self.trailing_commas,
-      arguments_trailing_commas: self.arguments_trailing_commas,
-      parameters_trailing_commas: self.parameters_trailing_commas,
-      array_expression_trailing_commas: self.array_expression_trailing_commas,
-      array_pattern_trailing_commas: self.array_pattern_trailing_commas,
-      enum_declaration_trailing_commas: self.enum_declaration_trailing_commas,
-      export_declaration_trailing_commas: self
-        .export_declaration_trailing_commas,
-      import_declaration_trailing_commas: self
-        .import_declaration_trailing_commas,
-      object_expression_trailing_commas: self.object_expression_trailing_commas,
-      object_pattern_trailing_commas: self.object_pattern_trailing_commas,
-      tuple_type_trailing_commas: self.tuple_type_trailing_commas,
-      type_literal_trailing_commas: self.type_literal_trailing_commas,
-      type_parameters_trailing_commas: self.type_parameters_trailing_commas,
       operator_position: self.operator_position,
-      binary_expression_operator_position: self
-        .binary_expression_operator_position,
-      conditional_expression_operator_position: self
-        .conditional_expression_operator_position,
-      conditional_type_operator_position: self
-        .conditional_type_operator_position,
-      prefer_hanging: self.prefer_hanging,
-      arguments_prefer_hanging: self.arguments_prefer_hanging,
-      array_expression_prefer_hanging: self.array_expression_prefer_hanging,
-      array_pattern_prefer_hanging: self.array_pattern_prefer_hanging,
-      do_while_statement_prefer_hanging: self.do_while_statement_prefer_hanging,
-      export_declaration_prefer_hanging: self.export_declaration_prefer_hanging,
-      extends_clause_prefer_hanging: self.extends_clause_prefer_hanging,
-      for_in_statement_prefer_hanging: self.for_in_statement_prefer_hanging,
-      for_of_statement_prefer_hanging: self.for_of_statement_prefer_hanging,
-      for_statement_prefer_hanging: self.for_statement_prefer_hanging,
-      if_statement_prefer_hanging: self.if_statement_prefer_hanging,
-      implements_clause_prefer_hanging: self.implements_clause_prefer_hanging,
-      import_declaration_prefer_hanging: self.import_declaration_prefer_hanging,
-      jsx_attributes_prefer_hanging: self.jsx_attributes_prefer_hanging,
-      object_expression_prefer_hanging: self.object_expression_prefer_hanging,
-      object_pattern_prefer_hanging: self.object_pattern_prefer_hanging,
-      parameters_prefer_hanging: self.parameters_prefer_hanging,
-      sequence_expression_prefer_hanging: self
-        .sequence_expression_prefer_hanging,
-      switch_statement_prefer_hanging: self.switch_statement_prefer_hanging,
-      tuple_type_prefer_hanging: self.tuple_type_prefer_hanging,
-      type_literal_prefer_hanging: self.type_literal_prefer_hanging,
-      type_parameters_prefer_hanging: self.type_parameters_prefer_hanging,
-      union_and_intersection_type_prefer_hanging: self
-        .union_and_intersection_type_prefer_hanging,
-      variable_statement_prefer_hanging: self.variable_statement_prefer_hanging,
-      while_statement_prefer_hanging: self.while_statement_prefer_hanging,
-      arrow_function_use_parentheses: self.arrow_function_use_parentheses,
-      binary_expression_line_per_expression: self
-        .binary_expression_line_per_expression,
       jsx_bracket_position: self.jsx_bracket_position,
-      jsx_opening_element_bracket_position: self
-        .jsx_opening_element_bracket_position,
-      jsx_self_closing_element_bracket_position: self
-        .jsx_self_closing_element_bracket_position,
       jsx_force_new_lines_surrounding_content: self
         .jsx_force_new_lines_surrounding_content,
       jsx_multi_line_parens: self.jsx_multi_line_parens,
-      member_expression_line_per_expression: self
-        .member_expression_line_per_expression,
       type_literal_separator_kind: self.type_literal_separator_kind,
-      type_literal_separator_kind_single_line: self
-        .type_literal_separator_kind_single_line,
-      type_literal_separator_kind_multi_line: self
-        .type_literal_separator_kind_multi_line,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -2005,7 +1557,7 @@ impl ConfigFile {
         let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedFmtConfig =
           serde_json::from_value(config).map_err(|error| {
-            // dbg!(&error); // TODO(kt3k): remove
+            dbg!(&error); // TODO(kt3k): remove
             ToInvalidConfigError::Parse {
               config: "fmt",
               source: error,
@@ -2501,97 +2053,15 @@ mod tests {
         "quoteProps": "asNeeded",
         "newLineKind": "crlf",
         "useBraces": "whenNotSingleLine",
-        "ifStatement.useBraces": "whenNotSingleLine",
-        "forStatement.useBraces": "whenNotSingleLine",
-        "forInStatement.useBraces": "whenNotSingleLine",
-        "forOfStatement.useBraces": "whenNotSingleLine",
-        "whileStatement.useBraces": "whenNotSingleLine",
         "bracePosition": "sameLine",
-        "arrowFunction.bracePosition": "sameLine",
-        "classDeclaration.bracePosition": "sameLine",
-        "classExpression.bracePosition": "sameLine",
-        "constructor.bracePosition": "sameLine",
-        "doWhileStatement.bracePosition": "sameLine",
-        "enumDeclaration.bracePosition": "sameLine",
-        "forInStatement.bracePosition": "sameLine",
-        "forOfStatement.bracePosition": "sameLine",
-        "forStatement.bracePosition": "sameLine",
-        "functionDeclaration.bracePosition": "sameLine",
-        "functionExpression.bracePosition": "sameLine",
-        "getAccessor.bracePosition": "sameLine",
-        "ifStatement.bracePosition": "sameLine",
-        "interfaceDeclaration.bracePosition": "sameLine",
-        "moduleDeclaration.bracePosition": "sameLine",
-        "method.bracePosition": "sameLine",
-        "setAccessor.bracePosition": "sameLine",
-        "staticBlock.bracePosition": "sameLine",
-        "switchStatement.bracePosition": "sameLine",
-        "switchCase.bracePosition": "sameLine",
-        "tryStatement.bracePosition": "sameLine",
-        "whileStatement.bracePosition": "sameLine",
         "singleBodyPosition": "nextLine",
-        "forInStatement.singleBodyPosition": "nextLine",
-        "forOfStatement.singleBodyPosition": "nextLine",
-        "forStatement.singleBodyPosition": "nextLine",
-        "ifStatement.singleBodyPosition": "nextLine",
-        "whileStatement.singleBodyPosition": "nextLine",
         "nextControlFlowPosition": "sameLine",
-        "doWhileStatement.nextControlFlowPosition": "sameLine",
-        "ifStatement.nextControlFlowPosition": "sameLine",
-        "tryStatement.nextControlFlowPosition": "sameLine",
         "trailingCommas": "never",
-        "arguments.trailingCommas": "never",
-        "parameters.trailingCommas": "never",
-        "arrayExpression.trailingCommas": "never",
-        "arrayPattern.trailingCommas": "never",
-        "enumDeclaration.trailingCommas": "never",
-        "exportDeclaration.trailingCommas": "never",
-        "importDeclaration.trailingCommas": "never",
-        "objectExpression.trailingCommas": "never",
-        "objectPattern.trailingCommas": "never",
-        "tupleType.trailingCommas": "never",
-        "typeLiteral.trailingCommas": "never",
-        "typeParameters.trailingCommas": "never",
         "operatorPosition": "maintain",
-        "binaryExpression.operatorPosition": "maintain",
-        "conditionalExpression.operatorPosition": "maintain",
-        "conditionalType.operatorPosition": "maintain",
-        "preferHanging": true,
-        "arguments.preferHanging": "always",
-        "arrayExpression.preferHanging": "always",
-        "arrayPattern.preferHanging": true,
-        "doWhileStatement.preferHanging": true,
-        "exportDeclaration.preferHanging": true,
-        "extendsClause.preferHanging": true,
-        "forInStatement.preferHanging": true,
-        "forOfStatement.preferHanging": true,
-        "forStatement.preferHanging": true,
-        "ifStatement.preferHanging": true,
-        "implementsClause.preferHanging": true,
-        "importDeclaration.preferHanging": true,
-        "jsxAttributes.preferHanging": true,
-        "objectExpression.preferHanging": true,
-        "objectPattern.preferHanging": true,
-        "parameters.preferHanging": "always",
-        "sequenceExpression.preferHanging": true,
-        "switchStatement.preferHanging": true,
-        "tupleType.preferHanging": "always",
-        "typeLiteral.preferHanging": true,
-        "typeParameters.preferHanging": "always",
-        "unionAndIntersectionType.preferHanging": true,
-        "variableStatement.preferHanging": true,
-        "whileStatement.preferHanging": true,
-        "arrowFunction.useParentheses": "force",
-        "binaryExpression.linePerExpression": true,
         "jsx.bracketPosition": "maintain",
-        "jsxOpeningElement.bracketPosition": "maintain",
-        "jsxSelfClosingElement.bracketPosition": "maintain",
         "jsx.forceNewLinesSurroundingContent": true,
         "jsx.multiLineParens": "never",
-        "memberExpression.linePerExpression": true,
         "typeLiteral.separatorKind": "semiColon",
-        "typeLiteral.separatorKind.singleLine": "semiColon",
-        "typeLiteral.separatorKind.multiLine": "semiColon"
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -2667,119 +2137,15 @@ mod tests {
           quote_props: Some(QuoteProps::AsNeeded),
           new_line_kind: Some(NewLineKind::CarriageReturnLineFeed),
           use_braces: Some(UseBraces::WhenNotSingleLine),
-          if_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
-          for_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
-          for_in_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
-          for_of_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
-          while_statement_use_braces: Some(UseBraces::WhenNotSingleLine),
           brace_position: Some(BracePosition::SameLine),
-          arrow_function_brace_position: Some(BracePosition::SameLine),
-          class_declaration_brace_position: Some(BracePosition::SameLine),
-          class_expression_brace_position: Some(BracePosition::SameLine),
-          constructor_brace_position: Some(BracePosition::SameLine),
-          do_while_statement_brace_position: Some(BracePosition::SameLine),
-          enum_declaration_brace_position: Some(BracePosition::SameLine),
-          for_in_statement_brace_position: Some(BracePosition::SameLine),
-          for_of_statement_brace_position: Some(BracePosition::SameLine),
-          for_statement_brace_position: Some(BracePosition::SameLine),
-          function_declaration_brace_position: Some(BracePosition::SameLine),
-          function_expression_brace_position: Some(BracePosition::SameLine),
-          get_accessor_brace_position: Some(BracePosition::SameLine),
-          if_statement_brace_position: Some(BracePosition::SameLine),
-          interface_declaration_brace_position: Some(BracePosition::SameLine),
-          module_declaration_brace_position: Some(BracePosition::SameLine),
-          method_brace_position: Some(BracePosition::SameLine),
-          set_accessor_brace_position: Some(BracePosition::SameLine),
-          static_block_brace_position: Some(BracePosition::SameLine),
-          switch_statement_brace_position: Some(BracePosition::SameLine),
-          switch_case_brace_position: Some(BracePosition::SameLine),
-          try_statement_brace_position: Some(BracePosition::SameLine),
-          while_statement_brace_position: Some(BracePosition::SameLine),
           single_body_position: Some(SingleBodyPosition::NextLine),
-          for_in_statement_single_body_position: Some(
-            SingleBodyPosition::NextLine
-          ),
-          for_of_statement_single_body_position: Some(
-            SingleBodyPosition::NextLine
-          ),
-          for_statement_single_body_position: Some(
-            SingleBodyPosition::NextLine
-          ),
-          if_statement_single_body_position: Some(SingleBodyPosition::NextLine),
-          while_statement_single_body_position: Some(
-            SingleBodyPosition::NextLine
-          ),
           next_control_flow_position: Some(NextControlFlowPosition::SameLine),
-          do_while_statement_next_control_flow_position: Some(
-            NextControlFlowPosition::SameLine
-          ),
-          if_statement_next_control_flow_position: Some(
-            NextControlFlowPosition::SameLine
-          ),
-          try_statement_next_control_flow_position: Some(
-            NextControlFlowPosition::SameLine
-          ),
           trailing_commas: Some(TrailingCommas::Never),
-          arguments_trailing_commas: Some(TrailingCommas::Never),
-          parameters_trailing_commas: Some(TrailingCommas::Never),
-          array_expression_trailing_commas: Some(TrailingCommas::Never),
-          array_pattern_trailing_commas: Some(TrailingCommas::Never),
-          enum_declaration_trailing_commas: Some(TrailingCommas::Never),
-          export_declaration_trailing_commas: Some(TrailingCommas::Never),
-          import_declaration_trailing_commas: Some(TrailingCommas::Never),
-          object_expression_trailing_commas: Some(TrailingCommas::Never),
-          object_pattern_trailing_commas: Some(TrailingCommas::Never),
-          tuple_type_trailing_commas: Some(TrailingCommas::Never),
-          type_literal_trailing_commas: Some(TrailingCommas::Never),
-          type_parameters_trailing_commas: Some(TrailingCommas::Never),
           operator_position: Some(OperatorPosition::Maintain),
-          binary_expression_operator_position: Some(OperatorPosition::Maintain),
-          conditional_expression_operator_position: Some(
-            OperatorPosition::Maintain
-          ),
-          conditional_type_operator_position: Some(OperatorPosition::Maintain),
-          prefer_hanging: Some(true),
-          arguments_prefer_hanging: Some(PreferHanging::Always),
-          array_expression_prefer_hanging: Some(PreferHanging::Always),
-          array_pattern_prefer_hanging: Some(true),
-          do_while_statement_prefer_hanging: Some(true),
-          export_declaration_prefer_hanging: Some(true),
-          extends_clause_prefer_hanging: Some(true),
-          for_in_statement_prefer_hanging: Some(true),
-          for_of_statement_prefer_hanging: Some(true),
-          for_statement_prefer_hanging: Some(true),
-          if_statement_prefer_hanging: Some(true),
-          implements_clause_prefer_hanging: Some(true),
-          import_declaration_prefer_hanging: Some(true),
-          jsx_attributes_prefer_hanging: Some(true),
-          object_expression_prefer_hanging: Some(true),
-          object_pattern_prefer_hanging: Some(true),
-          parameters_prefer_hanging: Some(PreferHanging::Always),
-          sequence_expression_prefer_hanging: Some(true),
-          switch_statement_prefer_hanging: Some(true),
-          tuple_type_prefer_hanging: Some(PreferHanging::Always),
-          type_literal_prefer_hanging: Some(true),
-          type_parameters_prefer_hanging: Some(PreferHanging::Always),
-          union_and_intersection_type_prefer_hanging: Some(true),
-          variable_statement_prefer_hanging: Some(true),
-          while_statement_prefer_hanging: Some(true),
-          arrow_function_use_parentheses: Some(UseParentheses::Force),
-          binary_expression_line_per_expression: Some(true),
           jsx_bracket_position: Some(BracketPosition::Maintain),
-          jsx_opening_element_bracket_position: Some(BracketPosition::Maintain),
-          jsx_self_closing_element_bracket_position: Some(
-            BracketPosition::Maintain
-          ),
           jsx_force_new_lines_surrounding_content: Some(true),
           jsx_multi_line_parens: Some(MultiLineParens::Never),
-          member_expression_line_per_expression: Some(true),
           type_literal_separator_kind: Some(SeparatorKind::SemiColon),
-          type_literal_separator_kind_single_line: Some(
-            SeparatorKind::SemiColon
-          ),
-          type_literal_separator_kind_multi_line: Some(
-            SeparatorKind::SemiColon
-          ),
         },
       }
     );
