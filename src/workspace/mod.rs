@@ -525,8 +525,8 @@ impl Workspace {
     })
   }
 
-  pub fn patch_folders(&self) -> impl Iterator<Item = &FolderConfigs> {
-    self.patches.values()
+  pub fn patch_folders(&self) -> &BTreeMap<UrlRc, FolderConfigs> {
+    &self.patches
   }
 
   pub fn patch_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
