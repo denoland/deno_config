@@ -2788,8 +2788,11 @@ pub mod test {
     sys.fs_insert_json(root_dir().join("dir/package.json"), json!({}));
     let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("pkg"));
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
-    let patch_folders =
-      workspace_dir.workspace.patch_folders().collect::<Vec<_>>();
+    let patch_folders = workspace_dir
+      .workspace
+      .patch_folders()
+      .values()
+      .collect::<Vec<_>>();
     assert_eq!(patch_folders.len(), 1);
     assert_eq!(
       patch_folders[0].pkg_json.as_ref().unwrap().specifier(),
@@ -2810,8 +2813,11 @@ pub mod test {
       },
     );
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
-    let patch_folders =
-      workspace_dir.workspace.patch_folders().collect::<Vec<_>>();
+    let patch_folders = workspace_dir
+      .workspace
+      .patch_folders()
+      .values()
+      .collect::<Vec<_>>();
     assert_eq!(patch_folders.len(), 1);
     assert_eq!(
       patch_folders[0].deno_json.as_ref().unwrap().specifier,
