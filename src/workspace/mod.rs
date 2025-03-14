@@ -162,8 +162,6 @@ pub enum WorkspaceDiagnosticKind {
   ImportMapReferencingImportMap,
   #[error("\"imports\" and \"scopes\" field is ignored when \"importMap\" is specified in the root config file.")]
   MemberImportsScopesIgnored,
-  #[error("Patching npm packages ({package_json_url}) is not implemented.")]
-  NpmPatchNotImplemented { package_json_url: Url },
   #[error("`\"nodeModulesDir\": {previous}` is deprecated in Deno 2.0. Use `\"nodeModulesDir\": \"{suggestion}\"` instead")]
   DeprecatedNodeModulesDirOption {
     previous: bool,
@@ -527,12 +525,16 @@ impl Workspace {
     })
   }
 
-  pub fn patch_folders(&self) -> impl Iterator<Item = &FolderConfigs> {
-    self.patches.values()
+  pub fn patch_folders(&self) -> &BTreeMap<UrlRc, FolderConfigs> {
+    &self.patches
   }
 
   pub fn patch_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
     self.patches.values().filter_map(|f| f.deno_json.as_ref())
+  }
+
+  pub fn patch_pkg_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
+    self.patches.values().filter_map(|f| f.pkg_json.as_ref())
   }
 
   pub fn resolver_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
@@ -802,17 +804,6 @@ impl Workspace {
           diagnostics.push(WorkspaceDiagnostic {
             config_url: config.specifier.clone(),
             kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
-          });
-        }
-      }
-
-      if let Some(root_deno_json) = self.root_deno_json() {
-        if let Some(pkg_json) = &folder.pkg_json {
-          diagnostics.push(WorkspaceDiagnostic {
-            config_url: root_deno_json.specifier.clone(),
-            kind: WorkspaceDiagnosticKind::NpmPatchNotImplemented {
-              package_json_url: pkg_json.specifier(),
-            },
           });
         }
       }
@@ -2789,25 +2780,24 @@ pub mod test {
   fn test_patch_npm_package() {
     let sys = InMemorySys::default();
     sys.fs_insert_json(
-      root_dir().join("deno.json"),
+      root_dir().join("pkg/deno.json"),
       json!({
-        "patch": ["./member"]
+        "patch": ["../dir"]
       }),
     );
-    sys.fs_insert_json(root_dir().join("member/package.json"), json!({}));
-    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
+    sys.fs_insert_json(root_dir().join("dir/package.json"), json!({}));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("pkg"));
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+    let patch_folders = workspace_dir
+      .workspace
+      .patch_folders()
+      .values()
+      .collect::<Vec<_>>();
+    assert_eq!(patch_folders.len(), 1);
     assert_eq!(
-      workspace_dir.workspace.diagnostics(),
-      vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::NpmPatchNotImplemented {
-          package_json_url: Url::from_file_path(
-            root_dir().join("member/package.json")
-          )
-          .unwrap()
-        },
-        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
-      }]
-    );
+      patch_folders[0].pkg_json.as_ref().unwrap().specifier(),
+      url_from_file_path(&root_dir().join("dir/package.json")).unwrap()
+    )
   }
 
   #[test]
@@ -2823,8 +2813,11 @@ pub mod test {
       },
     );
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
-    let patch_folders =
-      workspace_dir.workspace.patch_folders().collect::<Vec<_>>();
+    let patch_folders = workspace_dir
+      .workspace
+      .patch_folders()
+      .values()
+      .collect::<Vec<_>>();
     assert_eq!(patch_folders.len(), 1);
     assert_eq!(
       patch_folders[0].deno_json.as_ref().unwrap().specifier,
