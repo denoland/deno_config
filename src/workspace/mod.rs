@@ -1827,6 +1827,7 @@ impl WorkspaceDirectory {
         files: FilePatterns::new_with_base(
           url_to_file_path(&self.dir_url).unwrap(),
         ),
+        sanitizers: true,
       });
     };
     let member_config = deno_json.member.to_test_config()?;
@@ -1837,6 +1838,7 @@ impl WorkspaceDirectory {
 
     Ok(TestConfig {
       files: combine_patterns(root_config.files, member_config.files),
+      sanitizers: member_config.sanitizers,
     })
   }
 
@@ -3194,10 +3196,15 @@ pub mod test {
   #[test]
   fn test_root_member_test_combinations() {
     let workspace_dir = workspace_for_root_and_member(
-      json!({}),
+      json!({
+        "test": {
+          "sanitizers": false,
+        }
+      }),
       json!({
         "test": {
           "include": ["subdir"],
+          "sanitizers": true,
         }
       }),
     );
@@ -3215,6 +3222,7 @@ pub mod test {
           )])),
           exclude: Default::default(),
         },
+        sanitizers: true,
       }
     );
 
@@ -3237,6 +3245,7 @@ pub mod test {
             root_dir().join("member")
           )])),
         },
+        sanitizers: false,
       }
     );
   }
@@ -3356,6 +3365,7 @@ pub mod test {
           .unwrap(),
         TestConfig {
           files: expected_files.clone(),
+          sanitizers: true,
         }
       );
       assert_eq!(
