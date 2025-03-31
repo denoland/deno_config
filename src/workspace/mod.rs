@@ -1420,55 +1420,40 @@ impl WorkspaceDirectory {
   pub fn to_raw_user_provided_tsconfig(
     &self,
   ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
-    let mut ignored_options = Vec::new();
+    let mut ignored_options = Vec::with_capacity(2);
     let mut ts_config = TsConfig::default();
+    let mut merge = |config: ParsedTsConfigOptions| {
+      if let Some(options) = config.maybe_ignored {
+        ignored_options.push(options);
+      }
+      ts_config.merge_object_mut(config.options);
+    };
+    let mut try_merge_from_ts_config = |pkg_json: &PackageJson| {
+      if let Some(options) =
+        compiler_option_from_ts_config_next_to_pkg_json(pkg_json)
+      {
+        merge(options);
+      }
+    };
 
     if let Some(config) = &self.deno_json {
-      ignored_options.reserve(2);
       // root first
       if let Some(root) = &config.root {
-        let root_options = root.to_compiler_options()?;
-        if let Some(options) = root_options.maybe_ignored {
-          ignored_options.push(options);
-        }
-        ts_config.merge_object_mut(root_options.options);
+        // read from root deno.json
+        merge(root.to_compiler_options()?);
       } else if let Some(pkg_json) = &self.pkg_json {
-        if let Some(pkg_json) = &pkg_json.root {
-          if let Some(root_options) =
-            compiler_option_from_ts_config_next_to_pkg_json(pkg_json)
-          {
-            if let Some(options) = root_options.maybe_ignored {
-              ignored_options.push(options);
-            }
-            ts_config.merge_object_mut(root_options.options);
-          }
-        }
+        // if root deno.json doesn't exist, but pkg.json does, try read from
+        // tsconfig.json next to pkg.json
+        pkg_json.root.as_ref().map(|p| try_merge_from_ts_config(p));
       }
 
       // then member overwrites
-      let member_options = config.member.to_compiler_options()?;
-      if let Some(options) = member_options.maybe_ignored {
-        ignored_options.push(options);
-      }
-      ts_config.merge_object_mut(member_options.options);
+      merge(config.member.to_compiler_options()?)
     } else if let Some(pkg_json) = &self.pkg_json {
-      if let Some(pkg_json) = &pkg_json.root {
-        if let Some(root_options) =
-          compiler_option_from_ts_config_next_to_pkg_json(pkg_json)
-        {
-          if let Some(options) = root_options.maybe_ignored {
-            ignored_options.push(options);
-          }
-          ts_config.merge_object_mut(root_options.options);
-        }
-      }
-
-      if let Some(member_options) = compiler_option_from_ts_config_next_to_pkg_json(&pkg_json.member) {
-        if let Some(options) = member_options.maybe_ignored {
-          ignored_options.push(options);
-        }
-        ts_config.merge_object_mut(member_options.options);
-      }
+      // first, try read from tsconfig.json next to root pkg.json
+      pkg_json.root.as_ref().map(|p| try_merge_from_ts_config(p));
+      // then try read from tsconfig.json next to member pkg.json
+      try_merge_from_ts_config(&pkg_json.member);
     }
 
     Ok(TsConfigWithIgnoredOptions {
@@ -1925,7 +1910,8 @@ impl WorkspaceDirectory {
   }
 }
 
-/// Reads the tsconfig.json file next to the package.json file.
+/// Reads compilerOptions from tsconfig.json file next to the package.json
+/// See https://github.com/denoland/deno/issues/28455#issuecomment-2734956368
 fn compiler_option_from_ts_config_next_to_pkg_json(
   pkg_json: &PackageJson,
 ) -> Option<ParsedTsConfigOptions> {
@@ -1934,13 +1920,15 @@ fn compiler_option_from_ts_config_next_to_pkg_json(
   if let Ok(text) = std::fs::read_to_string(&ts_config_path) {
     if let Ok(url) = Url::from_file_path(&ts_config_path) {
       if let Ok(config) = ConfigFile::new(&text, url) {
-        return config.to_compiler_options().ok();
+        if let Ok(options) = config.to_compiler_options() {
+          return Some(options);
+        }
       }
     }
   }
   log::warn!(
     "Failed to read tsconfig.json from {}",
-    pkg_json.path.display()
+    ts_config_path.display()
   );
   None
 }
@@ -2680,6 +2668,16 @@ pub mod test {
       }
     );
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+  }
+
+  #[test]
+  fn test_compiler_options_from_member_pkg_json() {
+    // TODO: implement this test
+  }
+
+  #[test]
+  fn test_compiler_options_from_root_and_member_pkg_json() {
+    // TODO: implement this test
   }
 
   #[test]
