@@ -6,6 +6,7 @@ use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
 use deno_path_util::url_from_directory_path;
+use deno_path_util::url_from_file_path;
 use deno_path_util::url_parent;
 use deno_path_util::url_to_file_path;
 use deno_semver::package::PackageNv;
@@ -1918,7 +1919,7 @@ fn compiler_option_from_ts_config_next_to_pkg_json(
   let mut ts_config_path = pkg_json.path.clone();
   ts_config_path.set_file_name("tsconfig.json");
   if let Ok(text) = std::fs::read_to_string(&ts_config_path) {
-    if let Ok(url) = Url::from_file_path(&ts_config_path) {
+    if let Ok(url) = url_from_file_path(&ts_config_path) {
       if let Ok(config) = ConfigFile::new(&text, url) {
         if let Ok(options) = config.to_compiler_options() {
           return Some(options);
