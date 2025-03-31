@@ -6,6 +6,7 @@ use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
 use deno_path_util::url_from_directory_path;
+use deno_path_util::url_from_file_path;
 use deno_path_util::url_parent;
 use deno_path_util::url_to_file_path;
 use deno_semver::package::PackageNv;
@@ -47,6 +48,7 @@ use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
+use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
@@ -1419,26 +1421,46 @@ impl WorkspaceDirectory {
   pub fn to_raw_user_provided_tsconfig(
     &self,
   ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
-    let mut ignored_options = Vec::new();
+    let mut ignored_options = Vec::with_capacity(2);
     let mut ts_config = TsConfig::default();
+    let mut merge = |config: ParsedTsConfigOptions| {
+      if let Some(options) = config.maybe_ignored {
+        ignored_options.push(options);
+      }
+      ts_config.merge_object_mut(config.options);
+    };
+    let mut try_merge_from_ts_config = |pkg_json: &PackageJson| {
+      if let Some(options) =
+        compiler_option_from_ts_config_next_to_pkg_json(pkg_json)
+      {
+        merge(options);
+      }
+    };
+
     if let Some(config) = &self.deno_json {
-      ignored_options.reserve(2);
       // root first
       if let Some(root) = &config.root {
-        let root_options = root.to_compiler_options()?;
-        if let Some(options) = root_options.maybe_ignored {
-          ignored_options.push(options);
+        // read from root deno.json
+        merge(root.to_compiler_options()?);
+      } else if let Some(pkg_json) = &self.pkg_json {
+        // if root deno.json doesn't exist, but pkg.json does, try read from
+        // tsconfig.json next to pkg.json
+        if let Some(pkg_json) = pkg_json.root.as_ref() {
+          try_merge_from_ts_config(pkg_json);
         }
-        ts_config.merge_object_mut(root_options.options);
       }
 
       // then member overwrites
-      let member_options = config.member.to_compiler_options()?;
-      if let Some(options) = member_options.maybe_ignored {
-        ignored_options.push(options);
+      merge(config.member.to_compiler_options()?)
+    } else if let Some(pkg_json) = &self.pkg_json {
+      // first, try read from tsconfig.json next to root pkg.json
+      if let Some(pkg_json) = pkg_json.root.as_ref() {
+        try_merge_from_ts_config(pkg_json);
       }
-      ts_config.merge_object_mut(member_options.options);
+      // then try read from tsconfig.json next to member pkg.json
+      try_merge_from_ts_config(&pkg_json.member);
     }
+
     Ok(TsConfigWithIgnoredOptions {
       ignored_options,
       ts_config,
@@ -1891,6 +1913,30 @@ impl WorkspaceDirectory {
         .map(|d| PathOrPattern::Path(d.dir_path())),
     );
   }
+}
+
+/// Reads compilerOptions from tsconfig.json file next to the package.json
+/// See https://github.com/denoland/deno/issues/28455#issuecomment-2734956368
+#[allow(clippy::disallowed_methods)]
+fn compiler_option_from_ts_config_next_to_pkg_json(
+  pkg_json: &PackageJson,
+) -> Option<ParsedTsConfigOptions> {
+  let mut ts_config_path = pkg_json.path.clone();
+  ts_config_path.set_file_name("tsconfig.json");
+  if let Ok(text) = std::fs::read_to_string(&ts_config_path) {
+    if let Ok(url) = url_from_file_path(&ts_config_path) {
+      if let Ok(config) = ConfigFile::new(&text, url) {
+        if let Ok(options) = config.to_compiler_options() {
+          return Some(options);
+        }
+      }
+    }
+  }
+  log::warn!(
+    "Failed to read tsconfig.json from {}",
+    ts_config_path.display()
+  );
+  None
 }
 
 pub enum TaskOrScript<'a> {
@@ -2628,6 +2674,16 @@ pub mod test {
       }
     );
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+  }
+
+  #[test]
+  fn test_compiler_options_from_member_pkg_json() {
+    // TODO: implement this test
+  }
+
+  #[test]
+  fn test_compiler_options_from_root_and_member_pkg_json() {
+    // TODO: implement this test
   }
 
   #[test]
