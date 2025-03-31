@@ -47,6 +47,7 @@ use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
+use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
@@ -1421,6 +1422,7 @@ impl WorkspaceDirectory {
   ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
     let mut ignored_options = Vec::new();
     let mut ts_config = TsConfig::default();
+
     if let Some(config) = &self.deno_json {
       ignored_options.reserve(2);
       // root first
@@ -1430,6 +1432,17 @@ impl WorkspaceDirectory {
           ignored_options.push(options);
         }
         ts_config.merge_object_mut(root_options.options);
+      } else if let Some(pkg_json) = &self.pkg_json {
+        if let Some(pkg_json) = &pkg_json.root {
+          if let Some(root_options) =
+            compiler_option_from_ts_config_next_to_pkg_json(pkg_json)
+          {
+            if let Some(options) = root_options.maybe_ignored {
+              ignored_options.push(options);
+            }
+            ts_config.merge_object_mut(root_options.options);
+          }
+        }
       }
 
       // then member overwrites
@@ -1438,7 +1451,26 @@ impl WorkspaceDirectory {
         ignored_options.push(options);
       }
       ts_config.merge_object_mut(member_options.options);
+    } else if let Some(pkg_json) = &self.pkg_json {
+      if let Some(pkg_json) = &pkg_json.root {
+        if let Some(root_options) =
+          compiler_option_from_ts_config_next_to_pkg_json(pkg_json)
+        {
+          if let Some(options) = root_options.maybe_ignored {
+            ignored_options.push(options);
+          }
+          ts_config.merge_object_mut(root_options.options);
+        }
+      }
+
+      if let Some(member_options) = compiler_option_from_ts_config_next_to_pkg_json(&pkg_json.member) {
+        if let Some(options) = member_options.maybe_ignored {
+          ignored_options.push(options);
+        }
+        ts_config.merge_object_mut(member_options.options);
+      }
     }
+
     Ok(TsConfigWithIgnoredOptions {
       ignored_options,
       ts_config,
@@ -1891,6 +1923,26 @@ impl WorkspaceDirectory {
         .map(|d| PathOrPattern::Path(d.dir_path())),
     );
   }
+}
+
+/// Reads the tsconfig.json file next to the package.json file.
+fn compiler_option_from_ts_config_next_to_pkg_json(
+  pkg_json: &PackageJson,
+) -> Option<ParsedTsConfigOptions> {
+  let mut ts_config_path = pkg_json.path.clone();
+  ts_config_path.set_file_name("tsconfig.json");
+  if let Ok(text) = std::fs::read_to_string(&ts_config_path) {
+    if let Ok(url) = Url::from_file_path(&ts_config_path) {
+      if let Ok(config) = ConfigFile::new(&text, url) {
+        return config.to_compiler_options().ok();
+      }
+    }
+  }
+  log::warn!(
+    "Failed to read tsconfig.json from {}",
+    pkg_json.path.display()
+  );
+  None
 }
 
 pub enum TaskOrScript<'a> {
