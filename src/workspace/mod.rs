@@ -1917,6 +1917,7 @@ impl WorkspaceDirectory {
 
 /// Reads compilerOptions from tsconfig.json file next to the package.json
 /// See https://github.com/denoland/deno/issues/28455#issuecomment-2734956368
+#[allow(clippy::disallowed_methods)]
 fn compiler_option_from_ts_config_next_to_pkg_json(
   pkg_json: &PackageJson,
 ) -> Option<ParsedTsConfigOptions> {
