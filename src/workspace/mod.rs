@@ -1445,14 +1445,18 @@ impl WorkspaceDirectory {
       } else if let Some(pkg_json) = &self.pkg_json {
         // if root deno.json doesn't exist, but pkg.json does, try read from
         // tsconfig.json next to pkg.json
-        pkg_json.root.as_ref().map(|p| try_merge_from_ts_config(p));
+        if let Some(pkg_json) = pkg_json.root.as_ref() {
+          try_merge_from_ts_config(pkg_json);
+        }
       }
 
       // then member overwrites
       merge(config.member.to_compiler_options()?)
     } else if let Some(pkg_json) = &self.pkg_json {
       // first, try read from tsconfig.json next to root pkg.json
-      pkg_json.root.as_ref().map(|p| try_merge_from_ts_config(p));
+      if let Some(pkg_json) = pkg_json.root.as_ref() {
+        try_merge_from_ts_config(pkg_json);
+      }
       // then try read from tsconfig.json next to member pkg.json
       try_merge_from_ts_config(&pkg_json.member);
     }
