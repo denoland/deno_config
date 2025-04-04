@@ -42,8 +42,6 @@ use crate::deno_json::ConfigFileRc;
 use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::FmtConfig;
 use crate::deno_json::FmtOptionsConfig;
-use crate::deno_json::LintConfig;
-use crate::deno_json::LintOptionsConfig;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
@@ -873,7 +871,10 @@ impl Workspace {
   pub fn resolve_lint_config_for_members(
     self: &WorkspaceRc,
     cli_args: &FilePatterns,
-  ) -> Result<Vec<(WorkspaceDirectory, LintConfig)>, ToInvalidConfigError> {
+  ) -> Result<
+    Vec<(WorkspaceDirectory, WorkspaceDirLintConfig)>,
+    ToInvalidConfigError,
+  > {
     self.resolve_config_for_members(cli_args, |dir, patterns| {
       dir.to_lint_config(patterns)
     })
@@ -1097,6 +1098,13 @@ pub struct ToTasksConfigError {
   #[source]
   #[inherit]
   error: ToInvalidConfigError,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub struct WorkspaceDirLintConfig {
+  pub rules: LintRulesConfig,
+  pub plugins: Vec<Url>,
+  pub files: FilePatterns,
 }
 
 #[derive(Debug, Clone)]
@@ -1563,7 +1571,7 @@ impl WorkspaceDirectory {
   pub fn to_lint_config(
     &self,
     cli_args: FilePatterns,
-  ) -> Result<LintConfig, ToInvalidConfigError> {
+  ) -> Result<WorkspaceDirLintConfig, ToInvalidConfigError> {
     let mut config = self.to_lint_config_inner()?;
     self.exclude_includes_with_member_for_base_for_root(&mut config.files);
     combine_files_config_with_cli_args(&mut config.files, cli_args);
@@ -1571,76 +1579,109 @@ impl WorkspaceDirectory {
     Ok(config)
   }
 
-  fn to_lint_config_inner(&self) -> Result<LintConfig, ToInvalidConfigError> {
+  fn to_lint_config_inner(
+    &self,
+  ) -> Result<WorkspaceDirLintConfig, ToInvalidConfigError> {
     let Some(deno_json) = self.deno_json.as_ref() else {
-      return Ok(LintConfig {
-        options: Default::default(),
+      return Ok(WorkspaceDirLintConfig {
+        rules: Default::default(),
+        plugins: Default::default(),
         files: FilePatterns::new_with_base(
           url_to_file_path(&self.dir_url).unwrap(),
         ),
       });
     };
     let member_config = deno_json.member.to_lint_config()?;
-    let root_config = match &deno_json.root {
-      Some(root) => root.to_lint_config()?,
-      None => return Ok(member_config),
-    };
-    // combine the configs
-    let root_opts = root_config.options;
-    let member_opts = member_config.options;
+    let root_config = deno_json
+      .root
+      .as_ref()
+      .map(|root| root.to_lint_config())
+      .transpose()?;
 
     // 1. Merge workspace root + member plugins
     // 2. Workspace member can filter out plugins by negating
     //    like this: `!my-plugin`
     // 3. Remove duplicates in case a plugin was defined in both
     //    workspace root and member.
-    let excluded_plugins: HashSet<String> = HashSet::from_iter(
-      member_opts
-        .plugins
-        .iter()
-        .filter(|plugin| plugin.starts_with('!'))
-        .map(|plugin| plugin[1..].to_string()),
-    );
+    let excluded_plugins = member_config
+      .options
+      .plugins
+      .iter()
+      .filter(|plugin| plugin.specifier.starts_with('!'))
+      .map(|plugin| {
+        deno_json
+          .member
+          .specifier
+          .join(&plugin.specifier[1..])
+          .map_err(|err| ToInvalidConfigError::InvalidConfig {
+            config: "lint",
+            source: err.into(),
+          })
+      })
+      .collect::<Result<HashSet<_>, _>>()?;
 
-    let filtered_plugins = IndexSet::<String>::from_iter(
-      root_opts
-        .plugins
-        .into_iter()
-        .chain(member_opts.plugins)
-        .filter(|plugin| {
-          !plugin.starts_with('!') && !excluded_plugins.contains(plugin)
-        }),
-    )
-    .into_iter()
-    .collect::<Vec<_>>();
-
-    Ok(LintConfig {
-      options: LintOptionsConfig {
-        plugins: filtered_plugins,
-        rules: {
-          LintRulesConfig {
-            tags: combine_option_vecs(
-              root_opts.rules.tags,
-              member_opts.rules.tags,
-            ),
-            include: combine_option_vecs_with_override(
-              CombineOptionVecsWithOverride {
-                root: root_opts.rules.include,
-                member: member_opts.rules.include.as_ref().map(Cow::Borrowed),
-                member_override_root: member_opts.rules.exclude.as_ref(),
-              },
-            ),
-            exclude: combine_option_vecs_with_override(
-              CombineOptionVecsWithOverride {
-                root: root_opts.rules.exclude,
-                member: member_opts.rules.exclude.map(Cow::Owned),
-                member_override_root: member_opts.rules.include.as_ref(),
-              },
-            ),
+    let plugins = root_config
+      .iter()
+      .flat_map(|root_config| &root_config.options.plugins)
+      .chain(&member_config.options.plugins)
+      .filter(|plugin| !plugin.specifier.starts_with('!'))
+      .map(|plugin| {
+        plugin.base.join(&plugin.specifier).map_err(|err| {
+          ToInvalidConfigError::InvalidConfig {
+            config: "lint",
+            source: err.into(),
           }
+        })
+      })
+      .collect::<Result<IndexSet<_>, _>>()?
+      .into_iter()
+      .filter(|plugin| !excluded_plugins.contains(plugin))
+      .collect::<Vec<_>>();
+
+    let (rules, files) = match root_config {
+      Some(root_config) => (
+        LintRulesConfig {
+          tags: combine_option_vecs(
+            root_config.options.rules.tags,
+            member_config.options.rules.tags,
+          ),
+          include: combine_option_vecs_with_override(
+            CombineOptionVecsWithOverride {
+              root: root_config.options.rules.include,
+              member: member_config
+                .options
+                .rules
+                .include
+                .as_ref()
+                .map(Cow::Borrowed),
+              member_override_root: member_config
+                .options
+                .rules
+                .exclude
+                .as_ref(),
+            },
+          ),
+          exclude: combine_option_vecs_with_override(
+            CombineOptionVecsWithOverride {
+              root: root_config.options.rules.exclude,
+              member: member_config.options.rules.exclude.map(Cow::Owned),
+              member_override_root: member_config
+                .options
+                .rules
+                .include
+                .as_ref(),
+            },
+          ),
         },
-      },
-      files: combine_patterns(root_config.files, member_config.files),
+        combine_patterns(root_config.files, member_config.files),
+      ),
+      None => (member_config.options.rules, member_config.files),
+    };
+
+    Ok(WorkspaceDirLintConfig {
+      plugins,
+      rules,
+      files,
     })
   }
 
@@ -3004,26 +3045,24 @@ pub mod test {
       .unwrap();
     assert_eq!(
       lint_config,
-      LintConfig {
-        options: LintOptionsConfig {
-          rules: LintRulesConfig {
-            tags: Some(vec!["tag1".to_string()]),
-            include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
-            exclude: Some(vec![])
-          },
-          plugins: vec![
-            "jsr:@deno/test-plugin1".to_string(),
-            "jsr:@deno/test-plugin2".to_string()
-          ],
+      WorkspaceDirLintConfig {
+        rules: LintRulesConfig {
+          tags: Some(vec!["tag1".to_string()]),
+          include: Some(vec!["rule1".to_string(), "rule2".to_string()]),
+          exclude: Some(vec![]),
         },
+        plugins: vec![
+          Url::parse("jsr:@deno/test-plugin1").unwrap(),
+          Url::parse("jsr:@deno/test-plugin2").unwrap(),
+        ],
         files: FilePatterns {
-          base: root_dir().join("member"),
+          base: root_dir().join("member/"),
           include: Some(PathOrPatternSet::new(vec![PathOrPattern::Path(
             root_dir().join("member").join("subdir")
           )])),
           exclude: Default::default(),
         },
-      }
+      },
     );
 
     // check the root context
@@ -3035,18 +3074,16 @@ pub mod test {
       .unwrap();
     assert_eq!(
       root_lint_config,
-      LintConfig {
-        options: LintOptionsConfig {
-          rules: LintRulesConfig {
-            tags: Some(vec!["tag1".to_string()]),
-            include: Some(vec!["rule1".to_string()]),
-            exclude: Some(vec!["rule2".to_string()])
-          },
-          plugins: vec![
-            "jsr:@deno/test-plugin1".to_string(),
-            "jsr:@deno/test-plugin3".to_string()
-          ]
+      WorkspaceDirLintConfig {
+        rules: LintRulesConfig {
+          tags: Some(vec!["tag1".to_string()]),
+          include: Some(vec!["rule1".to_string()]),
+          exclude: Some(vec!["rule2".to_string()]),
         },
+        plugins: vec![
+          Url::parse("jsr:@deno/test-plugin1").unwrap(),
+          Url::parse("jsr:@deno/test-plugin3").unwrap(),
+        ],
         files: FilePatterns {
           base: root_dir(),
           include: None,
@@ -3056,7 +3093,7 @@ pub mod test {
             root_dir().join("member")
           )])),
         },
-      }
+      },
     );
   }
 
@@ -3345,10 +3382,11 @@ pub mod test {
         ctx
           .to_lint_config(FilePatterns::new_with_base(ctx.dir_path()))
           .unwrap(),
-        LintConfig {
+        WorkspaceDirLintConfig {
+          rules: Default::default(),
+          plugins: Default::default(),
           files: expected_files.clone(),
-          options: Default::default(),
-        }
+        },
       );
       assert_eq!(
         ctx

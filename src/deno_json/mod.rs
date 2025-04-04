@@ -52,6 +52,9 @@ pub struct IntoResolvedError(pub Box<IntoResolvedErrorKind>);
 
 #[derive(Debug, Error, JsError)]
 pub enum IntoResolvedErrorKind {
+  #[class(uri)]
+  #[error(transparent)]
+  UrlParse(#[from] url::ParseError),
   #[class(inherit)]
   #[error(transparent)]
   UrlToFilePath(#[from] UrlToFilePathError),
@@ -135,17 +138,30 @@ impl SerializedLintConfig {
     Ok(LintConfig {
       options: LintOptionsConfig {
         rules: self.rules,
-        plugins: self.plugins,
+        plugins: self
+          .plugins
+          .into_iter()
+          .map(|specifier| LintPluginConfig {
+            specifier,
+            base: config_file_specifier.clone(),
+          })
+          .collect(),
       },
       files: files.into_resolved(config_file_specifier)?,
     })
   }
 }
 
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub struct LintPluginConfig {
+  pub specifier: String,
+  pub base: Url,
+}
+
 #[derive(Clone, Debug, Default, Hash, PartialEq)]
 pub struct LintOptionsConfig {
   pub rules: LintRulesConfig,
-  pub plugins: Vec<String>,
+  pub plugins: Vec<LintPluginConfig>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq)]
