@@ -4,6 +4,7 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::unused_async)]
 #![deny(clippy::unnecessary_wraps)]
+#![recursion_limit = "512"]
 
 #[cfg(feature = "deno_json")]
 pub mod deno_json;
