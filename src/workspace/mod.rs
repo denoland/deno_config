@@ -1398,15 +1398,16 @@ impl WorkspaceDirectory {
       .unwrap_or(false)
   }
 
-  pub fn to_resolved_ts_config(
+  pub fn to_resolved_ts_config<TSys: FsRead>(
     &self,
+    sys: &TSys,
     config_type: TsConfigType,
   ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
     let mut base_ts_config = get_base_ts_config_for_emit(config_type);
     let TsConfigWithIgnoredOptions {
       ts_config,
       ignored_options,
-    } = self.to_raw_user_provided_tsconfig()?;
+    } = self.to_raw_user_provided_tsconfig(sys)?;
     // overwrite the base values with the user specified ones
     base_ts_config.merge_mut(ts_config);
     Ok(TsConfigWithIgnoredOptions {
@@ -1418,8 +1419,9 @@ impl WorkspaceDirectory {
   /// Gets the combined tsconfig that the user provided, without any of
   /// Deno's defaults. Use `to_resolved_ts_config()` to get the resolved
   /// config instead.
-  pub fn to_raw_user_provided_tsconfig(
+  pub fn to_raw_user_provided_tsconfig<TSys: FsRead>(
     &self,
+    sys: &TSys,
   ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
     let mut ignored_options = Vec::with_capacity(2);
     let mut ts_config = TsConfig::default();
@@ -1431,7 +1433,7 @@ impl WorkspaceDirectory {
     };
     let mut try_merge_from_ts_config = |pkg_json: &PackageJson| {
       if let Some(options) =
-        compiler_option_from_ts_config_next_to_pkg_json(pkg_json)
+        compiler_option_from_ts_config_next_to_pkg_json(sys, pkg_json)
       {
         merge(options);
       }
@@ -1918,12 +1920,13 @@ impl WorkspaceDirectory {
 /// Reads compilerOptions from tsconfig.json file next to the package.json
 /// See https://github.com/denoland/deno/issues/28455#issuecomment-2734956368
 #[allow(clippy::disallowed_methods)]
-fn compiler_option_from_ts_config_next_to_pkg_json(
+fn compiler_option_from_ts_config_next_to_pkg_json<TSys: FsRead>(
+  sys: &TSys,
   pkg_json: &PackageJson,
 ) -> Option<ParsedTsConfigOptions> {
   let mut ts_config_path = pkg_json.path.clone();
   ts_config_path.set_file_name("tsconfig.json");
-  if let Ok(text) = std::fs::read_to_string(&ts_config_path) {
+  if let Ok(text) = sys.fs_read_to_string(&ts_config_path) {
     if let Ok(url) = url_from_file_path(&ts_config_path) {
       if let Ok(config) = ConfigFile::new(&text, url) {
         if let Ok(options) = config.to_compiler_options() {
@@ -2605,7 +2608,7 @@ pub mod test {
 
   #[test]
   fn test_root_member_compiler_options() {
-    let workspace_dir = workspace_for_root_and_member(
+    let sys = in_memory_fs_for_root_and_member(
       json!({
         "compilerOptions": {
           "checkJs": false
@@ -2621,6 +2624,7 @@ pub mod test {
         },
       }),
     );
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(
       workspace_dir.to_compiler_option_types().unwrap(),
       vec![(
@@ -2650,7 +2654,7 @@ pub mod test {
     assert_eq!(workspace_dir.check_js(), true);
     assert_eq!(
       workspace_dir
-        .to_resolved_ts_config(TsConfigType::Emit)
+        .to_resolved_ts_config(&sys, TsConfigType::Emit)
         .unwrap(),
       TsConfigWithIgnoredOptions {
         ts_config: TsConfig(json!({
@@ -5868,10 +5872,20 @@ pub mod test {
   }
 
   fn workspace_for_root_and_member_with_fs(
-    mut root: serde_json::Value,
+    root: serde_json::Value,
     member: serde_json::Value,
     with_sys: impl FnOnce(&InMemorySys),
   ) -> WorkspaceDirectory {
+    let sys = in_memory_fs_for_root_and_member(root, member);
+    with_sys(&sys);
+    // start in the member
+    workspace_at_start_dir(&sys, &root_dir().join("member"))
+  }
+
+  fn in_memory_fs_for_root_and_member(
+    mut root: serde_json::Value,
+    member: serde_json::Value,
+  ) -> InMemorySys {
     root
       .as_object_mut()
       .unwrap()
@@ -5879,9 +5893,7 @@ pub mod test {
     let sys = InMemorySys::default();
     sys.fs_insert_json(root_dir().join("deno.json"), root);
     sys.fs_insert_json(root_dir().join("member/deno.json"), member);
-    with_sys(&sys);
-    // start in the member
-    workspace_at_start_dir(&sys, &root_dir().join("member"))
+    sys
   }
 
   fn workspace_at_start_dir(
