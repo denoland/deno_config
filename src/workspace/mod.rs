@@ -1438,13 +1438,10 @@ impl WorkspaceDirectory {
         merge(options);
       }
     };
-    dbg!(&self.deno_json);
 
     if let Some(config) = &self.deno_json {
-      dbg!(&config.root);
       // root first
       if let Some(root) = &config.root {
-        dbg!("hi");
         // read from root deno.json
         merge(root.to_compiler_options()?);
       } else if let Some(pkg_json) = &self.pkg_json {
@@ -1465,10 +1462,8 @@ impl WorkspaceDirectory {
       }
 
     } else if let Some(pkg_json) = &self.pkg_json {
-      dbg!("heya");
       // first, try read from tsconfig.json next to root pkg.json
       if let Some(pkg_json) = &pkg_json.root {
-        dbg!(&pkg_json);
         try_merge_from_ts_config(pkg_json);
       }
       // then try read from tsconfig.json next to member pkg.json
@@ -2693,14 +2688,26 @@ pub mod test {
   }
 
   #[test]
-  fn test_compiler_options_from_member_pkg_json() {
+  fn test_compiler_options_from_member_ts_config() {
     let sys = InMemorySys::default();
     sys.fs_insert_json(root_dir().join("deno.json"), json!({
       "workspace": ["./member"],
+      "compilerOptions": {
+        "strict": false,
+      }
     }));
     sys.fs_insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "name": "member",
+        "exports": ".",
+      }),
+    );
+    sys.fs_insert_json(
       root_dir().join("member/package.json"),
-      json!({ "name": "member" }),
+      json!({
+        "name": "member",
+      }),
     );
     sys.fs_insert_json(
       root_dir().join("member/tsconfig.json"),
@@ -2710,7 +2717,7 @@ pub mod test {
         },
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("member/deno.json"));
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(
       workspace_dir
         .to_resolved_ts_config(&sys, TsConfigType::Check { lib: deno_json::TsTypeLib::DenoWindow })
@@ -2737,7 +2744,7 @@ pub mod test {
           "noImplicitOverride": true,
           "resolveJsonModule": true,
           "sourceMap": false,
-          "strict": true,
+          "strict": false,
           "target": "esnext",
           "tsBuildInfoFile": "internal:///.tsbuildinfo",
           "useDefineForClassFields": true,
@@ -2749,7 +2756,7 @@ pub mod test {
   }
 
   #[test]
-  fn test_compiler_options_from_root_and_member_pkg_json() {
+  fn test_compiler_options_from_root_and_member_ts_configs() {
     let sys = InMemorySys::default();
     sys.fs_insert_json(root_dir().join("package.json"), json!({
       "workspaces": ["./member"],
@@ -2789,6 +2796,58 @@ pub mod test {
           "experimentalDecorators": false,
           "incremental": true,
           "jsx": "react-dev",
+          "importsNotUsedAsValues": "remove",
+          "inlineSourceMap": true,
+          "inlineSources": true,
+          "isolatedModules": true,
+          "lib": ["dom", "esnext"],
+          "module": "NodeNext",
+          "moduleResolution": "NodeNext",
+          "moduleDetection": "force",
+          "noEmit": true,
+          "noImplicitOverride": true,
+          "resolveJsonModule": true,
+          "sourceMap": false,
+          "strict": true,
+          "target": "esnext",
+          "tsBuildInfoFile": "internal:///.tsbuildinfo",
+          "useDefineForClassFields": true,
+        })),
+        ignored_options: Vec::new(),
+      }
+    );
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+  }
+
+  #[test]
+  fn test_compiler_options_from_root_ts_config() {
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(root_dir().join("package.json"), json!({
+      "name": "member",
+    }));
+    sys.fs_insert_json(
+      root_dir().join("tsconfig.json"),
+      json!({
+        "compilerOptions": {
+          "lib": ["dom", "esnext"],
+        },
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
+    assert_eq!(
+      workspace_dir
+        .to_resolved_ts_config(&sys, TsConfigType::Check { lib: deno_json::TsTypeLib::DenoWindow })
+        .unwrap(),
+      TsConfigWithIgnoredOptions {
+        ts_config: TsConfig(json!({
+          "allowJs": true,
+          "allowImportingTsExtensions": true,
+          "allowSyntheticDefaultImports": true,
+          "checkJs": false,
+          "emitDecoratorMetadata": false,
+          "experimentalDecorators": false,
+          "incremental": true,
+          "jsx": "react",
           "importsNotUsedAsValues": "remove",
           "inlineSourceMap": true,
           "inlineSources": true,
