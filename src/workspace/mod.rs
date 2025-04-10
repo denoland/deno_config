@@ -1423,20 +1423,23 @@ impl WorkspaceDirectory {
     &self,
     sys: &TSys,
   ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
-    let mut ignored_options = Vec::with_capacity(2);
-    let mut ts_config = TsConfig::default();
-    let mut merge = |config: ParsedTsConfigOptions| {
+    let mut result = TsConfigWithIgnoredOptions {
+      ts_config: TsConfig::default(),
+      ignored_options: Vec::with_capacity(2),
+    };
+    let merge = |config: ParsedTsConfigOptions,
+                 result: &mut TsConfigWithIgnoredOptions| {
       if let Some(options) = config.maybe_ignored {
-        ignored_options.push(options.clone());
+        result.ignored_options.push(options.clone());
       }
-      ts_config.merge_object_mut(config.options.clone());
+      result.ts_config.merge_object_mut(config.options.clone());
     };
     let try_merge_from_ts_config =
-      |pkg_json: &PackageJson, merge: &mut dyn FnMut(ParsedTsConfigOptions)| {
+      |pkg_json: &PackageJson, result: &mut TsConfigWithIgnoredOptions| {
         if let Some(options) =
           compiler_options_from_ts_config_next_to_pkg_json(sys, pkg_json)
         {
-          merge(options);
+          merge(options, result);
         }
       };
 
@@ -1444,34 +1447,31 @@ impl WorkspaceDirectory {
       // root first
       if let Some(root) = &config.root {
         // read from root deno.json
-        merge(root.to_compiler_options()?);
+        merge(root.to_compiler_options()?, &mut result);
       } else if let Some(pkg_json) = &self.pkg_json {
         // if root deno.json doesn't exist, but package.json does, try read from
         // tsconfig.json next to pkg.json
         if let Some(pkg_json) = &pkg_json.root {
-          try_merge_from_ts_config(pkg_json, &mut merge);
+          try_merge_from_ts_config(pkg_json, &mut result);
         }
       }
 
       // then read from member
       if config.member.json.compiler_options.is_some() {
-        merge(config.member.to_compiler_options()?)
+        merge(config.member.to_compiler_options()?, &mut result);
       } else if let Some(pkg_json) = &self.pkg_json {
-        try_merge_from_ts_config(&pkg_json.member, &mut merge);
+        try_merge_from_ts_config(&pkg_json.member, &mut result);
       }
     } else if let Some(pkg_json) = &self.pkg_json {
       // first, try read from tsconfig.json next to root package.json
       if let Some(pkg_json) = &pkg_json.root {
-        try_merge_from_ts_config(pkg_json, &mut merge);
+        try_merge_from_ts_config(pkg_json, &mut result);
       }
       // then try read from tsconfig.json next to member package.json
-      try_merge_from_ts_config(&pkg_json.member, &mut merge);
+      try_merge_from_ts_config(&pkg_json.member, &mut result);
     }
 
-    Ok(TsConfigWithIgnoredOptions {
-      ignored_options,
-      ts_config,
-    })
+    Ok(result)
   }
 
   pub fn to_compiler_option_types(
