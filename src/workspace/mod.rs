@@ -1431,13 +1431,14 @@ impl WorkspaceDirectory {
       }
       ts_config.merge_object_mut(config.options.clone());
     };
-    let mut try_merge_from_ts_config = |pkg_json: &PackageJson| {
-      if let Some(options) =
-        compiler_options_from_ts_config_next_to_pkg_json(sys, pkg_json)
-      {
-        merge(options);
-      }
-    };
+    let try_merge_from_ts_config =
+      |pkg_json: &PackageJson, merge: &mut dyn FnMut(ParsedTsConfigOptions)| {
+        if let Some(options) =
+          compiler_options_from_ts_config_next_to_pkg_json(sys, pkg_json)
+        {
+          merge(options);
+        }
+      };
 
     if let Some(config) = &self.deno_json {
       // root first
@@ -1448,7 +1449,7 @@ impl WorkspaceDirectory {
         // if root deno.json doesn't exist, but package.json does, try read from
         // tsconfig.json next to pkg.json
         if let Some(pkg_json) = &pkg_json.root {
-          try_merge_from_ts_config(pkg_json);
+          try_merge_from_ts_config(pkg_json, &mut merge);
         }
       }
 
@@ -1456,18 +1457,15 @@ impl WorkspaceDirectory {
       if config.member.json.compiler_options.is_some() {
         merge(config.member.to_compiler_options()?)
       } else if let Some(pkg_json) = &self.pkg_json {
-        if let Some(options) = compiler_options_from_ts_config_next_to_pkg_json(sys, &pkg_json.member) {
-          merge(options);
-        }
+        try_merge_from_ts_config(&pkg_json.member, &mut merge);
       }
-
     } else if let Some(pkg_json) = &self.pkg_json {
-      // first, try read from tsconfig.json next to root pkg.json
+      // first, try read from tsconfig.json next to root package.json
       if let Some(pkg_json) = &pkg_json.root {
-        try_merge_from_ts_config(pkg_json);
+        try_merge_from_ts_config(pkg_json, &mut merge);
       }
-      // then try read from tsconfig.json next to member pkg.json
-      try_merge_from_ts_config(&pkg_json.member);
+      // then try read from tsconfig.json next to member package.json
+      try_merge_from_ts_config(&pkg_json.member, &mut merge);
     }
 
     Ok(TsConfigWithIgnoredOptions {
@@ -2631,7 +2629,8 @@ pub mod test {
         },
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("member"));
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(
       workspace_dir.to_compiler_option_types().unwrap(),
       vec![(
@@ -2690,12 +2689,15 @@ pub mod test {
   #[test]
   fn test_compiler_options_from_member_ts_config() {
     let sys = InMemorySys::default();
-    sys.fs_insert_json(root_dir().join("deno.json"), json!({
-      "workspace": ["./member"],
-      "compilerOptions": {
-        "strict": false,
-      }
-    }));
+    sys.fs_insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"],
+        "compilerOptions": {
+          "strict": false,
+        }
+      }),
+    );
     sys.fs_insert_json(
       root_dir().join("member/deno.json"),
       json!({
@@ -2717,10 +2719,16 @@ pub mod test {
         },
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("member"));
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(
       workspace_dir
-        .to_resolved_ts_config(&sys, TsConfigType::Check { lib: deno_json::TsTypeLib::DenoWindow })
+        .to_resolved_ts_config(
+          &sys,
+          TsConfigType::Check {
+            lib: deno_json::TsTypeLib::DenoWindow
+          }
+        )
         .unwrap(),
       TsConfigWithIgnoredOptions {
         ts_config: TsConfig(json!({
@@ -2758,9 +2766,12 @@ pub mod test {
   #[test]
   fn test_compiler_options_from_root_and_member_ts_configs() {
     let sys = InMemorySys::default();
-    sys.fs_insert_json(root_dir().join("package.json"), json!({
-      "workspaces": ["./member"],
-    }));
+    sys.fs_insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member"],
+      }),
+    );
     sys.fs_insert_json(
       root_dir().join("tsconfig.json"),
       json!({
@@ -2781,10 +2792,16 @@ pub mod test {
         },
       }),
     );
-    let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("member"));
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(
       workspace_dir
-        .to_resolved_ts_config(&sys, TsConfigType::Check { lib: deno_json::TsTypeLib::DenoWindow })
+        .to_resolved_ts_config(
+          &sys,
+          TsConfigType::Check {
+            lib: deno_json::TsTypeLib::DenoWindow
+          }
+        )
         .unwrap(),
       TsConfigWithIgnoredOptions {
         ts_config: TsConfig(json!({
@@ -2822,9 +2839,12 @@ pub mod test {
   #[test]
   fn test_compiler_options_from_root_ts_config() {
     let sys = InMemorySys::default();
-    sys.fs_insert_json(root_dir().join("package.json"), json!({
-      "name": "member",
-    }));
+    sys.fs_insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "name": "member",
+      }),
+    );
     sys.fs_insert_json(
       root_dir().join("tsconfig.json"),
       json!({
@@ -2836,7 +2856,12 @@ pub mod test {
     let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
     assert_eq!(
       workspace_dir
-        .to_resolved_ts_config(&sys, TsConfigType::Check { lib: deno_json::TsTypeLib::DenoWindow })
+        .to_resolved_ts_config(
+          &sys,
+          TsConfigType::Check {
+            lib: deno_json::TsTypeLib::DenoWindow
+          }
+        )
         .unwrap(),
       TsConfigWithIgnoredOptions {
         ts_config: TsConfig(json!({
