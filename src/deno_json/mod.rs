@@ -1566,7 +1566,6 @@ impl ConfigFile {
         let mut exclude_patterns = self.resolve_exclude_patterns()?;
         let mut serialized: SerializedFmtConfig =
           serde_json::from_value(config).map_err(|error| {
-            dbg!(&error); // TODO(kt3k): remove
             ToInvalidConfigError::Parse {
               config: "fmt",
               source: error,
