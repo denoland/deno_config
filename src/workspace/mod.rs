@@ -2025,8 +2025,7 @@ fn compiler_options_from_ts_config_next_to_pkg_json<TSys: FsRead>(
   sys: &TSys,
   pkg_json: &PackageJson,
 ) -> Option<ParsedTsConfigOptions> {
-  let mut path = pkg_json.path.clone();
-  path.set_file_name("tsconfig.json");
+  let path = pkg_json.path.with_file_name("tsconfig.json");
   let warn = |err: &dyn std::fmt::Display| {
     let path = path.display();
     log::warn!("Failed to read tsconfig.json from {}: {}", path, err);
