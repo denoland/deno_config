@@ -52,6 +52,9 @@ pub struct IntoResolvedError(pub Box<IntoResolvedErrorKind>);
 
 #[derive(Debug, Error, JsError)]
 pub enum IntoResolvedErrorKind {
+  #[class(uri)]
+  #[error(transparent)]
+  UrlParse(#[from] url::ParseError),
   #[class(inherit)]
   #[error(transparent)]
   UrlToFilePath(#[from] UrlToFilePathError),
@@ -135,17 +138,30 @@ impl SerializedLintConfig {
     Ok(LintConfig {
       options: LintOptionsConfig {
         rules: self.rules,
-        plugins: self.plugins,
+        plugins: self
+          .plugins
+          .into_iter()
+          .map(|specifier| LintPluginConfig {
+            specifier,
+            base: config_file_specifier.clone(),
+          })
+          .collect(),
       },
       files: files.into_resolved(config_file_specifier)?,
     })
   }
 }
 
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub struct LintPluginConfig {
+  pub specifier: String,
+  pub base: Url,
+}
+
 #[derive(Clone, Debug, Default, Hash, PartialEq)]
 pub struct LintOptionsConfig {
   pub rules: LintRulesConfig,
-  pub plugins: Vec<String>,
+  pub plugins: Vec<LintPluginConfig>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq)]
@@ -173,6 +189,98 @@ pub enum ProseWrap {
   Preserve,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum QuoteProps {
+  AsNeeded,
+  Consistent,
+  Preserve,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum NewLineKind {
+  Auto,
+  #[serde(rename = "lf")]
+  LineFeed,
+  #[serde(rename = "crlf")]
+  CarriageReturnLineFeed,
+  System,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum UseBraces {
+  Maintain,
+  WhenNotSingleLine,
+  Always,
+  PreferNone,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum BracePosition {
+  Maintain,
+  SameLine,
+  NextLine,
+  SameLineUnlessHanging,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum SingleBodyPosition {
+  Maintain,
+  SameLine,
+  NextLine,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum NextControlFlowPosition {
+  Maintain,
+  SameLine,
+  NextLine,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum TrailingCommas {
+  Always,
+  Never,
+  OnlyMultiLine,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum OperatorPosition {
+  Maintain,
+  SameLine,
+  NextLine,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum BracketPosition {
+  Maintain,
+  SameLine,
+  NextLine,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum MultiLineParens {
+  Never,
+  Prefer,
+  Always,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub enum SeparatorKind {
+  SemiColon,
+  Comma,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct FmtOptionsConfig {
@@ -182,6 +290,20 @@ pub struct FmtOptionsConfig {
   pub single_quote: Option<bool>,
   pub prose_wrap: Option<ProseWrap>,
   pub semi_colons: Option<bool>,
+  pub quote_props: Option<QuoteProps>,
+  pub new_line_kind: Option<NewLineKind>,
+  pub use_braces: Option<UseBraces>,
+  pub brace_position: Option<BracePosition>,
+  pub single_body_position: Option<SingleBodyPosition>,
+  pub next_control_flow_position: Option<NextControlFlowPosition>,
+  pub trailing_commas: Option<TrailingCommas>,
+  pub operator_position: Option<OperatorPosition>,
+  pub jsx_bracket_position: Option<BracketPosition>,
+  pub jsx_force_new_lines_surrounding_content: Option<bool>,
+  pub jsx_multi_line_parens: Option<MultiLineParens>,
+  pub type_literal_separator_kind: Option<SeparatorKind>,
+  pub space_around: Option<bool>,
+  pub space_surrounding_properties: Option<bool>,
 }
 
 impl FmtOptionsConfig {
@@ -192,6 +314,20 @@ impl FmtOptionsConfig {
       && self.single_quote.is_none()
       && self.prose_wrap.is_none()
       && self.semi_colons.is_none()
+      && self.quote_props.is_none()
+      && self.new_line_kind.is_none()
+      && self.use_braces.is_none()
+      && self.brace_position.is_none()
+      && self.single_body_position.is_none()
+      && self.next_control_flow_position.is_none()
+      && self.trailing_commas.is_none()
+      && self.operator_position.is_none()
+      && self.jsx_bracket_position.is_none()
+      && self.jsx_force_new_lines_surrounding_content.is_none()
+      && self.jsx_multi_line_parens.is_none()
+      && self.type_literal_separator_kind.is_none()
+      && self.space_around.is_none()
+      && self.space_surrounding_properties.is_none()
   }
 }
 
@@ -247,6 +383,24 @@ struct SerializedFmtConfig {
   pub single_quote: Option<bool>,
   pub prose_wrap: Option<ProseWrap>,
   pub semi_colons: Option<bool>,
+  pub quote_props: Option<QuoteProps>,
+  pub new_line_kind: Option<NewLineKind>,
+  pub use_braces: Option<UseBraces>,
+  pub brace_position: Option<BracePosition>,
+  pub single_body_position: Option<SingleBodyPosition>,
+  pub next_control_flow_position: Option<NextControlFlowPosition>,
+  pub trailing_commas: Option<TrailingCommas>,
+  pub operator_position: Option<OperatorPosition>,
+  #[serde(rename = "jsx.bracketPosition")]
+  pub jsx_bracket_position: Option<BracketPosition>,
+  #[serde(rename = "jsx.forceNewLinesSurroundingContent")]
+  pub jsx_force_new_lines_surrounding_content: Option<bool>,
+  #[serde(rename = "jsx.multiLineParens")]
+  pub jsx_multi_line_parens: Option<MultiLineParens>,
+  #[serde(rename = "typeLiteral.separatorKind")]
+  pub type_literal_separator_kind: Option<SeparatorKind>,
+  pub space_around: Option<bool>,
+  pub space_surrounding_properties: Option<bool>,
   #[serde(rename = "options")]
   pub deprecated_options: FmtOptionsConfig,
   pub include: Option<Vec<String>>,
@@ -269,6 +423,21 @@ impl SerializedFmtConfig {
       single_quote: self.single_quote,
       prose_wrap: self.prose_wrap,
       semi_colons: self.semi_colons,
+      quote_props: self.quote_props,
+      new_line_kind: self.new_line_kind,
+      use_braces: self.use_braces,
+      brace_position: self.brace_position,
+      single_body_position: self.single_body_position,
+      next_control_flow_position: self.next_control_flow_position,
+      trailing_commas: self.trailing_commas,
+      operator_position: self.operator_position,
+      jsx_bracket_position: self.jsx_bracket_position,
+      jsx_force_new_lines_surrounding_content: self
+        .jsx_force_new_lines_surrounding_content,
+      jsx_multi_line_parens: self.jsx_multi_line_parens,
+      type_literal_separator_kind: self.type_literal_separator_kind,
+      space_around: self.space_around,
+      space_surrounding_properties: self.space_surrounding_properties,
     };
     if !self.deprecated_files.is_null() {
       log::warn!( "Warning: \"files\" configuration in \"fmt\" was removed in Deno 2, use \"include\" and \"exclude\" instead.");
@@ -1904,7 +2073,21 @@ mod tests {
         "lineWidth": 80,
         "indentWidth": 4,
         "singleQuote": true,
-        "proseWrap": "preserve"
+        "proseWrap": "preserve",
+        "quoteProps": "asNeeded",
+        "newLineKind": "crlf",
+        "useBraces": "whenNotSingleLine",
+        "bracePosition": "sameLine",
+        "singleBodyPosition": "nextLine",
+        "nextControlFlowPosition": "sameLine",
+        "trailingCommas": "never",
+        "operatorPosition": "maintain",
+        "jsx.bracketPosition": "maintain",
+        "jsx.forceNewLinesSurroundingContent": true,
+        "jsx.multiLineParens": "never",
+        "typeLiteral.separatorKind": "semiColon",
+        "spaceAround": true,
+        "spaceSurroundingProperties": true
       },
       "tasks": {
         "build": "deno run --allow-read --allow-write build.ts",
@@ -1975,8 +2158,22 @@ mod tests {
           line_width: Some(80),
           indent_width: Some(4),
           single_quote: Some(true),
+          semi_colons: None,
           prose_wrap: Some(ProseWrap::Preserve),
-          ..Default::default()
+          quote_props: Some(QuoteProps::AsNeeded),
+          new_line_kind: Some(NewLineKind::CarriageReturnLineFeed),
+          use_braces: Some(UseBraces::WhenNotSingleLine),
+          brace_position: Some(BracePosition::SameLine),
+          single_body_position: Some(SingleBodyPosition::NextLine),
+          next_control_flow_position: Some(NextControlFlowPosition::SameLine),
+          trailing_commas: Some(TrailingCommas::Never),
+          operator_position: Some(OperatorPosition::Maintain),
+          jsx_bracket_position: Some(BracketPosition::Maintain),
+          jsx_force_new_lines_surrounding_content: Some(true),
+          jsx_multi_line_parens: Some(MultiLineParens::Never),
+          type_literal_separator_kind: Some(SeparatorKind::SemiColon),
+          space_around: Some(true),
+          space_surrounding_properties: Some(true),
         },
       }
     );
