@@ -1737,6 +1737,62 @@ impl WorkspaceDirectory {
           .options
           .semi_colons
           .or(root_config.options.semi_colons),
+        quote_props: member_config
+          .options
+          .quote_props
+          .or(root_config.options.quote_props),
+        new_line_kind: member_config
+          .options
+          .new_line_kind
+          .or(root_config.options.new_line_kind),
+        use_braces: member_config
+          .options
+          .use_braces
+          .or(root_config.options.use_braces),
+        brace_position: member_config
+          .options
+          .brace_position
+          .or(root_config.options.brace_position),
+        single_body_position: member_config
+          .options
+          .single_body_position
+          .or(root_config.options.single_body_position),
+        next_control_flow_position: member_config
+          .options
+          .next_control_flow_position
+          .or(root_config.options.next_control_flow_position),
+        trailing_commas: member_config
+          .options
+          .trailing_commas
+          .or(root_config.options.trailing_commas),
+        operator_position: member_config
+          .options
+          .operator_position
+          .or(root_config.options.operator_position),
+        jsx_bracket_position: member_config
+          .options
+          .jsx_bracket_position
+          .or(root_config.options.jsx_bracket_position),
+        jsx_force_new_lines_surrounding_content: member_config
+          .options
+          .jsx_force_new_lines_surrounding_content
+          .or(root_config.options.jsx_force_new_lines_surrounding_content),
+        jsx_multi_line_parens: member_config
+          .options
+          .jsx_multi_line_parens
+          .or(root_config.options.jsx_multi_line_parens),
+        type_literal_separator_kind: member_config
+          .options
+          .type_literal_separator_kind
+          .or(root_config.options.type_literal_separator_kind),
+        space_around: member_config
+          .options
+          .space_around
+          .or(root_config.options.space_around),
+        space_surrounding_properties: member_config
+          .options
+          .space_surrounding_properties
+          .or(root_config.options.space_surrounding_properties),
       },
       files: combine_patterns(root_config.files, member_config.files),
     })
@@ -2273,9 +2329,19 @@ pub mod test {
   use sys_traits::impls::InMemorySys;
 
   use crate::assert_contains;
+  use crate::deno_json::BracePosition;
+  use crate::deno_json::BracketPosition;
   use crate::deno_json::DenoJsonCache;
+  use crate::deno_json::MultiLineParens;
+  use crate::deno_json::NewLineKind;
+  use crate::deno_json::NextControlFlowPosition;
+  use crate::deno_json::OperatorPosition;
   use crate::deno_json::ProseWrap;
-  use crate::deno_json::TsConfig;
+  use crate::deno_json::QuoteProps;
+  use crate::deno_json::SeparatorKind;
+  use crate::deno_json::SingleBodyPosition;
+  use crate::deno_json::TrailingCommas;
+  use crate::deno_json::UseBraces;
   use crate::glob::FileCollector;
   use crate::glob::GlobPattern;
   use crate::glob::PathKind;
@@ -3108,6 +3174,20 @@ pub mod test {
           "proseWrap": "never",
           "singleQuote": false,
           "semiColons": false,
+          "quoteProps": "asNeeded",
+          "newLineKind": "auto",
+          "useBraces": "preferNone",
+          "bracePosition": "maintain",
+          "singleBodyPosition": "sameLine",
+          "nextControlFlowPosition": "nextLine",
+          "trailingCommas": "always",
+          "operatorPosition": "sameLine",
+          "jsx.bracketPosition": "sameLine",
+          "jsx.forceNewLinesSurroundingContent": false,
+          "jsx.multiLineParens": "prefer",
+          "typeLiteral.separatorKind": "comma",
+          "spaceAround": false,
+          "spaceSurroundingProperties": false,
         }
       }),
       json!({
@@ -3119,6 +3199,20 @@ pub mod test {
           "proseWrap": "always",
           "singleQuote": true,
           "semiColons": true,
+          "quoteProps": "consistent",
+          "newLineKind": "lf",
+          "useBraces": "always",
+          "bracePosition": "nextLine",
+          "singleBodyPosition": "maintain",
+          "nextControlFlowPosition": "maintain",
+          "trailingCommas": "onlyMultiLine",
+          "operatorPosition": "nextLine",
+          "jsx.bracketPosition": "nextLine",
+          "jsx.forceNewLinesSurroundingContent": true,
+          "jsx.multiLineParens": "always",
+          "typeLiteral.separatorKind": "semiColon",
+          "spaceAround": true,
+          "spaceSurroundingProperties": true,
         }
       }),
     );
@@ -3136,6 +3230,20 @@ pub mod test {
           prose_wrap: Some(ProseWrap::Always),
           single_quote: Some(true),
           semi_colons: Some(true),
+          quote_props: Some(QuoteProps::Consistent),
+          new_line_kind: Some(NewLineKind::LineFeed),
+          use_braces: Some(UseBraces::Always),
+          brace_position: Some(BracePosition::NextLine),
+          single_body_position: Some(SingleBodyPosition::Maintain),
+          next_control_flow_position: Some(NextControlFlowPosition::Maintain),
+          trailing_commas: Some(TrailingCommas::OnlyMultiLine),
+          operator_position: Some(OperatorPosition::NextLine),
+          jsx_bracket_position: Some(BracketPosition::NextLine),
+          jsx_force_new_lines_surrounding_content: Some(true),
+          jsx_multi_line_parens: Some(MultiLineParens::Always),
+          type_literal_separator_kind: Some(SeparatorKind::SemiColon),
+          space_around: Some(true),
+          space_surrounding_properties: Some(true),
         },
         files: FilePatterns {
           base: root_dir().join("member"),
@@ -3164,6 +3272,20 @@ pub mod test {
           prose_wrap: Some(ProseWrap::Never),
           single_quote: Some(false),
           semi_colons: Some(false),
+          quote_props: Some(QuoteProps::AsNeeded),
+          new_line_kind: Some(NewLineKind::Auto),
+          use_braces: Some(UseBraces::PreferNone),
+          brace_position: Some(BracePosition::Maintain),
+          single_body_position: Some(SingleBodyPosition::SameLine),
+          next_control_flow_position: Some(NextControlFlowPosition::NextLine),
+          trailing_commas: Some(TrailingCommas::Always),
+          operator_position: Some(OperatorPosition::SameLine),
+          jsx_bracket_position: Some(BracketPosition::SameLine),
+          jsx_force_new_lines_surrounding_content: Some(false),
+          jsx_multi_line_parens: Some(MultiLineParens::Prefer),
+          type_literal_separator_kind: Some(SeparatorKind::Comma),
+          space_around: Some(false),
+          space_surrounding_properties: Some(false),
         },
         files: FilePatterns {
           base: root_dir(),
