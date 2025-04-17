@@ -2025,22 +2025,17 @@ fn compiler_options_from_ts_config_next_to_pkg_json<TSys: FsRead>(
   sys: &TSys,
   pkg_json: &PackageJson,
 ) -> Option<ParsedTsConfigOptions> {
-  let mut ts_config_path = pkg_json.path.clone();
-  ts_config_path.set_file_name("tsconfig.json");
-  if let Ok(text) = sys.fs_read_to_string(&ts_config_path) {
-    if let Ok(url) = url_from_file_path(&ts_config_path) {
-      if let Ok(config) = ConfigFile::new(&text, url) {
-        if let Ok(options) = config.to_compiler_options() {
-          return Some(options);
-        }
-      }
-    }
-  }
-  log::warn!(
-    "Failed to read tsconfig.json from {}",
-    ts_config_path.display()
-  );
-  None
+  let mut path = pkg_json.path.clone();
+  path.set_file_name("tsconfig.json");
+  let warn = |err: &dyn std::fmt::Display| {
+    let path = path.display();
+    log::warn!("Failed to read tsconfig.json from {}: {}", path, err);
+  };
+  let text = sys.fs_read_to_string(&path).inspect_err(|e| warn(e)).ok()?;
+  let url = url_from_file_path(&path).inspect_err(|e| warn(e)).ok()?;
+  let config = ConfigFile::new(&text, url).inspect_err(|e| warn(e)).ok()?;
+  let options = config.to_compiler_options().inspect_err(|e| warn(e)).ok()?;
+  Some(options)
 }
 
 pub enum TaskOrScript<'a> {
