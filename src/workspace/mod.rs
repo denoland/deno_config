@@ -6,6 +6,7 @@ use deno_package_json::PackageJson;
 use deno_package_json::PackageJsonLoadError;
 use deno_package_json::PackageJsonRc;
 use deno_path_util::url_from_directory_path;
+use deno_path_util::url_from_file_path;
 use deno_path_util::url_parent;
 use deno_path_util::url_to_file_path;
 use deno_semver::package::PackageNv;
@@ -45,6 +46,7 @@ use crate::deno_json::FmtOptionsConfig;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
+use crate::deno_json::ParsedTsConfigOptions;
 use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
@@ -1404,15 +1406,16 @@ impl WorkspaceDirectory {
       .unwrap_or(false)
   }
 
-  pub fn to_resolved_ts_config(
+  pub fn to_resolved_ts_config<TSys: FsRead>(
     &self,
+    sys: &TSys,
     config_type: TsConfigType,
   ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
     let mut base_ts_config = get_base_ts_config_for_emit(config_type);
     let TsConfigWithIgnoredOptions {
       ts_config,
       ignored_options,
-    } = self.to_raw_user_provided_tsconfig()?;
+    } = self.to_raw_user_provided_tsconfig(sys)?;
     // overwrite the base values with the user specified ones
     base_ts_config.merge_mut(ts_config);
     Ok(TsConfigWithIgnoredOptions {
@@ -1424,33 +1427,59 @@ impl WorkspaceDirectory {
   /// Gets the combined tsconfig that the user provided, without any of
   /// Deno's defaults. Use `to_resolved_ts_config()` to get the resolved
   /// config instead.
-  pub fn to_raw_user_provided_tsconfig(
+  pub fn to_raw_user_provided_tsconfig<TSys: FsRead>(
     &self,
+    sys: &TSys,
   ) -> Result<TsConfigWithIgnoredOptions, CompilerOptionsParseError> {
-    let mut ignored_options = Vec::new();
-    let mut ts_config = TsConfig::default();
+    let mut result = TsConfigWithIgnoredOptions {
+      ts_config: TsConfig::default(),
+      ignored_options: Vec::with_capacity(2),
+    };
+    let merge = |config: ParsedTsConfigOptions,
+                 result: &mut TsConfigWithIgnoredOptions| {
+      if let Some(options) = config.maybe_ignored {
+        result.ignored_options.push(options.clone());
+      }
+      result.ts_config.merge_object_mut(config.options.clone());
+    };
+    let try_merge_from_ts_config =
+      |pkg_json: &PackageJson, result: &mut TsConfigWithIgnoredOptions| {
+        if let Some(options) =
+          compiler_options_from_ts_config_next_to_pkg_json(sys, pkg_json)
+        {
+          merge(options, result);
+        }
+      };
+
     if let Some(config) = &self.deno_json {
-      ignored_options.reserve(2);
       // root first
       if let Some(root) = &config.root {
-        let root_options = root.to_compiler_options()?;
-        if let Some(options) = root_options.maybe_ignored {
-          ignored_options.push(options);
+        // read from root deno.json
+        merge(root.to_compiler_options()?, &mut result);
+      } else if let Some(pkg_json) = &self.pkg_json {
+        // if root deno.json doesn't exist, but package.json does, try read from
+        // tsconfig.json next to pkg.json
+        if let Some(pkg_json) = &pkg_json.root {
+          try_merge_from_ts_config(pkg_json, &mut result);
         }
-        ts_config.merge_object_mut(root_options.options);
       }
 
-      // then member overwrites
-      let member_options = config.member.to_compiler_options()?;
-      if let Some(options) = member_options.maybe_ignored {
-        ignored_options.push(options);
+      // then read from member
+      if config.member.json.compiler_options.is_some() {
+        merge(config.member.to_compiler_options()?, &mut result);
+      } else if let Some(pkg_json) = &self.pkg_json {
+        try_merge_from_ts_config(&pkg_json.member, &mut result);
       }
-      ts_config.merge_object_mut(member_options.options);
+    } else if let Some(pkg_json) = &self.pkg_json {
+      // first, try read from tsconfig.json next to root package.json
+      if let Some(pkg_json) = &pkg_json.root {
+        try_merge_from_ts_config(pkg_json, &mut result);
+      }
+      // then try read from tsconfig.json next to member package.json
+      try_merge_from_ts_config(&pkg_json.member, &mut result);
     }
-    Ok(TsConfigWithIgnoredOptions {
-      ignored_options,
-      ts_config,
-    })
+
+    Ok(result)
   }
 
   pub fn to_compiler_option_types(
@@ -1988,6 +2017,24 @@ impl WorkspaceDirectory {
         .map(|d| PathOrPattern::Path(d.dir_path())),
     );
   }
+}
+
+/// Reads compilerOptions from tsconfig.json file next to the package.json
+/// See https://github.com/denoland/deno/issues/28455#issuecomment-2734956368
+fn compiler_options_from_ts_config_next_to_pkg_json<TSys: FsRead>(
+  sys: &TSys,
+  pkg_json: &PackageJson,
+) -> Option<ParsedTsConfigOptions> {
+  let path = pkg_json.path.with_file_name("tsconfig.json");
+  let warn = |err: &dyn std::fmt::Display| {
+    let path = path.display();
+    log::warn!("Failed to read tsconfig.json from {}: {}", path, err);
+  };
+  let text = sys.fs_read_to_string(&path).inspect_err(|e| warn(e)).ok()?;
+  let url = url_from_file_path(&path).inspect_err(|e| warn(e)).ok()?;
+  let config = ConfigFile::new(&text, url).inspect_err(|e| warn(e)).ok()?;
+  let options = config.to_compiler_options().inspect_err(|e| warn(e)).ok()?;
+  Some(options)
 }
 
 pub enum TaskOrScript<'a> {
@@ -2666,7 +2713,7 @@ pub mod test {
 
   #[test]
   fn test_root_member_compiler_options() {
-    let workspace_dir = workspace_for_root_and_member(
+    let sys = in_memory_fs_for_root_and_member(
       json!({
         "compilerOptions": {
           "checkJs": false
@@ -2682,6 +2729,8 @@ pub mod test {
         },
       }),
     );
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
     assert_eq!(
       workspace_dir.to_compiler_option_types().unwrap(),
       vec![(
@@ -2711,7 +2760,7 @@ pub mod test {
     assert_eq!(workspace_dir.check_js(), true);
     assert_eq!(
       workspace_dir
-        .to_resolved_ts_config(TsConfigType::Emit)
+        .to_resolved_ts_config(&sys, TsConfigType::Emit)
         .unwrap(),
       TsConfigWithIgnoredOptions {
         ts_config: TsConfig(json!({
@@ -2730,6 +2779,216 @@ pub mod test {
           "moduleResolution": "NodeNext",
           "resolveJsonModule": true,
           "jsxImportSource": "npm:react"
+        })),
+        ignored_options: Vec::new(),
+      }
+    );
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+  }
+
+  #[test]
+  fn test_compiler_options_from_member_ts_config() {
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
+      root_dir().join("deno.json"),
+      json!({
+        "workspace": ["./member"],
+        "compilerOptions": {
+          "strict": false,
+        }
+      }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("member/deno.json"),
+      json!({
+        "name": "member",
+        "exports": ".",
+      }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("member/package.json"),
+      json!({
+        "name": "member",
+      }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("member/tsconfig.json"),
+      json!({
+        "compilerOptions": {
+          "lib": ["dom", "esnext"],
+        },
+      }),
+    );
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
+    assert_eq!(
+      workspace_dir
+        .to_resolved_ts_config(
+          &sys,
+          TsConfigType::Check {
+            lib: deno_json::TsTypeLib::DenoWindow
+          }
+        )
+        .unwrap(),
+      TsConfigWithIgnoredOptions {
+        ts_config: TsConfig(json!({
+          "allowJs": true,
+          "allowImportingTsExtensions": true,
+          "allowSyntheticDefaultImports": true,
+          "checkJs": false,
+          "emitDecoratorMetadata": false,
+          "experimentalDecorators": false,
+          "incremental": true,
+          "jsx": "react",
+          "importsNotUsedAsValues": "remove",
+          "inlineSourceMap": true,
+          "inlineSources": true,
+          "isolatedModules": true,
+          "lib": ["dom", "esnext"],
+          "module": "NodeNext",
+          "moduleResolution": "NodeNext",
+          "moduleDetection": "force",
+          "noEmit": true,
+          "noImplicitOverride": true,
+          "resolveJsonModule": true,
+          "sourceMap": false,
+          "strict": false,
+          "target": "esnext",
+          "tsBuildInfoFile": "internal:///.tsbuildinfo",
+          "useDefineForClassFields": true,
+        })),
+        ignored_options: Vec::new(),
+      }
+    );
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+  }
+
+  #[test]
+  fn test_compiler_options_from_root_and_member_ts_configs() {
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "workspaces": ["./member"],
+      }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("tsconfig.json"),
+      json!({
+        "compilerOptions": {
+          "lib": ["dom", "esnext"],
+        },
+      }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("member/package.json"),
+      json!({ "name": "member" }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("member/tsconfig.json"),
+      json!({
+        "compilerOptions": {
+          "jsx": "react-dev",
+        },
+      }),
+    );
+    let workspace_dir =
+      workspace_at_start_dir(&sys, &root_dir().join("member"));
+    assert_eq!(
+      workspace_dir
+        .to_resolved_ts_config(
+          &sys,
+          TsConfigType::Check {
+            lib: deno_json::TsTypeLib::DenoWindow
+          }
+        )
+        .unwrap(),
+      TsConfigWithIgnoredOptions {
+        ts_config: TsConfig(json!({
+          "allowJs": true,
+          "allowImportingTsExtensions": true,
+          "allowSyntheticDefaultImports": true,
+          "checkJs": false,
+          "emitDecoratorMetadata": false,
+          "experimentalDecorators": false,
+          "incremental": true,
+          "jsx": "react-dev",
+          "importsNotUsedAsValues": "remove",
+          "inlineSourceMap": true,
+          "inlineSources": true,
+          "isolatedModules": true,
+          "lib": ["dom", "esnext"],
+          "module": "NodeNext",
+          "moduleResolution": "NodeNext",
+          "moduleDetection": "force",
+          "noEmit": true,
+          "noImplicitOverride": true,
+          "resolveJsonModule": true,
+          "sourceMap": false,
+          "strict": true,
+          "target": "esnext",
+          "tsBuildInfoFile": "internal:///.tsbuildinfo",
+          "useDefineForClassFields": true,
+        })),
+        ignored_options: Vec::new(),
+      }
+    );
+    assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
+  }
+
+  #[test]
+  fn test_compiler_options_from_root_ts_config() {
+    let sys = InMemorySys::default();
+    sys.fs_insert_json(
+      root_dir().join("package.json"),
+      json!({
+        "name": "member",
+      }),
+    );
+    sys.fs_insert_json(
+      root_dir().join("tsconfig.json"),
+      json!({
+        "compilerOptions": {
+          "lib": ["dom", "esnext"],
+        },
+      }),
+    );
+    let workspace_dir = workspace_at_start_dir(&sys, &root_dir());
+    assert_eq!(
+      workspace_dir
+        .to_resolved_ts_config(
+          &sys,
+          TsConfigType::Check {
+            lib: deno_json::TsTypeLib::DenoWindow
+          }
+        )
+        .unwrap(),
+      TsConfigWithIgnoredOptions {
+        ts_config: TsConfig(json!({
+          "allowJs": true,
+          "allowImportingTsExtensions": true,
+          "allowSyntheticDefaultImports": true,
+          "checkJs": false,
+          "emitDecoratorMetadata": false,
+          "experimentalDecorators": false,
+          "incremental": true,
+          "jsx": "react",
+          "importsNotUsedAsValues": "remove",
+          "inlineSourceMap": true,
+          "inlineSources": true,
+          "isolatedModules": true,
+          "lib": ["dom", "esnext"],
+          "module": "NodeNext",
+          "moduleResolution": "NodeNext",
+          "moduleDetection": "force",
+          "noEmit": true,
+          "noImplicitOverride": true,
+          "resolveJsonModule": true,
+          "sourceMap": false,
+          "strict": true,
+          "target": "esnext",
+          "tsBuildInfoFile": "internal:///.tsbuildinfo",
+          "useDefineForClassFields": true,
         })),
         ignored_options: Vec::new(),
       }
@@ -5972,10 +6231,20 @@ pub mod test {
   }
 
   fn workspace_for_root_and_member_with_fs(
-    mut root: serde_json::Value,
+    root: serde_json::Value,
     member: serde_json::Value,
     with_sys: impl FnOnce(&InMemorySys),
   ) -> WorkspaceDirectory {
+    let sys = in_memory_fs_for_root_and_member(root, member);
+    with_sys(&sys);
+    // start in the member
+    workspace_at_start_dir(&sys, &root_dir().join("member"))
+  }
+
+  fn in_memory_fs_for_root_and_member(
+    mut root: serde_json::Value,
+    member: serde_json::Value,
+  ) -> InMemorySys {
     root
       .as_object_mut()
       .unwrap()
@@ -5983,9 +6252,7 @@ pub mod test {
     let sys = InMemorySys::default();
     sys.fs_insert_json(root_dir().join("deno.json"), root);
     sys.fs_insert_json(root_dir().join("member/deno.json"), member);
-    with_sys(&sys);
-    // start in the member
-    workspace_at_start_dir(&sys, &root_dir().join("member"))
+    sys
   }
 
   fn workspace_at_start_dir(
