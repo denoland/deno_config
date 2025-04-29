@@ -1218,19 +1218,18 @@ impl ConfigFile {
   /// The result also contains any options that were ignored.
   pub fn to_compiler_options(
     &self,
-  ) -> Result<ParsedTsConfigOptions, CompilerOptionsParseError> {
-    if let Some(compiler_options) = self.json.compiler_options.clone() {
-      let options: serde_json::Map<String, Value> =
-        serde_json::from_value(compiler_options).map_err(|source| {
-          CompilerOptionsParseError {
-            specifier: self.specifier.clone(),
-            source,
-          }
-        })?;
-      Ok(parse_compiler_options(options, Some(&self.specifier)))
-    } else {
-      Ok(Default::default())
-    }
+  ) -> Result<Option<ParsedTsConfigOptions>, CompilerOptionsParseError> {
+    let Some(compiler_options) = self.json.compiler_options.clone() else {
+      return Ok(None);
+    };
+    let options: serde_json::Map<String, Value> =
+      serde_json::from_value(compiler_options).map_err(|source| {
+        CompilerOptionsParseError {
+          specifier: self.specifier.clone(),
+          source,
+        }
+      })?;
+    Ok(Some(parse_compiler_options(options, Some(&self.specifier))))
   }
 
   pub fn to_import_map_specifier(
@@ -2107,7 +2106,10 @@ mod tests {
     let ParsedTsConfigOptions {
       options,
       maybe_ignored,
-    } = config_file.to_compiler_options().unwrap();
+    } = config_file
+      .to_compiler_options()
+      .unwrap()
+      .unwrap_or_default();
     assert!(options.contains_key("strict"));
     assert_eq!(options.len(), 1);
     assert_eq!(
