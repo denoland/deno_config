@@ -2034,7 +2034,7 @@ fn compiler_options_from_ts_config_next_to_pkg_json<TSys: FsRead>(
   let text = sys
     .fs_read_to_string(&path)
     .inspect_err(|e| {
-      if e.kind() != ErrorKind::NotFound {
+      if !matches!(e.kind(), ErrorKind::NotFound | ErrorKind::IsADirectory) {
         warn(e)
       }
     })
