@@ -24,6 +24,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use sys_traits::FsMetadata;
@@ -2030,7 +2031,14 @@ fn compiler_options_from_ts_config_next_to_pkg_json<TSys: FsRead>(
     let path = path.display();
     log::warn!("Failed to read tsconfig.json from {}: {}", path, err);
   };
-  let text = sys.fs_read_to_string(&path).inspect_err(|e| warn(e)).ok()?;
+  let text = sys
+    .fs_read_to_string(&path)
+    .inspect_err(|e| {
+      if e.kind() != ErrorKind::NotFound {
+        warn(e)
+      }
+    })
+    .ok()?;
   let url = url_from_file_path(&path).inspect_err(|e| warn(e)).ok()?;
   let config = ConfigFile::new(&text, url).inspect_err(|e| warn(e)).ok()?;
   let options = config.to_compiler_options().inspect_err(|e| warn(e)).ok()?;
