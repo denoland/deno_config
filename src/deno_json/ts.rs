@@ -68,6 +68,7 @@ static ALLOWED_COMPILER_OPTIONS: phf::Set<&'static str> = phf::phf_set! {
   "allowUnreachableCode",
   "allowUnusedLabels",
   "checkJs",
+  "erasableSyntaxOnly",
   "emitDecoratorMetadata",
   "exactOptionalPropertyTypes",
   "experimentalDecorators",
