@@ -500,6 +500,12 @@ struct SerializedTestConfig {
   pub exclude: Vec<String>,
   #[serde(rename = "files")]
   pub deprecated_files: serde_json::Value,
+  #[serde(default = "yes")]
+  pub sanitizers: bool,
+}
+
+fn yes() -> bool {
+  true
 }
 
 impl SerializedTestConfig {
@@ -514,6 +520,7 @@ impl SerializedTestConfig {
     }
     Ok(TestConfig {
       files: files.into_resolved(config_file_specifier)?,
+      sanitizers: self.sanitizers,
     })
   }
 }
@@ -521,12 +528,14 @@ impl SerializedTestConfig {
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct TestConfig {
   pub files: FilePatterns,
+  pub sanitizers: bool,
 }
 
 impl TestConfig {
   pub fn new_with_base(base: PathBuf) -> Self {
     Self {
       files: FilePatterns::new_with_base(base),
+      sanitizers: true,
     }
   }
 }
@@ -1654,6 +1663,7 @@ impl ConfigFile {
       }
       None => Ok(TestConfig {
         files: self.to_exclude_files_config()?,
+        sanitizers: true,
       }),
     }
   }
