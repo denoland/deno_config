@@ -125,9 +125,9 @@ dependencies = [
 
 [[package]]
 name = "deno_error"
-version = "0.5.3"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4da6a58de6932a96f84e133c072fd3b525966ee122a71f3efd48bbff2eed5ac"
+checksum = "43674d0eb32a7457e0911164fee92b45320e02a52c0c530e6cde47163cdf6dc8"
 dependencies = [
  "deno_error_macro",
  "libc",
@@ -138,9 +138,9 @@ dependencies = [
 
 [[package]]
 name = "deno_error_macro"
-version = "0.5.3"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46351dff93aed2039407c91e2ded2a5591e42d2795ab3d111288625bb710d3d2"
+checksum = "06d727b287cd43aa5120cbd00d1ca5be5e829d502bbb52d4bbb144a5a057372e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -149,9 +149,9 @@ dependencies = [
 
 [[package]]
 name = "deno_package_json"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "236bc2d6d6c06b68cbde960542e13501cf833c975f221a012da619f714c57123"
+checksum = "77aee446076be3e2ed9e175b77f423cb20d5d7e1080338f4c77b0b4d290599da"
 dependencies = [
  "boxed_error",
  "deno_error",
@@ -167,9 +167,9 @@ dependencies = [
 
 [[package]]
 name = "deno_path_util"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "420e8211aaba7fde83ccaa9a5dad855c3b940ed988d70c95159acd600a70dc87"
+checksum = "516f813389095889776b81cc9108ff6f336fd9409b4b12fc0138aea23d2708e1"
 dependencies = [
  "deno_error",
  "percent-encoding",
@@ -180,9 +180,9 @@ dependencies = [
 
 [[package]]
 name = "deno_semver"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4775271f9b5602482698f76d24ea9ed8ba27af7f587a7e9a876916300c542435"
+checksum = "f2d807160e754edb1989b4a19cac1ac5299065a7a89ff98682a2366cbaa25795"
 dependencies = [
  "capacity_builder",
  "deno_error",
@@ -445,9 +445,9 @@ dependencies = [
 
 [[package]]
 name = "import_map"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1215d4d92511fbbdaea50e750e91f2429598ef817f02b579158e92803b52c00a"
+checksum = "f315e535cb94a0e80704278d630990bb48834c8c8d976acf0a2f6bc8fede7c38"
 dependencies = [
  "boxed_error",
  "deno_error",
@@ -802,13 +802,25 @@ dependencies = [
 
 [[package]]
 name = "sys_traits"
-version = "0.1.8"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "638f0e61b5134e56b2abdf4c704fd44672603f15ca09013f314649056f3fee4d"
+checksum = "b0f8c2c55b6b4dd67f0f8df8de9bdf00b16c8ea4fbc4be0c2133d5d3924be5d4"
 dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "sys_traits_macros",
+]
+
+[[package]]
+name = "sys_traits_macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "181f22127402abcf8ee5c83ccd5b408933fec36a6095cf82cda545634692657e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
