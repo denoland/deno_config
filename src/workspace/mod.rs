@@ -44,11 +44,11 @@ use crate::deno_json::ConfigFileRc;
 use crate::deno_json::ConfigFileReadError;
 use crate::deno_json::FmtConfig;
 use crate::deno_json::FmtOptionsConfig;
+use crate::deno_json::LinkConfigParseError;
 use crate::deno_json::LintRulesConfig;
 use crate::deno_json::NodeModulesDirMode;
 use crate::deno_json::NodeModulesDirParseError;
 use crate::deno_json::ParsedTsConfigOptions;
-use crate::deno_json::PatchConfigParseError;
 use crate::deno_json::PublishConfig;
 pub use crate::deno_json::TaskDefinition;
 use crate::deno_json::TestConfig;
@@ -78,7 +78,7 @@ pub struct ResolverWorkspaceJsrPackage {
   pub name: String,
   pub version: Option<Version>,
   pub exports: IndexMap<String, String>,
-  pub is_patch: bool,
+  pub is_link: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -163,11 +163,13 @@ pub enum WorkspaceDiagnosticKind {
   ImportMapReferencingImportMap,
   #[error("\"imports\" and \"scopes\" field is ignored when \"importMap\" is specified in the root config file.")]
   MemberImportsScopesIgnored,
-  #[error("`\"nodeModulesDir\": {previous}` is deprecated in Deno 2.0. Use `\"nodeModulesDir\": \"{suggestion}\"` instead")]
+  #[error("`\"nodeModulesDir\": {previous}` is deprecated in Deno 2.0. Use `\"nodeModulesDir\": \"{suggestion}\"` instead.")]
   DeprecatedNodeModulesDirOption {
     previous: bool,
     suggestion: NodeModulesDirMode,
   },
+  #[error("\"patch\" property was renamed to \"links\".")]
+  DeprecatedPatch,
   #[error("Invalid workspace member name \"{name}\". Ensure the name is in the format '@scope/name'.")]
   InvalidMemberName { name: String },
 }
@@ -182,22 +184,22 @@ pub struct WorkspaceDiagnostic {
 }
 
 #[derive(Debug, JsError, Boxed)]
-pub struct ResolveWorkspacePatchError(pub Box<ResolveWorkspacePatchErrorKind>);
+pub struct ResolveWorkspaceLinkError(pub Box<ResolveWorkspaceLinkErrorKind>);
 
 #[derive(Debug, Error, JsError)]
-pub enum ResolveWorkspacePatchErrorKind {
+pub enum ResolveWorkspaceLinkErrorKind {
   #[class(inherit)]
   #[error(transparent)]
   ConfigRead(#[from] ConfigReadError),
   #[class(type)]
-  #[error("Could not find patch member in '{}'.", .dir_url)]
+  #[error("Could not find link member in '{}'.", .dir_url)]
   NotFound { dir_url: Url },
   #[class(type)]
-  #[error("Workspace member cannot be specified as a patch.")]
+  #[error("Workspace member cannot be specified as a link.")]
   WorkspaceMemberNotAllowed,
   #[class(inherit)]
   #[error(transparent)]
-  InvalidPatch(#[from] url::ParseError),
+  InvalidLink(#[from] url::ParseError),
   #[class(inherit)]
   #[error(transparent)]
   UrlToFilePath(#[from] deno_path_util::UrlToFilePathError),
@@ -300,10 +302,10 @@ pub enum WorkspaceDiscoverErrorKind {
   ConfigRead(#[from] ConfigReadError),
   #[class(inherit)]
   #[error(transparent)]
-  PackageJsonReadError(#[from] PackageJsonLoadError),
+  PackageJsonRead(#[from] PackageJsonLoadError),
   #[class(inherit)]
   #[error(transparent)]
-  PatchConfigParseError(#[from] PatchConfigParseError),
+  LinkConfigParse(#[from] LinkConfigParseError),
   #[class(inherit)]
   #[error(transparent)]
   WorkspaceConfigParse(#[from] WorkspaceConfigParseError),
@@ -311,13 +313,13 @@ pub enum WorkspaceDiscoverErrorKind {
   #[error(transparent)]
   ResolveMember(#[from] ResolveWorkspaceMemberError),
   #[class(inherit)]
-  #[error("Failed loading patch '{}' in config '{}'.", patch, base)]
-  ResolvePatch {
-    patch: String,
+  #[error("Failed loading link '{}' in config '{}'.", link, base)]
+  ResolveLink {
+    link: String,
     base: Url,
     #[source]
     #[inherit]
-    source: ResolveWorkspacePatchError,
+    source: ResolveWorkspaceLinkError,
   },
   #[class(type)]
   #[error("Command resolved to multiple config files. Ensure all specified paths are within the same workspace.\n  First: {base_workspace_url}\n  Second: {other_workspace_url}")]
@@ -417,7 +419,7 @@ pub struct LintConfigError;
 pub struct Workspace {
   root_dir: UrlRc,
   config_folders: IndexMap<UrlRc, FolderConfigs>,
-  patches: BTreeMap<UrlRc, FolderConfigs>,
+  links: BTreeMap<UrlRc, FolderConfigs>,
   pub(crate) vendor_dir: Option<PathBuf>,
 }
 
@@ -425,7 +427,7 @@ impl Workspace {
   pub(crate) fn new(
     root: ConfigFolder,
     members: BTreeMap<UrlRc, ConfigFolder>,
-    patches: BTreeMap<UrlRc, ConfigFolder>,
+    link: BTreeMap<UrlRc, ConfigFolder>,
     vendor_dir: Option<PathBuf>,
   ) -> Self {
     let root_dir = new_rc(root.folder_url());
@@ -440,7 +442,7 @@ impl Workspace {
     Workspace {
       root_dir,
       config_folders,
-      patches: patches
+      links: link
         .into_iter()
         .map(|(url, folder)| (url, FolderConfigs::from_config_folder(folder)))
         .collect(),
@@ -526,22 +528,22 @@ impl Workspace {
     })
   }
 
-  pub fn patch_folders(&self) -> &BTreeMap<UrlRc, FolderConfigs> {
-    &self.patches
+  pub fn link_folders(&self) -> &BTreeMap<UrlRc, FolderConfigs> {
+    &self.links
   }
 
-  pub fn patch_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
-    self.patches.values().filter_map(|f| f.deno_json.as_ref())
+  pub fn link_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
+    self.links.values().filter_map(|f| f.deno_json.as_ref())
   }
 
-  pub fn patch_pkg_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
-    self.patches.values().filter_map(|f| f.pkg_json.as_ref())
+  pub fn link_pkg_jsons(&self) -> impl Iterator<Item = &PackageJsonRc> {
+    self.links.values().filter_map(|f| f.pkg_json.as_ref())
   }
 
   pub fn resolver_deno_jsons(&self) -> impl Iterator<Item = &ConfigFileRc> {
     self
       .deno_jsons()
-      .chain(self.patches.values().filter_map(|f| f.deno_json.as_ref()))
+      .chain(self.links.values().filter_map(|f| f.deno_json.as_ref()))
   }
 
   pub fn resolver_pkg_jsons(
@@ -560,10 +562,10 @@ impl Workspace {
       .config_folders
       .iter()
       .filter_map(|(dir_url, f)| Some((dir_url, f.deno_json.as_ref()?, false)))
-      .chain(self.patches.iter().filter_map(|(dir_url, f)| {
+      .chain(self.links.iter().filter_map(|(dir_url, f)| {
         Some((dir_url, f.deno_json.as_ref()?, true))
       }))
-      .filter_map(|(dir_url, config_file, is_patch)| {
+      .filter_map(|(dir_url, config_file, is_link)| {
         let name = config_file.json.name.as_ref()?;
         let version = config_file
           .json
@@ -572,7 +574,7 @@ impl Workspace {
           .and_then(|v| Version::parse_standard(v).ok());
         let exports_config = config_file.to_exports_config().ok()?;
         Some(ResolverWorkspaceJsrPackage {
-          is_patch,
+          is_link,
           base: dir_url.as_ref().clone(),
           name: name.to_string(),
           version,
@@ -691,10 +693,10 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::RootOnlyOption("nodeModulesDir"),
         });
       }
-      if member_config.json.patch.is_some() {
+      if member_config.json.links.is_some() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: member_config.specifier.clone(),
-          kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+          kind: WorkspaceDiagnosticKind::RootOnlyOption("links"),
         });
       }
       if member_config.json.scopes.is_some() {
@@ -751,6 +753,12 @@ impl Workspace {
           kind: WorkspaceDiagnosticKind::InvalidWorkspacesOption,
         });
       }
+      if config.json.deprecated_patch.is_some() {
+        diagnostics.push(WorkspaceDiagnostic {
+          config_url: config.specifier.clone(),
+          kind: WorkspaceDiagnosticKind::DeprecatedPatch,
+        });
+      }
       if config.json.name.is_some() && config.json.exports.is_none() {
         diagnostics.push(WorkspaceDiagnostic {
           config_url: config.specifier.clone(),
@@ -798,13 +806,13 @@ impl Workspace {
       }
     }
 
-    for folder in self.patches.values() {
+    for folder in self.links.values() {
       if let Some(config) = &folder.deno_json {
-        if config.json.patch.is_some() {
-          // supporting patching in patches is too complicated
+        if config.json.links.is_some() {
+          // supporting linking in links is too complicated
           diagnostics.push(WorkspaceDiagnostic {
             config_url: config.specifier.clone(),
-            kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+            kind: WorkspaceDiagnosticKind::RootOnlyOption("links"),
           });
         }
       }
@@ -1129,7 +1137,7 @@ impl WorkspaceDirectory {
           FolderConfigs::default(),
         )]),
         root_dir: opts.root_dir.clone(),
-        patches: BTreeMap::new(),
+        links: BTreeMap::new(),
         vendor_dir: match opts.use_vendor_dir {
           VendorEnablement::Enable { cwd } => Some(cwd.join("vendor")),
           VendorEnablement::Disable => None,
@@ -1215,7 +1223,7 @@ impl WorkspaceDirectory {
             FolderConfigs::default(),
           )]),
           root_dir: start_dir.clone(),
-          patches: BTreeMap::new(),
+          links: BTreeMap::new(),
           vendor_dir,
         });
         WorkspaceDirectory::new(&start_dir, workspace)
@@ -3068,13 +3076,13 @@ pub mod test {
   }
 
   #[test]
-  fn test_root_member_patch() {
+  fn test_root_member_link() {
     let workspace_dir = workspace_for_root_and_member_with_fs(
       json!({
-        "patch": ["../dir"],
+        "links": ["../dir"],
       }),
       json!({
-        "patch": [
+        "links": [
           "../../dir"
         ],
       }),
@@ -3085,7 +3093,7 @@ pub mod test {
     assert_eq!(
       workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("links"),
         config_url: Url::from_file_path(root_dir().join("member/deno.json"))
           .unwrap(),
       }]
@@ -3093,17 +3101,17 @@ pub mod test {
   }
 
   #[test]
-  fn test_patch_of_patch() {
+  fn test_link_of_link() {
     let workspace_dir = workspace_for_root_and_member_with_fs(
       json!({
-        "patch": ["../dir"],
+        "links": ["../dir"],
       }),
       json!({}),
       |fs| {
         fs.fs_insert_json(
           root_dir().join("../dir/deno.json"),
           json!({
-            "patch": ["./subdir"] // will be ignored
+            "links": ["./subdir"] // will be ignored
           }),
         );
       },
@@ -3111,7 +3119,7 @@ pub mod test {
     assert_eq!(
       workspace_dir.workspace.diagnostics(),
       vec![WorkspaceDiagnostic {
-        kind: WorkspaceDiagnosticKind::RootOnlyOption("patch"),
+        kind: WorkspaceDiagnosticKind::RootOnlyOption("links"),
         config_url: url_from_directory_path(&root_dir())
           .unwrap()
           .join("../dir/deno.json")
@@ -3121,25 +3129,21 @@ pub mod test {
   }
 
   #[test]
-  fn test_patch_not_exists() {
+  fn test_link_not_exists() {
     let sys = InMemorySys::default();
     sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
-        "patch": ["./member"]
+        "links": ["./member"]
       }),
     );
     let err = workspace_at_start_dir_err(&sys, &root_dir());
     match err.into_kind() {
-      WorkspaceDiscoverErrorKind::ResolvePatch {
-        patch,
-        base,
-        source,
-      } => {
-        assert_eq!(patch, "./member");
+      WorkspaceDiscoverErrorKind::ResolveLink { link, base, source } => {
+        assert_eq!(link, "./member");
         assert_eq!(base, url_from_directory_path(&root_dir()).unwrap());
         match source.into_kind() {
-          ResolveWorkspacePatchErrorKind::NotFound { dir_url } => {
+          ResolveWorkspaceLinkErrorKind::NotFound { dir_url } => {
             assert_eq!(
               dir_url,
               url_from_directory_path(&root_dir().join("member")).unwrap()
@@ -3153,28 +3157,24 @@ pub mod test {
   }
 
   #[test]
-  fn test_patch_workspace_member() {
+  fn test_link_workspace_member() {
     let sys = InMemorySys::default();
     sys.fs_insert_json(
       root_dir().join("deno.json"),
       json!({
         "workspace": ["./member"],
-        "patch": ["./member"]
+        "links": ["./member"]
       }),
     );
     sys.fs_insert_json(root_dir().join("member/deno.json"), json!({}));
     let err = workspace_at_start_dir_err(&sys, &root_dir());
     match err.into_kind() {
-      WorkspaceDiscoverErrorKind::ResolvePatch {
-        patch,
-        base,
-        source,
-      } => {
-        assert_eq!(patch, "./member");
+      WorkspaceDiscoverErrorKind::ResolveLink { link, base, source } => {
+        assert_eq!(link, "./member");
         assert_eq!(base, url_from_directory_path(&root_dir()).unwrap());
         assert!(matches!(
           source.into_kind(),
-          ResolveWorkspacePatchErrorKind::WorkspaceMemberNotAllowed
+          ResolveWorkspaceLinkErrorKind::WorkspaceMemberNotAllowed
         ));
       }
       _ => unreachable!(),
@@ -3182,35 +3182,35 @@ pub mod test {
   }
 
   #[test]
-  fn test_patch_npm_package() {
+  fn test_link_npm_package() {
     let sys = InMemorySys::default();
     sys.fs_insert_json(
       root_dir().join("pkg/deno.json"),
       json!({
-        "patch": ["../dir"]
+        "links": ["../dir"]
       }),
     );
     sys.fs_insert_json(root_dir().join("dir/package.json"), json!({}));
     let workspace_dir = workspace_at_start_dir(&sys, &root_dir().join("pkg"));
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
-    let patch_folders = workspace_dir
+    let link_folders = workspace_dir
       .workspace
-      .patch_folders()
+      .link_folders()
       .values()
       .collect::<Vec<_>>();
-    assert_eq!(patch_folders.len(), 1);
+    assert_eq!(link_folders.len(), 1);
     assert_eq!(
-      patch_folders[0].pkg_json.as_ref().unwrap().specifier(),
+      link_folders[0].pkg_json.as_ref().unwrap().specifier(),
       url_from_file_path(&root_dir().join("dir/package.json")).unwrap()
     )
   }
 
   #[test]
-  fn test_patch_absolute_path() {
+  fn test_link_absolute_path() {
     let root_path = root_dir().join("../dir");
     let workspace_dir = workspace_for_root_and_member_with_fs(
       json!({
-        "patch": [root_path.to_string_lossy().to_string()],
+        "links": [root_path.to_string_lossy().to_string()],
       }),
       json!({}),
       |fs| {
@@ -3218,14 +3218,14 @@ pub mod test {
       },
     );
     assert_eq!(workspace_dir.workspace.diagnostics(), vec![]);
-    let patch_folders = workspace_dir
+    let link_folders = workspace_dir
       .workspace
-      .patch_folders()
+      .link_folders()
       .values()
       .collect::<Vec<_>>();
-    assert_eq!(patch_folders.len(), 1);
+    assert_eq!(link_folders.len(), 1);
     assert_eq!(
-      patch_folders[0].deno_json.as_ref().unwrap().specifier,
+      link_folders[0].deno_json.as_ref().unwrap().specifier,
       url_from_file_path(&root_dir().join("../dir/deno.json")).unwrap()
     )
   }
@@ -3263,6 +3263,27 @@ pub mod test {
           .unwrap(),
       }]
     );
+  }
+
+  #[test]
+  fn test_deprecated_patch() {
+    let workspace_dir = workspace_for_root_and_member_with_fs(
+      json!({
+        "patch": ["../dir"],
+      }),
+      json!({}),
+      |fs| {
+        fs.fs_insert_json(root_dir().join("../dir/deno.json"), json!({}));
+      },
+    );
+    assert_eq!(
+      workspace_dir.workspace.diagnostics(),
+      vec![WorkspaceDiagnostic {
+        kind: WorkspaceDiagnosticKind::DeprecatedPatch,
+        config_url: Url::from_file_path(root_dir().join("deno.json")).unwrap(),
+      }]
+    );
+    assert_eq!(workspace_dir.workspace.link_folders().len(), 1); // should still work though
   }
 
   #[test]
