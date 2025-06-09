@@ -645,8 +645,8 @@ pub struct WorkspaceConfig {
 
 #[derive(Debug, Error, JsError)]
 #[class(inherit)]
-#[error("Failed to parse \"patch\" configuration.")]
-pub struct PatchConfigParseError(#[source] serde_json::Error);
+#[error("Failed to parse \"link\" configuration.")]
+pub struct LinkConfigParseError(#[source] serde_json::Error);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TaskDefinition {
@@ -874,7 +874,9 @@ pub struct ConfigFileJson {
   pub name: Option<String>,
   pub version: Option<String>,
   pub workspace: Option<Value>,
-  pub patch: Option<Value>,
+  pub links: Option<Value>,
+  #[serde(rename = "patch")]
+  pub(crate) deprecated_patch: Option<Value>,
   #[serde(rename = "workspaces")]
   pub(crate) deprecated_workspaces: Option<Vec<String>>,
   pub exports: Option<Value>,
@@ -1687,15 +1689,20 @@ impl ConfigFile {
     }
   }
 
-  pub fn to_patch_config(
+  pub fn to_link_config(
     &self,
-  ) -> Result<Option<Vec<String>>, PatchConfigParseError> {
-    match self.json.patch.clone() {
+  ) -> Result<Option<Vec<String>>, LinkConfigParseError> {
+    match self
+      .json
+      .links
+      .clone()
+      .or(self.json.deprecated_patch.clone())
+    {
       Some(config) => match config {
         Value::Null => Ok(None),
         config => {
           let members: Vec<String> =
-            serde_json::from_value(config).map_err(PatchConfigParseError)?;
+            serde_json::from_value(config).map_err(LinkConfigParseError)?;
           Ok(Some(members))
         }
       },
