@@ -149,9 +149,9 @@ dependencies = [
 
 [[package]]
 name = "deno_package_json"
-version = "0.7.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77aee446076be3e2ed9e175b77f423cb20d5d7e1080338f4c77b0b4d290599da"
+checksum = "fc681ccdd5319c96bdacdd6d6b1a1e1272829fa10687120eba1d2a0c336d77f7"
 dependencies = [
  "boxed_error",
  "deno_error",
